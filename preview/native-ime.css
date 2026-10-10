@@ -1,0 +1,11 @@
+html.native-ime, .native-ime body {margin:0;padding:0;background:#edeef2;overflow:hidden;}
+.native-ime body > :not(#phone):not(#toast):not(dialog) {display:none!important;}
+.native-ime #phone {width:100%;height:auto;min-height:0;border:0;border-radius:0;box-shadow:none;margin:0;overflow:hidden;}
+.native-ime #phone > :not(#keyboard) {display:none!important;}
+.native-ime #keyboard {width:100%;border-radius:0;}
+.native-ime .toast {bottom:12px;}
+.native-ime dialog {max-height:85vh;overflow:auto;}
+.native-ime .config-actions {display:none;}
+.native-ime .voice-panel.listening .waveform i {animation:none;transform:scaleY(var(--mic-level,.12));}
+.native-ime #phone > #handwriting-surface:not([hidden]) {display:block!important;top:44px;bottom:108px;}
+.native-ime #keyboard .hand-controls {flex:0 0 46px;margin-top:auto;margin-bottom:8px;}

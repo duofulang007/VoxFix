@@ -1,0 +1,15 @@
+.android/
+.model-downloads/
+.venv/
+models/
+android/.gradle/
+android/app/build/
+**/__pycache__/
+*.log
+键盘试用页.html
+preview/pinyin-data.json
+preview/phrase-packs.json
+*.png
+*.jpg
+*.jpeg
+*.wav
