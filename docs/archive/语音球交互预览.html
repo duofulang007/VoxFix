@@ -39,7 +39,7 @@ iframe{display:block;width:100%;height:351px;border:0}.home{height:20px;display:
   <footer id="note">使用真实键盘界面与同一套球体绘制，音量为模拟信号，本页不录音。<br>键盘里的颜色、形态和动作会随状态一起变化。</footer>
 </main>
 <script type="module">
-import {createVoiceOrb} from '../preview/voice-orb.mjs';
+import {createVoiceOrb} from '../../preview/voice-orb.mjs';
 const frame=document.getElementById('keyboard'),closeup=createVoiceOrb(document.getElementById('closeup'));
 const modes={idle:['安静时，也有细微流动','球的圆形轮廓保持干净。内部的蓝白云纹缓慢变化，没有写实云海的灰色阴影。'],talk:['声音停下，球就轻轻回落','声音推动球体和云纹，短暂的停顿也会自然回落。不会一直停在刚才的音量。'],cancel:['向上滑，准备取消','同一颗球跟着手指上移，逐渐转为柔和的红色。滑回原处，就能继续说。'],finish:['松手后，安静收束','球体略微缩小，云纹放慢，等待整句识别。完成后淡出，键盘立即恢复。'],restart:['重新开始，干净衔接','上一轮的音量、位移和颜色清空，新一轮从平静的蓝白球开始。']};
 let mode='idle',flow=0,previous=performance.now();const reduced=matchMedia('(prefers-reduced-motion: reduce)');
@@ -53,8 +53,8 @@ function select(next){
 }
 document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>select(b.dataset.mode));
 try{
-  const [html,app]=await Promise.all([fetch('../preview/index.html').then(r=>r.text()),fetch('../preview/app.mjs').then(r=>r.text())]);
-  const init=`<base href="${new URL('../preview/',location.href)}"><script>
+  const [html,app]=await Promise.all([fetch('../../preview/index.html').then(r=>r.text()),fetch('../../preview/app.mjs').then(r=>r.text())]);
+  const init=`<base href="${new URL('../../preview/',location.href)}"><script>
     window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','edit','ready','resize','refreshClipboard','importClipboard'].map(n=>[n,()=>{}]));
     VoxFixIme.voiceReady=()=>true;VoxFixIme.handReady=()=>false;
     let demoGeneration=0;VoxFixIme.startVoice=()=>demoGeneration++;VoxFixIme.cancelVoice=()=>demoGeneration++;

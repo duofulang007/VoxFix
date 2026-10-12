@@ -10,7 +10,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0-debug"
-        testInstrumentationRunner = "local.voxfix.debug.PolishSmokeInstrumentation"
+        testInstrumentationRunner = "local.voxfix.debug.VoxFixSmokeInstrumentation"
         ndk { abiFilters += "arm64-v8a" }
     }
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("modelAssets"))

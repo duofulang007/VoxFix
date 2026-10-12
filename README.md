@@ -1,82 +1,88 @@
 # VoxFix 安卓输入法
 
-**当前开发从 [开发入口](docs/开发入口.md) 开始。** 已有独立原生输入法在 K60 完成 26 键常用输入及流式语音指定场景验收；独立验证页仍保留本地 Qwen 整理。后续采用网页交互检查、原生 APK 构建和 USB 真机验证，不再使用安卓模拟器。下文主要保留电脑/网页原型说明，不作为最新安卓验收结论。
+VoxFix 是一个安装后可在系统里独立选择的自有 Android 输入法（`local.voxfix.debug`），复刻讯飞小米版的界面与交互，
+并接入本机离线语音。它不是对讯飞输入法的功能注入；手机上原有的两个讯飞包保持不动。
 
-以下为早期电脑本地离线语音／润色及模拟器网页原型的使用说明。当前原生应用状态以开发入口和 USB 真机验收记录为准。
+**开发请看 [docs/开发入口.md](docs/开发入口.md)**，那里是唯一的当前状态入口。本页只做仓库说明。
 
-## 打开
+## 现在是什么状态
 
-当前使用网页预览、原生 APK 构建及 USB 真机验证；模拟器已经移除，旧模拟器入口只作为历史材料保留。
+- 独立 ARM64 原生 Debug 输入法，Android 15 / API 35，已在 Redmi K60 上安装并选为当前输入法。
+- 键盘前端就是 `preview/` 的原型（构建时按清单同步到 assets，由原生 WebView 承载）：
+  26 键中英文、大小写、数字与符号、剪贴板、常用语、表情、键盘选择、夜间模式；
+  键盘高度／字号／间距／圆角／背景按官方截图固定，不提供尺寸自定义。
+- **中文拼音走原生 librime 1.17.0**：`PinyinEngine.kt` + `cpp/rime_jni.cpp` → `libvoxfix_rime.so`，
+  词库为 luna_pinyin 加个人词条，并保留 speller `algebra` 简拼修复。
+- **语音走 sherpa-onnx 1.13.8**：Zipformer 中英流式（第一遍，边说边进输入框）+ SenseVoice 第二遍
+  （松手后整段补标点与数字格式）+ silero VAD 断句。长按空格 300ms 进入语音，上滑取消、松手结束。
+- 底部滑轨：碰一下即可无级拖动光标；按住约 350ms 进入框选，松手保留选区并由输入框自己弹浮框。
+- **手写已停用**：源文件在 `android/disabled-handwriting/`，不参与编译，模型与运行库不打包。
+- **安卓端 Qwen 本地整理已移除**：手机上不再保留 GGUF 模型，输入法不阻塞上屏、不调用大模型。
 
-Git 仓库保存源码、脚本、文档、许可和浏览器构建所需的参考图。SDK/NDK、模型、下载缓存、APK、密钥、录屏和生成的词库不提交。首次克隆后需另行准备这些本地依赖；已有安装环境可继续直接使用。安卓构建的 JDK/Gradle 固定下载地址和摘要位于 `tools/android-build-dependencies.json`，不依赖未提交的下载元数据。词库先运行 `tools/setup_lexicon.py`、`tools/build_pinyin.py`，再运行 `tools/build_preview.py`；安卓构建入口为 `tools/build_android.ps1`。
+验收记录在 [docs/USB真机验收.md](docs/USB真机验收.md)，未解决项在
+[docs/现有功能问题清单.md](docs/现有功能问题清单.md)。
 
-真实语音使用 **http://127.0.0.1:18743/**。点“启用麦克风”并允许录音，再长按空格说话。短按空格仍输入空格；上滑取消、松手结束，停止后补全识别和标点。
+## 目录结构
 
-服务只监听本机，不能用手机的 127.0.0.1 访问电脑。关闭服务后，可从项目根目录运行 `.venv\Scripts\python.exe voice\server.py` 重启。首次模型加载完成后，页面显示“已就绪 · 电脑本地离线”。
+| 目录 | 作用 |
+|---|---|
+| `android/` | 原生输入法工程：Kotlin 源码、librime JNI、拼音 schema、许可与测试 |
+| `android/disabled-handwriting/` | 已停用的手写实现与测试，仅供日后参考，不参与编译 |
+| `preview/` | 键盘前端源码（同时是浏览器原型）、交互测试、官方参考截图 |
+| `voice/` | 电脑端离线语音与整理服务，仅用于桌面原型 |
+| `tools/` | 构建、模型与词库准备、APK 检查等脚本 |
+| `docs/` | 当前文档；历史材料在 `docs/archive/`（索引见其 README） |
 
-根目录的 **键盘试用页.html** 仍可直接用桌面浏览器打开，内嵌样式、脚本和已遮挡的对照图。单文件适合调整界面；真实语音需要上述本机服务，勾选“仅演示交互，不录音”可继续试用演示。Codex 内置浏览器禁止直接访问 file 协议。
+## 构建安卓包
 
-## 能试什么
+```powershell
+# 需要先有 .venv（Python）与 models/（语音模型，tools/setup_voice.py 准备）
+powershell -ExecutionPolicy Bypass -File tools/build_android.ps1
+```
 
-- 26 键中英文、大小写、数字与常用／中文／英文／网址符号。
-- 剪贴板和常用语：短按插入，长按管理；添加、编辑、删除、设为常用语、撤销删除。列表只显示文字，用户添加的内容保存到当前浏览器。顶部垃圾桶打开管理菜单；常用语页右上角 ＋ 添加。
-- 键盘选择、表情分类和插入、夜间模式、收起与展开、底部输入法菜单。
-- 键盘选择只保留 9 键拼音、26 键拼音、全屏手写；英文切换在 26 键内保留。未接入的双拼／笔画等类型和在线表情占位页已移除。
-- 全屏单字手写：输入框上方为空间充足的书写区，停笔约 650ms 后本机识别，点候选输入；有笔迹时删除先清笔迹，无笔迹时删除正文。
-- 输入习惯记忆：只保存候选选择的拼音／九键码、字词和次数；同码选择同词两次后提前。默认开启，可在“调整布局”关闭或清空，仅存在当前浏览器，不上传，也不训练语音模型。
-- 长按空格：真实录音、流式出字、停顿分句、第二遍识别与标点恢复；上滑或识别中点击空白取消，恢复录音前原文。演示模式单独勾选，不会冒充真实识别。
-- 长按底部两图标之间的空白：左右拖动逐字移动光标；按住时显示滑动条。两侧按钮不作为手势区。键盘用户可聚焦该区域后按左右方向键。
-- 键盘高度、字号、间距、圆角、背景色、常用标点、快捷入口显示开关；布局在当前浏览器保存，可导入／导出 JSON。
-- 点击“对照录屏”查看对应的原画面，个人剪贴板和常用语内容已遮挡。
+脚本会按固定摘要准备 JDK / Gradle / SDK / Build-Tools / sherpa-onnx AAR，然后执行
+`testDebugUnitTest assembleDebug`。产物在 `android/app/build/outputs/apk/debug/app-debug.apk`，
+**不会自动安装**。拼音 JNI 由 gradle 任务 `buildPinyinNative` 调用 `tools/build_pinyin_rime.py` 编译，
+前提是 `.android/pinyin-rime/` 已由 `tools/setup_pinyin_rime.py` + `tools/prepare_personal_pinyin.py` 准备好。
+
+> 个人词库与英文词表必须由 `stagePinyin` 打包，再由 `preparePersonalData()` 落到 `filesDir/pinyin-personal/`。
+> 缺失或 metadata 非法时 schema 编译会失败，前端会静默回退，而不是报错。
+
+## 网页交互检查
+
+网页检查是改动后的第一道回归，**不等于原生通过**。
+
+```bash
+node preview/native-ime.test.mjs      # 以及 ime-regressions / candidates / fixed-layout /
+                                      # pinyin / english / voice / voice-orb / core 各自同名 *.test.mjs
+```
+
+真机脚本（`preview/*-device.test.mjs`）需要先用 `adb forward` 把 IME WebView 的 devtools 端口转到本机，
+并且手机操作要由使用者实际完成。
+
+## 电脑端原型（非当前主线）
+
+`preview/` + `voice/` 保留了一套完整的电脑网页试用版：真实录音、流式出字、本地整理，以及全屏手写。
+它曾是主要开发方式，现在只用于网页侧试验，**不代表手机原生能力**。
+
+- `voice/server.py`：本机语音服务，端口 `127.0.0.1:18743`，只监听本机。手机上的 `127.0.0.1` 访问不到它。
+- 模型准备：`.venv\Scripts\python.exe tools\setup_voice.py`（语音）、
+  `tools\setup_handwriting.py`（手写，桌面原型用）。
+- 单文件试用页：`python tools/build_preview.py` 生成根目录 `键盘试用页.html`（生成物，不入库），
+  双击即可打开，无需起服务。
+- 网页词库（非 librime 路径）：`tools\setup_lexicon.py` → `tools\build_pinyin.py`，
+  生成 `preview/pinyin-data.json` 与 `preview/pinyin-lite.json`（生成物，不入库）。
+
+## 仓库边界
+
+只提交源码、脚本、必要文档/许可与浏览器参考图。不提交：模型权重、SDK/NDK、缓存、APK、签名密钥、
+录屏、生成的词库与单文件试用页、日志（完整规则见 `.gitignore`）。首次克隆后需另行准备这些本地依赖。
+
+远端为私有仓库 `https://github.com/duofulang007/VoxFix.git`，主分支 `main`。
 
 ## 真实性边界
 
-这不是讯飞引擎移植。真实语音采用 sherpa-onnx：Zipformer 中英流式、Paraformer 中文第二遍识别、CT-Transformer 中英标点。第二遍结果变化过大或改变英文词时保留第一遍；这是保守的识别修正，不是语义润色，不能保证提高每句话的准确率。语音采样只在内存处理，不保存录音或文字日志，不调用联网识别。
-
-拼音使用 jieba／pypinyin 与固定版本雾凇高频基础词条生成的本地词库，共 425,870 个词音记录、420,839 个不同文本。共享词条与音节编号替代重复的全拼／简拼数据；全拼、首字母简拼、zh/ch/sh 声母混输、基础整句拼接及九键可用。`wzdl` 可找“我知道了”，`mtj` 可找“明天见”。候选栏最多 240 条，展开最多 2000 条；生成时不再按每码 60 条截断。候选可左右滑动，每屏数量和字号可调。中文个人常用语参与候选；古典名句、科技词语、跑步词语可以独立启用并搜索。词频排序和逐字个人短语注音仍有局限，不能代替成熟输入引擎的上下文预测。新增数据来源与许可见 `docs/离线优化计划与验收.md`。
-
-长语音可点击开始、暂停、继续、结束，按住空格的原有交互保持。识别错误或页面隐藏会保留收到的文字，主动取消仍恢复原文。个人中文热词只在当前浏览器保存，开始录音时传给本机；留空保持原来的 greedy 解码，有热词时启用较复杂的 beam 解码。英文热词尚未接入。二次识别对英文词、数字和否定词改变采取保守保护，但不能保证准确率提高。
-
-离线润色采用 **Qwen3.5-2B Q4_K_M，非思考模式**，与流式识别独立。点击“整理口语”后在本机运行，先预览原文和结果，再选择替换；可撤销，输入已经改变时拒绝覆盖。模型按需加载，空闲两分钟释放。它不能从音频纠正听错，也不能自动验证人名和原意。
-
-安装润色模型：运行 `.venv\Scripts\python.exe tools\setup_polish.py`，下载固定版本模型和官方 Windows CPU 运行库并校验 SHA-256。模型约 1.28GB，位于 `models/polish/`；不会嵌入独立 HTML。下载未完成时不显示已安装。使用需打开本机服务版网页。
-
-
-英文大小写为锁定开关，输入后不自动退出；英文标点用半角逗号与句号。九宫格、展开候选、功能菜单和编辑页没有完整录屏画面，视觉还需对照；候选排序和语义预测不是讯飞私有引擎。全屏手写采用 Melnyk-Net int8 与配套 3755 字符表，单字识别，不支持词句连写；完整讯飞设置和账号尚未接入。
-
-界面以录屏为主要依据。交互细节按用户要求后续再调。浏览器麦克风链路和官方测试音频已验证，用户自己的中文、方言、英文名称、连续说话准确率仍需实际试用；电脑结果不证明手机效果。单次录音上限六分钟，服务对过期会话自动释放内存。
-
-## 修改与验证
-
-- `preview/index.html`：试用页结构。
-- `preview/style.css`：录屏键盘外观与试用页布局。
-- `preview/app.mjs`：页面、按键和手势。
-- `preview/core.mjs`：文字操作、光标移动和配置校验。
-- `preview/pinyin.mjs`、`preview/pinyin-data.json`、`preview/phrase-packs.json`：本地全拼／简拼／九键候选与词库；`tools/setup_lexicon.py` 校验并准备补充词库，`tools/build_pinyin.py` 重新生成共享数据。
-- `preview/core.test.mjs`：小型自检，使用 Node 运行。
-- `preview/candidates.test.mjs`：使用 Playwright 与 Edge 验证完整候选、鼠标拖动、触摸左滑、窄屏排布和独立 HTML。
-- `tools/build_preview.py`：更新根目录的独立 HTML 文件，使用 Python 标准库。
-- `preview/voice.mjs`、`preview/voice.test.mjs`：真实录音与本机接口，以及录音生命周期测试。
-- `voice/server.py`：本机语音服务与三个离线模型。
-- `voice/test_server.py`、`voice/smoke_test.py`、`voice/http_test.py`：边界自检、实际模型测试和 HTTP 链路测试。
-- `tools/setup_voice.py`：官方模型下载、SHA-256 校验与指定文件提取。模型文件共 279,860,897 字节，约 266.9 MiB；原始下载档案另外占用空间。
-- `preview/ink.mjs`、`voice/handwriting.py`：书写采样和离线单字识别；`tools/setup_handwriting.py` 校验并准备 6,613,389 字节模型及配套字符表。
-- `voice/test_handwriting.py`：笔画校验、预处理与实际模型自检。
-- `docs/录屏还原记录.md`：来源、覆盖范围与验证情况。
-- `docs/网页离线语音接入记录.md`：本次语音实现与验证边界。
-- `docs/模块功能修复与简化记录.md`：剪贴板长按、手写、选词记忆与返回行为的本轮检查。
-
-每次修改界面后重跑自检和独立文件打包，保证单文件版本与开发版本一致。
-
-## 新增验收与后续
-
-- `preview/workflow.test.mjs`：页面流式出字、长语音暂停继续、失败保留及润色预览／替换／撤销。
-- `voice/polish.py`、`voice/test_polish.py`：离线润色与内容保护。
-- `voice/evaluate.py`：对明确提供的 WAV／参考转写清单计算字符错误率与处理时间，不录制麦克风。输出会包含指定样本的转写。
-- `docs/离线优化计划与验收.md`：完整修改范围、数据体积、验收与待验证项目。
-
-当前仍是电脑网页试用版，没有安卓 IME 工程。Windows 模型运行库不能用于手机；Redmi K60 的实际延迟、内存、发热和耗电待原生接入与设备测试。
-
-- `tools/setup_emulator.py`：固定版本官方模拟器、adb 和 Android 15 镜像安装，写入项目 `.android/`，保留官方档案校验。
-- `tools/start_emulator.ps1`：启动／复用专用 AVD，打开安卓页面，不修改全局环境。
-- `preview/android.test.mjs`：通过 Playwright 安卓接口连接模拟器，执行网页触摸与多种显示配置测试，以及已知 WAV／润色链路。自动化需要项目现用的 Playwright 运行环境。
+- 语音不是讯飞引擎移植，全部在本机离线运行；录音只在内存处理，不保存录音或文字日志，不联网识别。
+- 拼音是 librime + 固定版本公开词库，词频排序和上下文预测不能等同于成熟商用引擎；不宣称与讯飞一致。
+- 手写、安卓端本地润色都已停用，相关代码只作为历史保留在 `docs/archive/` 与 `android/disabled-handwriting/`。
+- 电脑端结果不能证明手机效果；延迟、内存、发热与耗电仍需真机实测。

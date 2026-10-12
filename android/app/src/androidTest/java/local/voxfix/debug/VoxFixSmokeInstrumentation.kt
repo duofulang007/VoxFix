@@ -14,7 +14,7 @@ import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-class PolishSmokeInstrumentation : Instrumentation() {
+class VoxFixSmokeInstrumentation : Instrumentation() {
     private var pinyin = false
     private var ink = false
     private var benchmark = false

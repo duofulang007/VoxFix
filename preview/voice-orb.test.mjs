@@ -4,7 +4,7 @@ import {createServer} from 'node:http';
 import {readFile, mkdir} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 const {chromium}=createRequire(import.meta.url)('playwright');
-const root=new URL('../',import.meta.url),shots=new URL('../docs/语音交互概念稿.assets/',import.meta.url);
+const root=new URL('../',import.meta.url),shots=new URL('../docs/archive/语音交互概念稿.assets/',import.meta.url);
 const server=createServer(async(req,res)=>{
   try{
     const file=new URL('.'+decodeURIComponent(req.url.split('?')[0]),root);
@@ -86,7 +86,7 @@ try{
   assert.deepEqual(errors,[]);
   const demo=await browser.newPage({viewport:{width:1080,height:810}}),demoErrors=[];
   demo.on('pageerror',error=>demoErrors.push(error.message));
-  await demo.goto(origin+'/docs/'+encodeURIComponent('语音球交互预览.html'));
+  await demo.goto(origin+'/docs/archive/'+encodeURIComponent('语音球交互预览.html'));
   await demo.locator('[data-mode="talk"]:enabled').waitFor();
   await demo.locator('[data-mode="talk"]').click();await demo.waitForTimeout(400);
   await demo.screenshot({path:fileURLToPath(new URL('v5-preview.png',shots)),fullPage:true});
