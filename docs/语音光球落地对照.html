@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VoxFix · 语音流云光球 落地对照</title>
+<style>
+:root{
+  --accent:#4a86c8;--accent-soft:#e6eff9;--danger:#cf5347;
+  --key-bg:#fff;--muted:#858a93;--line:#d4d7df;--ink:#292d34;--ink-2:#5b6169;--paper:#f7f8fa;
+  font-family:"Microsoft YaHei","PingFang SC",-apple-system,Arial,sans-serif;
+  color:var(--ink);background:var(--paper);font-synthesis:none;-webkit-font-smoothing:antialiased;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:0 0 72px}
+.wrap{max-width:1100px;margin:0 auto;padding:0 28px}
+header{padding:38px 0 22px;border-bottom:1px solid var(--line);margin-bottom:32px}
+h1{margin:0 0 8px;font-size:25px;font-weight:600;letter-spacing:-.2px}
+header .sub{margin:0;color:var(--ink-2);font-size:14px;line-height:1.7}
+.tag{display:inline-block;margin-left:10px;padding:2px 8px;border-radius:99px;background:#e5f2e8;color:#2f7d47;font-size:12px;vertical-align:2px;font-weight:600}
+section{margin:0 0 46px}
+h2{font-size:15px;font-weight:600;margin:0 0 6px;display:flex;align-items:center;gap:10px}
+h2 .n{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--ink);color:#fff;font-size:11px;flex:none}
+h2+.lead{color:var(--ink-2);font-size:13px;margin:0 0 18px;line-height:1.75}
+
+/* 前后对照 */
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:start}
+.col h3{font-size:13px;font-weight:600;margin:0 0 10px;display:flex;align-items:center;gap:8px}
+.col h3 .dot{width:8px;height:8px;border-radius:50%;flex:none}
+.col.before .dot{background:#c9ccd2}
+.col.after .dot{background:var(--accent)}
+.col .shots{display:flex;flex-direction:column;gap:12px}
+figure{margin:0;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+figure img{display:block;width:100%}
+figcaption{font-size:12px;color:var(--muted);padding:9px 12px;border-top:1px solid var(--line);line-height:1.6}
+
+/* 逐帧 */
+.frames{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.frames figure img{background:#fff}
+.frames figcaption b{color:var(--ink);font-weight:600}
+
+table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:13px}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+th{background:var(--paper);font-size:12px;color:var(--ink-2);font-weight:600}
+tr:last-child td{border-bottom:0}
+td.y{color:#2f7d47;font-weight:600;white-space:nowrap}
+td.n{color:#b4574c;font-weight:600;white-space:nowrap}
+code{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--accent);background:var(--paper);border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+
+.note-box{background:#fff;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:0 12px 12px 0;padding:14px 18px;font-size:13px;color:var(--ink-2);line-height:1.8;margin-top:18px}
+.note-box b{color:var(--ink)}
+.note-box.warn{border-left-color:var(--danger)}
+footer{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>语音识别呼出 / 取消：流云光球<span class="tag">已落地</span></h1>
+  <p class="sub">概念稿里的方案 C 已实现进 <code>preview/app.mjs</code> + <code>preview/style.css</code>。下面全部截图都来自<b>原生尺寸 393×351 @2x 的原生 IME 分支</b>，与手机上的实际渲染尺寸一致。</p>
+</header>
+
+<section>
+  <h2><span class="n">1</span>前后对照</h2>
+  <p class="lead">左边是改前的三个状态，右边是改后。同样是「倾听 / 取消 / 识别中」三个时刻。</p>
+  <div class="pair">
+    <div class="col before">
+      <h3><span class="dot"></span>改前</h3>
+      <div class="shots">
+        <figure><img src="语音交互概念稿.assets/listening.png" alt="改前 倾听中"><figcaption>倾听中 —— 一整块白板 + 一条被压成发丝线的波形。</figcaption></figure>
+        <figure><img src="语音交互概念稿.assets/cancel.png" alt="改前 取消"><figcaption>取消 —— 柱子塌成 1px 虚线，右侧硬插一个 <code>↶</code> 字符（还有白底方框、不居中）。</figcaption></figure>
+        <figure><img src="语音交互概念稿.assets/recognizing.png" alt="改前 识别中"><figcaption>识别中 —— 直接空白 + 一行小字，没有「正在处理」的视觉承载。</figcaption></figure>
+      </div>
+    </div>
+    <div class="col after">
+      <h3><span class="dot"></span>改后</h3>
+      <div class="shots">
+        <figure><img src="语音交互概念稿.assets/after-02-listening.png" alt="改后 倾听中"><figcaption>倾听中 —— 四层蓝白流云缓慢形变，整团随声幅呼吸胀缩；底部一枚淡色上箭头提示可上滑。</figcaption></figure>
+        <figure><img src="语音交互概念稿.assets/after-04-cancel.png" alt="改后 取消"><figcaption>取消 —— 同一团云整体转红、缩小、退到 <code>.42</code> 透明，让出红色靶心；外面一圈弧线随位移<b>合拢成闭环</b>，闭环即锁定。</figcaption></figure>
+        <figure><img src="语音交互概念稿.assets/after-06-recognizing.png" alt="改后 识别中"><figcaption>识别中 —— 云收掉，只留一颗小核心 + 一圈 0.9s 匀速旋转的进度弧。</figcaption></figure>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">2</span>完整过程逐帧</h2>
+  <p class="lead">一次真实的手势：长按空格 → 松手上滑 → 松手取消。下面四帧按时间顺序。</p>
+  <div class="frames">
+    <figure><img src="语音交互概念稿.assets/after-01-entering.png" alt="呼出"><figcaption><b>① 呼出</b><br>面板从话筒键方向「长出」（<code>transform-origin:50% 100%</code> + <code>scaleY</code> + 去模糊），光球随后放大到位。</figcaption></figure>
+    <figure><img src="语音交互概念稿.assets/after-03-drag.png" alt="跟手"><figcaption><b>② 跟手上滑</b><br>整团跟着手指走（<code>--drag</code>，阻尼 0.55），中心浮出弧线，随位移从一小段开始合拢。</figcaption></figure>
+    <figure><img src="语音交互概念稿.assets/after-04-cancel.png" alt="锁定" style="border-bottom:0"><figcaption><b>③ 进入取消区</b><br>越过 56px：云转红缩小，弧线闭合成环，靶心锁定。<b>没有任何文字</b>。</figcaption></figure>
+    <figure><img src="语音交互概念稿.assets/after-05-leaving.png" alt="退场"><figcaption><b>④ 松手取消</b><br>键盘已恢复（字母键回来了），红色靶心原位向内收束淡出 <code>190ms</code> 后消失。方向与呼出相反。</figcaption></figure>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">3</span>「卡」是怎么解决掉的</h2>
+  <table>
+    <tr><th>维度</th><th>改前</th><th>改后</th></tr>
+    <tr><td>波形节点</td><td class="n">58 个 <code>&lt;i&gt;</code>，各自跑同一条 0.8s 动画</td><td class="y">1 组 4 层光云 + 1 层外晕 + 1 个核心</td></tr>
+    <tr><td>每帧改的属性</td><td class="n"><code>height</code> —— 触发 style + layout</td><td class="y">只写一个 <code>--mic</code> 变量，几何全由 <code>calc()</code> 派生</td></tr>
+    <tr><td>合成层</td><td class="n">无 <code>will-change</code>，逐帧重排</td><td class="y">全部 <code>transform / opacity / filter</code>，已提为合成层</td></tr>
+    <tr><td>进场 / 退场</td><td class="n">没有，整块 <code>innerHTML</code> 瞬间替换</td><td class="y">呼出 300ms 生长；退场 190ms 内收（幽灵节点重放，状态立即清空）</td></tr>
+    <tr><td>状态切换</td><td class="n">每次都 <code>render()</code> 重建面板 → 动画被重启</td><td class="y">只改类名（<code>paintVoice</code>），动画连续不中断</td></tr>
+    <tr><td>常驻文案</td><td class="n">每状态 2 行</td><td class="y">每状态 1 行，「取消预备」<b>零文字</b></td></tr>
+  </table>
+  <div class="note-box"><b>最容易翻车的一处：</b><code>.voice-cloud</code> 的 <code>transition</code> <b>绝不能挂 <code>transform</code></b>。声幅 <code>--mic</code> 是每帧写的，一旦挂了 340ms 过渡，跟手与音量响应都会被拖成「迟钝」——这是「不灵动」的另一个来源。只在 <code>cancel / recognizing</code> 两个态上给 <code>transform</code> 过渡。</div>
+  <div class="note-box warn"><b>同样容易翻车：</b>进场动画一开始用了 <code>animation-fill-mode: both</code>，结果动画的 <code>transform</code> 把 <code>.voice-follow</code> 的跟手 <code>translateY</code> 整个锁死（动画优先级高于普通声明），上滑时云团纹丝不动。改成只写 <code>from</code> 的关键帧、不带 fill-mode 才对。</div>
+</section>
+
+<section>
+  <h2><span class="n">4</span>验证记录</h2>
+  <table>
+    <tr><th>项目</th><th>结果</th></tr>
+    <tr><td><code>preview/</code> 浏览器测试 8 个</td><td class="y">全部 PASS（含 <code>native-ime.test.mjs</code> 的语音断言）</td></tr>
+    <tr><td>Gradle <code>testDebugUnitTest assembleDebug</code></td><td class="y">BUILD SUCCESSFUL</td></tr>
+    <tr><td>APK 内前端资源 vs 源码</td><td class="y">SHA-256 逐字节一致（<code>style.css</code> / <code>app.mjs</code> / <code>native-ime.css</code>）</td></tr>
+    <tr><td>APK SHA-256</td><td><code>7c55c25e4c444043af345a0fca1857e2ffd19d50e01fc50a574fee5e9eddc8f0</code></td></tr>
+    <tr><td>行为取证（CDP 真实手势）</td><td class="y">呼出 → 跟手 <code>--drag=-46.8px</code> → 环 <code>dashoffset 163→4.9</code> → 松手后 <code>.voice-panel</code> 计数 0、幽灵 260ms 后消失、无 JS 报错</td></tr>
+    <tr><td>手机 WebView 能力</td><td class="y">com.google.android.webview <code>153.0.8010.36</code>（需要的最老特性是 Chromium 88 的 <code>aspect-ratio</code>）</td></tr>
+    <tr><td>真机手势 / 手感</td><td class="n">待你上手确认（需要把系统输入法切到 VoxFix）</td></tr>
+  </table>
+</section>
+
+<footer>
+  <span>VoxFix · 语音流云光球落地对照</span>
+  <span>截图：393×351 @2x 原生 IME 分支 · 2026-10-11</span>
+</footer>
+
+</div>
+</body>
+</html>

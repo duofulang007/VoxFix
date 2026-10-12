@@ -2,10 +2,12 @@ export const toolbarItems = [
   ['menu', '功能菜单'], ['layouts', '键盘选择'], ['night', '夜间模式'],
   ['clipboard', '剪贴板'], ['emoji', '表情'], ['hide', '收起键盘'],
 ];
+export const keyboardGeometry = Object.freeze({height:351,fontSize:22,gap:4,radius:7,background:'#edeff2',candidateCount:3,candidateFont:22});
 export const defaults = {
-  height: 312, fontSize: 20, gap: 5, radius: 7, background: '#edeef2',
+  ...keyboardGeometry,
   toolbar: toolbarItems.map(([id]) => id), footerSwitcher: true, footerClipboard: true,
-  comma: '，', period: '。', voiceText: '你好。', candidateCount: 5, candidateFont: 17, rememberInput: true, phrasePacks: [],
+  comma: '，', period: '。', voiceText: '你好。', rememberInput: true, phrasePacks: [],
+  clipboardHistory: true, clipboardCandidate: false, customToolbar: [],
 };
 export function settingsFrom(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('请选择有效的布局配置文件');
@@ -14,23 +16,20 @@ export function settingsFrom(value) {
     if(!Array.isArray(value.phrasePacks)||value.phrasePacks.some(name=>!['quotes','technology','running'].includes(name)))throw Error('词库选项无效');
     result.phrasePacks=[...new Set(value.phrasePacks)];
   }
-  for (const [key, min, max] of [['height', 220, 390], ['fontSize', 14, 28], ['gap', 2, 10], ['radius', 0, 14], ['candidateCount', 3, 9], ['candidateFont', 13, 22]]) {
-    if (key in value) {
-      if (!Number.isFinite(value[key]) || value[key] < min || value[key] > max || (key === 'candidateCount' && !Number.isInteger(value[key]))) throw Error('尺寸配置超出范围');
-      result[key] = value[key];
-    }
-  }
-  if ('background' in value) {
-    if (!/^#[0-9a-f]{6}$/i.test(value.background)) throw Error('背景颜色无效');
-    result.background = value.background;
-  }
+  // Saved/imported appearance values are obsolete; the official geometry always wins.
   if ('toolbar' in value) {
-    if (!Array.isArray(value.toolbar) || value.toolbar.some(id => !toolbarItems.some(([valid]) => valid === id))) throw Error('快捷栏配置无效');
+    if (!Array.isArray(value.toolbar) || value.toolbar.some(id => !toolbarItems.some(([valid]) => valid === id) && !/^custom:[a-z0-9]{1,8}$/.test(id))) throw Error('快捷栏配置无效');
     result.toolbar = [...new Set(value.toolbar)];
   }
-  for (const key of ['footerSwitcher', 'footerClipboard', 'rememberInput']) {
+  for (const key of ['footerSwitcher', 'footerClipboard', 'rememberInput', 'clipboardHistory', 'clipboardCandidate']) {
     if (key in value && typeof value[key] !== 'boolean') throw Error('底部入口配置无效');
     if (key in value) result[key] = value[key];
+  }
+  if ('customToolbar' in value) {
+    const list = value.customToolbar;
+    if (!Array.isArray(list) || list.length > 12) throw Error('自定义工具栏配置无效');
+    if (list.some(row => !row || typeof row.label !== 'string' || typeof row.text !== 'string' || !row.label.trim() || row.label.length > 6 || !row.text.trim() || row.text.length > 10000)) throw Error('自定义工具栏配置无效');
+    result.customToolbar = list.map(row => ({ label: row.label, text: row.text }));
   }
   for (const key of ['comma', 'period', 'voiceText']) {
     if (key in value) {
@@ -61,8 +60,10 @@ export function moveCursor(text, start, steps) {
 export function voiceResult(snapshot, value, cancelled = false) {
   return cancelled ? { text: snapshot.text, cursor: snapshot.start } : replaceRange(snapshot.text, snapshot.start, snapshot.end, value);
 }
+// 官方小米版剪贴板固定「最多记录 300 条」，到上限后丢弃最旧的一条。这里对齐同一策略。
+export const snippetLimit = 300;
 export function validateSnippets(list) {
-  if(!Array.isArray(list)||list.length>200||list.some(text=>typeof text!=='string'||!text.trim()||text.length>10000))throw Error('剪贴板内容格式无效');
+  if(!Array.isArray(list)||list.length>snippetLimit||list.some(text=>typeof text!=='string'||!text.trim()||text.length>10000))throw Error('剪贴板内容格式无效');
   return [...new Set(list)];
 }
 export function addSnippet(list,text,index=-1) {
@@ -72,9 +73,30 @@ export function addSnippet(list,text,index=-1) {
     if(list.some((item,i)=>i!==index&&item===text))throw Error('这条内容已经存在');
     return list.map((item,i)=>i===index?text:item);
   }
-  const result=[text,...list.filter(item=>item!==text)];
-  if(result.length>200)throw Error('最多保存 200 条，请先删除不需要的内容');
-  return result;
+  // 到达上限时丢最旧的一条，而不是让新增失败（官方行为）。
+  return [text,...list.filter(item=>item!==text)].slice(0,snippetLimit);
+}
+// 官方常用语：分组长按上限 20 个，每个分组内上限 100 条，每条上限 500 字。
+export const phraseGroupLimit = 20;
+export const phraseItemLimit = 100;
+export const phraseLengthLimit = 500;
+export function validatePhraseGroups(groups) {
+  if (!Array.isArray(groups) || groups.length > phraseGroupLimit) throw Error('常用语分组格式无效');
+  return groups.map(group => {
+    if (!group || typeof group.name !== 'string' || !group.name.trim() || group.name.length > 8) throw Error('常用语分组名称无效');
+    if (!Array.isArray(group.items) || group.items.length > phraseItemLimit) throw Error('常用语分组内容无效');
+    if (group.items.some(text => typeof text !== 'string' || !text.trim() || text.length > phraseLengthLimit)) throw Error('常用语内容无效');
+    return { name: group.name.trim(), items: [...new Set(group.items)] };
+  });
+}
+export function flattenPhrases(groups) { return [...new Set(groups.flatMap(group => group.items))]; }
+// 兼容旧的扁平常用语列表：自动放进一个默认分组。
+export function migratePhraseGroups(value) {
+  if (!Array.isArray(value) || !value.length || typeof value[0] === 'string') {
+    const legacy = Array.isArray(value) ? validateSnippets(value.filter(text => typeof text === 'string' && text.trim()).slice(0, phraseItemLimit)) : [];
+    return [{ name: '常用语', items: legacy.map(text => text.slice(0, phraseLengthLimit)) }];
+  }
+  return validatePhraseGroups(value);
 }
 export function validateLearning(records){
   if(!Array.isArray(records)||records.length>2000||records.some(row=>!row||!/^([p9]):[a-z'2-9]{1,60}$/.test(row.key)||typeof row.word!=='string'||!/[\u3400-\u9fff]/.test(row.word)||row.word.length>60||!Number.isInteger(row.hits)||row.hits<1||row.hits>1000000))throw Error('选词记忆格式无效');
@@ -90,7 +112,7 @@ export function learnWord(records,key,word){
 }
 export function rankLearned(words,records,key){
   const scores=new Map();
-  for(const row of records)if(row.key===key||(row.key.slice(0,2)===key.slice(0,2)&&words.includes(row.word)))scores.set(row.word,(scores.get(row.word)||0)+row.hits);
+  for(const row of records)if(words.includes(row.word)&&(row.key===key||row.key.slice(0,2)===key.slice(0,2)))scores.set(row.word,(scores.get(row.word)||0)+row.hits);
   const learned=[...scores].filter(([,hits])=>hits>=2).sort((a,b)=>b[1]-a[1]).map(([word])=>word);
   return [...new Set([...learned,...words])];
 }

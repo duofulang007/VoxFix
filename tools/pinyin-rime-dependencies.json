@@ -1,0 +1,186 @@
+{
+  "repository": "feelime/feelime",
+  "commit": "9377b95c94e55d1ec1fc0b9007c24a09b38df475",
+  "librimeCommit": "417db2385f732cb0fa194b497042c42abb897d99",
+  "files": [
+    {
+      "source": "app/src/main/assets/engine-data/rime/luna_pinyin.prism.bin",
+      "target": "data/luna_pinyin.prism.bin",
+      "bytes": 31800,
+      "blob": "b5483c5099fd99b998c3871884fafddd3f8a83a9",
+      "sha256": "bd3f46536fdbda087e75e21d28c80a437c727e30887e9142465aeb829ea6e185"
+    },
+    {
+      "source": "app/src/main/assets/engine-data/rime/luna_pinyin.reverse.bin",
+      "target": "data/luna_pinyin.reverse.bin",
+      "bytes": 253668,
+      "blob": "74ce821af3d019c99d74096fd5f588d6c7c089b6",
+      "sha256": "2b6ca277c1bb4b39ca43d40e9f6cb40047d210f71589326cb3b1029501fb4e4b"
+    },
+    {
+      "source": "app/src/main/assets/engine-data/rime/luna_pinyin.table.bin",
+      "target": "data/luna_pinyin.table.bin",
+      "bytes": 19352244,
+      "blob": "2e4326a3aa48c36081692837e14ff6a29caa81e2",
+      "sha256": "0024406390e10067c72087b751fdd26bd02a79804170c53f5c6982a8f3b8a595"
+    },
+    {
+      "source": "app/src/main/assets/engine-data/rime/opencc/TSCharacters.txt",
+      "target": "data/opencc/TSCharacters.txt",
+      "bytes": 104512,
+      "blob": "08f378dca65d2689db81ba90087dbc2e3b916445"
+    },
+    {
+      "source": "app/src/main/assets/engine-data/rime/opencc/TSPhrases.txt",
+      "target": "data/opencc/TSPhrases.txt",
+      "bytes": 8743,
+      "blob": "1de74ec18c1aa9824477e6a713e652cbf7b0ad95"
+    },
+    {
+      "source": "app/src/main/assets/engine-data/rime/opencc/t2s.json",
+      "target": "data/opencc/t2s.json",
+      "bytes": 348,
+      "blob": "36d916c3ad885f1d2301439a3454f0e5fff11860"
+    },
+    {
+      "source": "app/src/main/jniLibs/arm64-v8a/libc++_shared.so",
+      "target": "libs/libc++_shared.so",
+      "bytes": 9290184,
+      "blob": "e978645780285efc12b7bdad8a00ef2ef286ae82",
+      "sha256": "0c52cfab2df0d957d8b346a2bdc5ae8d71feca2591924d77e1cd724d5bf74352"
+    },
+    {
+      "source": "app/src/main/jniLibs/arm64-v8a/libfeelime_rime.so",
+      "target": "libs/libfeelime_rime.so",
+      "bytes": 4931680,
+      "blob": "171eadf7e968e415445ccad47860e3b7d9b8192b",
+      "sha256": "e8f9ba9312351ffacde23eb8d7e7a2eb5772a14f707af3d642ac4080bc4bd793"
+    },
+    {
+      "source": "third_party/licenses/android-ndk/NOTICE.toolchain",
+      "target": "licenses/licenses/android-ndk/NOTICE.toolchain",
+      "bytes": 799639,
+      "blob": "a55f8dce0b4bbd4ee6c58671f4b8eb71f39310a2"
+    },
+    {
+      "source": "third_party/licenses/rime-data/essay-LGPL-3.0.txt",
+      "target": "licenses/licenses/rime-data/essay-LGPL-3.0.txt",
+      "bytes": 7651,
+      "blob": "65c5ca88a67c30becee01c5a8816d964b03862f9"
+    },
+    {
+      "source": "third_party/licenses/rime-data/luna-pinyin-LGPL-3.0.txt",
+      "target": "licenses/licenses/rime-data/luna-pinyin-LGPL-3.0.txt",
+      "bytes": 7651,
+      "blob": "65c5ca88a67c30becee01c5a8816d964b03862f9"
+    },
+    {
+      "source": "third_party/licenses/rime-data/prelude-LGPL-3.0.txt",
+      "target": "licenses/licenses/rime-data/prelude-LGPL-3.0.txt",
+      "bytes": 7651,
+      "blob": "65c5ca88a67c30becee01c5a8816d964b03862f9"
+    },
+    {
+      "source": "third_party/licenses/rime-data/rime-frost-GPL-3.0.txt",
+      "target": "licenses/licenses/rime-data/rime-frost-GPL-3.0.txt",
+      "bytes": 35149,
+      "blob": "f288702d2fa16d3cdf0035b15a9fcbc552cd88e7"
+    },
+    {
+      "source": "third_party/licenses/rime/boost-BSL-1.0.txt",
+      "target": "licenses/licenses/rime/boost-BSL-1.0.txt",
+      "bytes": 1338,
+      "blob": "36b7cd93cdfbac762f5be4c6ce276df2ea6305c2"
+    },
+    {
+      "source": "third_party/licenses/rime/darts-clone-notice.txt",
+      "target": "licenses/licenses/rime/darts-clone-notice.txt",
+      "bytes": 1481,
+      "blob": "cd30e91fb1e027a5224875e140ad97aa11620934"
+    },
+    {
+      "source": "third_party/licenses/rime/glog-BSD-3-Clause.txt",
+      "target": "licenses/licenses/rime/glog-BSD-3-Clause.txt",
+      "bytes": 1479,
+      "blob": "ac95ad875aac6373f8f6092109da031f16de607b"
+    },
+    {
+      "source": "third_party/licenses/rime/leveldb-BSD-3-Clause.txt",
+      "target": "licenses/licenses/rime/leveldb-BSD-3-Clause.txt",
+      "bytes": 1484,
+      "blob": "8e80208cd72b3225c87d9111c4d7cab13af1c2ac"
+    },
+    {
+      "source": "third_party/licenses/rime/librime-BSD-3-Clause.txt",
+      "target": "licenses/licenses/rime/librime-BSD-3-Clause.txt",
+      "bytes": 1513,
+      "blob": "f05b7c297121afc7e6115d8e4eada27d049894a1"
+    },
+    {
+      "source": "third_party/licenses/rime/marisa-trie.txt",
+      "target": "licenses/licenses/rime/marisa-trie.txt",
+      "bytes": 2275,
+      "blob": "64c9ce64bf1aeb9b11ba7652ed1fc664d88ff8c5"
+    },
+    {
+      "source": "third_party/licenses/rime/opencc-Apache-2.0.txt",
+      "target": "licenses/licenses/rime/opencc-Apache-2.0.txt",
+      "bytes": 9165,
+      "blob": "9f7a310eb2b143dfc4b73551ea60ca17eb2b981f"
+    },
+    {
+      "source": "third_party/licenses/rime/rapidjson-1.1.0-LICENSE.txt",
+      "target": "licenses/licenses/rime/rapidjson-1.1.0-LICENSE.txt",
+      "bytes": 5140,
+      "blob": "5c59bed121ab48a402bdb55ac89612c2478e1b58"
+    },
+    {
+      "source": "third_party/licenses/rime/rapidjson-1.1.0.txt",
+      "target": "licenses/licenses/rime/rapidjson-1.1.0.txt",
+      "bytes": 3074,
+      "blob": "6c8e2bb94084e78402b1de880419a2e029aaafd5"
+    },
+    {
+      "source": "third_party/licenses/rime/utf8cpp-notice.txt",
+      "target": "licenses/licenses/rime/utf8cpp-notice.txt",
+      "bytes": 1315,
+      "blob": "1751a003b521c8acd38041e66972add9447f69ab"
+    },
+    {
+      "source": "third_party/licenses/rime/x11-keysym-notice.txt",
+      "target": "licenses/licenses/rime/x11-keysym-notice.txt",
+      "bytes": 2106,
+      "blob": "3f9c2e4e38b6b203e0157d3e05a3baabf01fd073"
+    },
+    {
+      "source": "third_party/licenses/rime/yaml-cpp-MIT.txt",
+      "target": "licenses/licenses/rime/yaml-cpp-MIT.txt",
+      "bytes": 1061,
+      "blob": "991fdbbe7d3d039b1156828ff923a8fb5079cedd"
+    },
+    {
+      "source": "LICENSE",
+      "target": "licenses/LICENSE",
+      "bytes": 35149,
+      "blob": "f288702d2fa16d3cdf0035b15a9fcbc552cd88e7"
+    },
+    {
+      "source": "NOTICE",
+      "target": "licenses/NOTICE",
+      "bytes": 184,
+      "blob": "10bab681318743878e2531fa52e84c1c749e98e4"
+    },
+    {
+      "source": "third_party/NOTICE.md",
+      "target": "licenses/NOTICE.md",
+      "bytes": 3395,
+      "blob": "4656b9a9c73da14c56b9e8f7a89c236d87dee391"
+    },
+    {
+      "source": "third_party/THIRD_PARTY_NOTICES.md",
+      "target": "licenses/THIRD_PARTY_NOTICES.md",
+      "bytes": 2458,
+      "blob": "4ca7ad1ea46504530eca3fd45ec5cd74bb38e58c"
+    }
+  ]
+}

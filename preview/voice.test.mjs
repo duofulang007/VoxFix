@@ -18,13 +18,16 @@ globalThis.AudioWorkletNode=class{
   connect(){}
   disconnect(){}
 };
-const text=[];
-const voice=new LocalVoice(value=>text.push(value),error=>{throw error;});
+const text=[],levels=[];
+const voice=new LocalVoice(value=>text.push(value),error=>{throw error;},[],level=>levels.push(level));
 await voice.start();
 await voice.pause();assert.equal(track.enabled,false);await voice.resume();assert.equal(track.enabled,true);
 voice.node.port.onmessage({data:{samples:new Float32Array(3200)}});
+voice.node.port.onmessage({data:{samples:new Float32Array(3200).fill(.12)}});
+voice.node.port.onmessage({data:{samples:new Float32Array(3200).fill(1)}});
+assert.equal(levels[0],0);assert(Math.abs(levels[1]-1)<.000001);assert.equal(levels[2],1);
 assert.equal(await voice.finish(),'你好。');
-assert.deepEqual(text,['你好']);
+assert.deepEqual(text,['你好','你好','你好']);
 assert.equal(track.stopped,1);
 assert.ok(calls.some(url=>url.endsWith('chunk')));
 const cancelled=new LocalVoice(()=>{throw Error('Cancelled recording updated text');},error=>{throw error;});

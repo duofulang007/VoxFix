@@ -1,11 +1,59 @@
-html.native-ime, .native-ime body {margin:0;padding:0;background:#edeef2;overflow:hidden;}
+html.native-ime, .native-ime body {margin:0;padding:0;background:#edeff2;overflow:hidden;}
 .native-ime body > :not(#phone):not(#toast):not(dialog) {display:none!important;}
-.native-ime #phone {width:100%;height:auto;min-height:0;border:0;border-radius:0;box-shadow:none;margin:0;overflow:hidden;}
+.native-ime #phone {width:100%;height:auto;min-height:100vh;border:0;border-radius:0;box-shadow:none;margin:0;overflow:hidden;}
 .native-ime #phone > :not(#keyboard) {display:none!important;}
+.native-ime #phone > #ime-local-editor:not([hidden]) {display:flex!important;position:absolute;top:0;left:5px;right:5px;height:44px;z-index:10;align-items:center;background:#edeff2;gap:8px;}
+.native-ime #phone > #ime-local-editor.snippet-edit:not([hidden]) {top:8px;left:8px;right:8px;height:calc(var(--local-editor-height) - 16px);background:white;border-radius:12px;padding:12px;box-shadow:0 2px 12px #0002;}
+.native-ime #ime-local-editor form {display:flex;flex-direction:column;gap:6px;width:100%;height:100%;margin:0;}
+.native-ime #ime-local-editor .note {display:none;}
+.native-ime #ime-local-editor h2 {display:block;font-size:14px;margin:0;}
+.native-ime #ime-local-editor .field {flex:1;margin:0;min-height:0;font-size:0;}
+.native-ime #ime-local-editor textarea,.native-ime #ime-local-editor input {height:100%;min-height:0;resize:none;width:100%;margin:0;padding:8px;font-size:16px;line-height:1.5;border:1px solid #dce0e5;border-radius:6px;background:white;color:#292d34;}
+.native-ime #ime-local-editor > input {height:36px;flex:1;min-width:0;}
+.native-ime #ime-local-editor .dialog-actions {display:flex;margin:0;gap:6px;}
+.native-ime #ime-local-editor button {font-size:13px;white-space:nowrap;padding:6px;}
+.native-ime #ime-local-editor #snippet-error:empty {display:none;}
+.native-ime #ime-local-editor #snippet-error:not(:empty) {position:absolute;left:12px;right:12px;bottom:42px;background:white;z-index:11;}
 .native-ime #keyboard {width:100%;border-radius:0;}
+.native-ime #keyboard.local-edit {padding-top:var(--local-editor-height);}
+.keyboard .key-rows {gap:10px;padding:5px 0 15px;}
+.keyboard .key-row {gap:var(--key-gap);}
+.keyboard .key-row.row-middle {padding:0 20.5px;}
+.keyboard .keyboard-footer {padding:0 25px 16px;}
+.keyboard .keyboard-footer svg {width:30px;height:30px;}
+.keyboard .toolbar svg {width:22px;height:22px;}
+.keyboard .key-row .key {border:1px solid #d2d7df;box-shadow:none;font-size:var(--key-font);}
+.keyboard .key.pressed {background:#c7dbea;}
+.keyboard .key-row .key.function {font-size:18px;}
+.keyboard .key-rows > .key-row:last-child > :first-child {flex:1.55;}
+.keyboard .key-rows > .key-row:last-child > :nth-child(2), .keyboard .key-rows > .key-row:last-child > :nth-child(6) {flex:1.2;}
+.keyboard .key.function svg {width:24px;height:24px;}
+.keyboard .key.space svg {width:36px;height:32px;color:var(--key-color);}
+.keyboard .key.space .microphone {width:16px;height:20px;top:10px;color:#c4c8ce;}
+.keyboard .number-body {grid-template-columns:61px 1fr 61px;padding:5px 0 15px;}
+.keyboard .number-strip {flex:3.16;}
+.keyboard .number-strip button {font-size:22px;min-height:44px;}
+.keyboard .number-body .key:not(.function) {font-size:24px;}
+.keyboard .symbol-body {gap:5px;padding-top:3px;padding-bottom:15px;}
+.keyboard .symbol-nav {width:61px;gap:6px;}
+.keyboard .symbol-categories {flex:3;background:var(--func-bg);border:1px solid #d2d7df;border-radius:7px;overflow:hidden;}
+.keyboard .symbol-categories button {border-radius:0;}
+.keyboard .symbol-nav > button {border:1px solid #d2d7df;border-radius:7px;}
+.keyboard .symbol-nav button {font-size:18px;}
+.keyboard .symbol-grid {border:1px solid #d2d7df;grid-auto-rows:calc((var(--keyboard-height) - 69px)/5);align-content:start;}
+.keyboard .symbol-grid button {font-size:22px;border:0;border-right:1px solid #eceef1;border-bottom:1px solid #eceef1;}
+.keyboard .symbol-grid.url button {font-size:17px;}
+.keyboard .symbol-grid button.triple {grid-column:span 3;}
+.keyboard .candidate-controls {flex:0 0 40px;margin:4px 0;gap:6px;}
+.keyboard .candidate-bar {height:44px;flex-shrink:0;}
+.keyboard .key-popup button.selected {background:#347fff;color:white;border-radius:6px;}
 .native-ime .toast {bottom:12px;}
 .native-ime dialog {max-height:85vh;overflow:auto;}
 .native-ime .config-actions {display:none;}
-.native-ime .voice-panel.listening .waveform i {animation:none;transform:scaleY(var(--mic-level,.12));}
+/* 原生桥只传音量；球体与音量包络使用网页同一套绘制。 */
 .native-ime #phone > #handwriting-surface:not([hidden]) {display:block!important;top:44px;bottom:108px;}
 .native-ime #keyboard .hand-controls {flex:0 0 46px;margin-top:auto;margin-bottom:8px;}
+.native-ime #phone > #night-shade:not([hidden]) {display:block!important;}
+.night-shade {position:absolute;left:0;right:0;bottom:0;z-index:40;background:rgba(0,0,0,.46);pointer-events:none;}
+.snippet-dialog.night {filter:brightness(.54);}
+.toast {pointer-events:none;}

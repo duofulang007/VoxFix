@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {setEnglishWords,englishCandidates,hasEnglishWord} from './english.mjs';
+setEnglishWords(readFileSync(new URL('./english-words.txt',import.meta.url),'utf8').split(/\r?\n/));
+assert(englishCandidates('hell').includes('hello'));
+assert(englishCandidates('Hell').includes('Hello'));
+assert(englishCandidates('HELL').includes('HELLO'));
+assert(hasEnglishWord('hello'));assert(hasEnglishWord('HELLO'));assert(!hasEnglishWord('qqqqqq'));
+assert.deepEqual(englishCandidates('<script>'),[]);
+assert.equal(englishCandidates('hell',2).length,2);
+console.log('PASS: offline English completion and case/input bounds');

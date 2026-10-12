@@ -1,0 +1,42 @@
+schema:
+  schema_id: voxfix
+  name: VoxFix拼音
+  version: "1"
+engine:
+  processors: [speller, selector, navigator, express_editor]
+  segmentors: [abc_segmentor, fallback_segmentor]
+  translators: [script_translator, script_translator@personal]
+  filters: [simplifier, uniquifier]
+speller:
+  alphabet: abcdefghijklmnopqrstuvwxyz
+  delimiter: " '"
+  # Missing these rules lost short-initial input: wzdl stopped splitting into w z d l.
+  algebra:
+    - abbrev/^([a-z]).+$/$1/
+    - abbrev/^([zcs]h).+$/$1/
+translator:
+  dictionary: luna_pinyin
+  prism: luna_pinyin
+  user_dict: voxfix
+  enable_user_dict: true
+  enable_sentence: true
+  enable_completion: true
+  enable_correction: true
+  max_sentences: 5
+  max_homophones: 8
+  sentence_cutoff_threshold: 0.01
+personal:
+  dictionary: voxfix_personal
+  user_dict: voxfix_personal
+  initial_quality: -1
+  enable_user_dict: true
+  enable_sentence: false
+  enable_completion: false
+simplifier:
+  opencc_config: t2s.json
+  option_name: simplification
+switches:
+  - name: simplification
+    reset: 1
+menu:
+  page_size: 10

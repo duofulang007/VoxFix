@@ -9,7 +9,7 @@
   <main class="workspace">
     <aside class="controls">
       <h1>先试手感，再做减法。</h1><p class="intro">按你当前的讯飞小米版布局还原。点击按键，或长按空格试试语音操作。</p>
-      <div class="control-tabs" role="tablist" aria-label="工作模式"><button role="tab" aria-selected="true" data-tab="try">试用与对照</button><button role="tab" aria-selected="false" data-tab="custom">调整布局</button></div>
+      <div class="control-tabs" role="tablist" aria-label="工作模式"><button role="tab" aria-selected="true" data-tab="try">试用与对照</button><button role="tab" aria-selected="false" data-tab="custom">键盘设置</button></div>
       <section id="try-panel">
         <h2>快速打开</h2><div id="quick-pages" class="quick-pages"></div>
         <div class="instructions"><p><b>点一下空格</b>输入空格；<b>长按空格</b>进入语音。</p><p>语音时<b>上滑取消</b>，松手结束；识别中点击空白取消。</p><p>字母键长按可选上标符号，向上滑动直接输入上标。</p></div>
@@ -28,12 +28,12 @@
         <details class="coverage"><summary>本版功能范围</summary><p>9 键拼音、26 键拼音、全屏单字手写、离线语音；数字、符号、剪贴板／常用语、表情与颜文字、文字编辑和布局设置。</p><p>完整讯飞设置页与在线表情商店不在当前范围。</p></details>
       </section>
       <section id="custom-panel" hidden>
-        <h2>尺寸与外观</h2><div id="sliders"></div>
-        <label class="color-field">键盘背景<input type="color" id="background" value="#edeef2"></label>
+        <p class="note">键盘尺寸、按键大小与背景已按讯飞小米版固定。</p>
         <h2>保留哪些入口</h2><p class="note">重复入口先保留。取消勾选即可隐藏，随时能加回来。</p><div id="feature-toggles" class="feature-toggles"></div>
+        <h2>剪贴板</h2><p class="note">对齐官方小米版：可关闭历史记录；开启后复制内容会出现在候选栏，一键上屏。</p><div id="clipboard-toggles" class="feature-toggles"></div>
         <h2>常用按键</h2><div class="punctuation"><label class="field">逗号键<input id="comma" maxlength="8"></label><label class="field">句号键<input id="period" maxlength="8"></label></div>
         <h2>输入习惯记忆</h2><label class="demo-toggle"><input type="checkbox" id="remember-input" checked>记住选词习惯</label><p id="learning-status" class="note">只在当前浏览器保存选词次数，不上传。</p><button id="clear-learning" class="clear-learning">清空选词记忆</button>
-        <div class="config-actions"><button id="export">导出布局</button><button id="import">导入布局</button><input type="file" id="config-file" accept=".json,application/json" hidden><button id="reset">恢复录屏布局</button></div><p class="note">布局自动保存在当前浏览器；试用文字不会保存。</p>
+        <div class="config-actions"><button id="export">导出功能设置</button><button id="import">导入功能设置</button><input type="file" id="config-file" accept=".json,application/json" hidden><button id="reset">恢复默认功能设置</button></div><p class="note">功能设置自动保存；键盘尺寸保持固定，试用文字不会保存。</p>
       </section>
       <p id="feedback" class="feedback" role="status" aria-live="polite">默认布局保留了录屏中的重复入口。</p>
     </aside>

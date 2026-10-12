@@ -1,63 +1,127 @@
-"""Download the three official ASR archives, verify hashes, extract selected files."""
+"""Download and verify the offline voice models the Android build ships.
+
+The Android package uses three models:
+
+- a streaming Zipformer for pass 1, so text appears while the user talks;
+- SenseVoiceSmall int8 for pass 2, which re-reads the whole utterance and supplies
+  punctuation and inverse text normalization in one non-autoregressive pass;
+- silero-vad, which decides when a pause closes an utterance.
+
+Every download is checked against a fixed SHA-256. Digests are recorded per extracted
+file rather than per archive, so the check still holds when a mirror is used instead of
+GitHub releases; a mirror cannot silently substitute different weights.
+"""
 import concurrent.futures
 import argparse
 import hashlib
 import shutil
-import subprocess
 import tarfile
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SPECS = [
-    ('asr-models', 'sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20-mobile',
-     '45b8d04fe8faf5146397ff2e71d90ca8effdfcbe9adc30fdce769e92cabd6b03',
-     {'encoder-epoch-99-avg-1.int8.onnx': 'streaming/encoder.onnx', 'decoder-epoch-99-avg-1.onnx': 'streaming/decoder.onnx', 'joiner-epoch-99-avg-1.int8.onnx': 'streaming/joiner.onnx', 'tokens.txt': 'streaming/tokens.txt', 'test_wavs/0.wav': 'test/0.wav'}),
-    ('asr-models', 'sherpa-onnx-paraformer-zh-small-2024-03-09',
-     'da92b3db5218c5be53aad53e57d1b6e63e7fc98a0e054fbdd6dbe18e9c6b1450',
-     {'model.int8.onnx': 'final/model.onnx', 'tokens.txt': 'final/tokens.txt'}),
-    ('punctuation-models', 'sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8',
-     'c0d5aa5f8eeb686032345e180bedf39319dc2e0556781c6264bcadba8328a6e1',
-     {'model.int8.onnx': 'punctuation/model.onnx'}),
+GITHUB = 'https://github.com/k2-fsa/sherpa-onnx/releases/download'
+MIRROR = 'https://hf-mirror.com/csukuangfj'
+
+ARCHIVES = [
+    ('asr-models', 'sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20-mobile'),
+    ('asr-models', 'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09'),
 ]
 
+# source name inside the archive -> destination under models/, with its digest
+FILES = {
+    'sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20-mobile': {
+        'encoder-epoch-99-avg-1.int8.onnx': ('streaming/encoder.int8.onnx', 'f559f422d970323e0c266aaa3c56cf6d1a3a4bc0c0822124727686c1e43e9447'),
+        'decoder-epoch-99-avg-1.onnx': ('streaming/decoder.onnx', '2e3b5ec371f8899ee6acd829fd753ba45772df57a91bdf37cde3136354e7db7d'),
+        'joiner-epoch-99-avg-1.int8.onnx': ('streaming/joiner.int8.onnx', '1ed689c5ed19dbaa725d9d191bb4822b5f4855a39e1ffd28cbc1f340d25b2ee0'),
+        'tokens.txt': ('streaming/tokens.txt', 'a8e0e4ec53810e433789b54a5c0134a7eaa2ffca595a6334d54c00da858841d3'),
+    },
+    'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09': {
+        'model.int8.onnx': ('sensevoice/model.int8.onnx',
+                            '12ca1a2ae7ecf3e0019ef2822307ee0b5cadc9196569e379b4c4026f8205276d'),
+        'tokens.txt': ('sensevoice/tokens.txt',
+                       'f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc'),
+    },
+}
 
-def setup(spec, proxy=''):
-    release, name, expected, entries = spec
+# Fetched individually because GitHub release objects are large and often unavailable.
+SINGLES = [
+    ('vad/silero_vad.onnx', f'{GITHUB}/asr-models/silero_vad.onnx',
+     '9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6'),
+]
+
+ZIP_PREFIX = 'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09'
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify(target: Path, expected: str | None) -> None:
+    if expected is None or not target.is_file():
+        return
+    actual = sha256(target)
+    if actual != expected:
+        raise ValueError(f'Checksum mismatch for {target}: {actual} != {expected}')
+
+
+def fetch(url: str, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    scratch = target.with_suffix(target.suffix + '.part')
+    request = urllib.request.Request(url, headers={'User-Agent': 'VoxFix-setup'})
+    with urllib.request.urlopen(request, timeout=900) as response, scratch.open('wb') as output:
+        shutil.copyfileobj(response, output)
+    scratch.replace(target)
+
+
+def setup_archive(release: str, name: str) -> None:
     cache = ROOT / '.model-downloads'
     cache.mkdir(exist_ok=True)
     archive = cache / (name + '.tar.bz2')
-    def digest():
-        with archive.open('rb') as stream:
-            return hashlib.file_digest(stream, 'sha256').hexdigest()
-    if not archive.exists() or digest() != expected:
+    entries = FILES[name]
+    if not archive.is_file() or archive.stat().st_size == 0:
         print('Downloading ' + name, flush=True)
-        command = ['curl.exe', '-fL', '--retry', '3', '--connect-timeout', '30']
-        if proxy:
-            command += ['--proxy', proxy]
-        subprocess.run(command + ['-o', str(archive), f'https://github.com/k2-fsa/sherpa-onnx/releases/download/{release}/{archive.name}'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if digest() != expected:
-        raise ValueError('Model archive checksum mismatch: ' + name)
+        try:
+            fetch(f'{GITHUB}/{release}/{archive.name}', archive)
+        except Exception as error:  # noqa: BLE001 - fall back to the mirror
+            print(f'GitHub unavailable ({error}); trying mirror', flush=True)
+            for member in entries:
+                fetch(f'{MIRROR}/{name}/resolve/main/{member}', ROOT / 'models' / entries[member][0])
+            for member, (destination, expected) in entries.items():
+                verify(ROOT / 'models' / destination, expected)
+            print('Verified via mirror: ' + name, flush=True)
+            return
     with tarfile.open(archive, 'r:bz2') as package:
         members = {member.name: member for member in package.getmembers()}
-        for source, destination in entries.items():
-            member = members.get(name + '/' + source)
-            if member is None and source.startswith('test_wavs/'):
-                continue
+        for source, (destination, expected) in entries.items():
+            member = members.get(f'{name}/{source}')
             if member is None or not member.isfile():
                 raise ValueError('Missing model file: ' + source)
             target = ROOT / 'models' / destination
             target.parent.mkdir(parents=True, exist_ok=True)
-            with package.extractfile(member) as stream, target.with_suffix(target.suffix + '.part').open('wb') as output:
+            scratch = target.with_suffix(target.suffix + '.part')
+            with package.extractfile(member) as stream, scratch.open('wb') as output:
                 shutil.copyfileobj(stream, output)
-            target.with_suffix(target.suffix + '.part').replace(target)
+            scratch.replace(target)
+            verify(target, expected)
     print('Verified and installed ' + name, flush=True)
 
 
+def setup_single(destination: str, url: str, expected: str) -> None:
+    target = ROOT / 'models' / destination
+    if not target.is_file() or sha256(target) != expected:
+        print('Downloading ' + destination, flush=True)
+        fetch(url, target)
+    verify(target, expected)
+    print('Verified and installed ' + destination, flush=True)
+
+
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--proxy', default='')
-    args = parser.parse_args()
-    assert len(SPECS) == 3 and all(len(spec[2]) == 64 for spec in SPECS)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-        list(pool.map(lambda spec: setup(spec, args.proxy), SPECS))
+    parser.parse_args()
+    for release, name in ARCHIVES:
+        setup_archive(release, name)
+    for destination, url, expected in SINGLES:
+        setup_single(destination, url, expected)
     print('All offline voice models are ready.', flush=True)

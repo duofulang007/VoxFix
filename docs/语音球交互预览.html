@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VoxFix · 语音球交互预览</title>
+<style>
+:root{font-family:"Microsoft YaHei","PingFang SC",sans-serif;color:#242a35;background:#f7f8fa;font-synthesis:none}
+*{box-sizing:border-box}body{margin:0}main{max-width:1060px;margin:auto;padding:52px 28px}h1{font-size:28px;font-weight:600;letter-spacing:-.5px;margin:0 0 12px}.intro{font-size:14px;line-height:1.8;color:#687181;margin:0 0 34px}.layout{display:grid;grid-template-columns:394px 1fr;gap:64px;align-items:center}
+.phone{border-radius:26px;background:#fff;overflow:hidden;border:1px solid #dbe0e8;box-shadow:0 16px 42px #2438580b}.status{display:flex;justify-content:space-between;font-size:11px;padding:14px 22px}.host{height:150px;display:flex;flex-direction:column;justify-content:flex-end;padding:18px 14px}.host p{font-size:12px;color:#98a0ad;text-align:center;margin:0 0 32px}.composer{height:42px;border:1px solid #e8ebef;border-radius:24px;display:flex;align-items:center;padding:0 15px;font-size:13px;color:#939ba8}.composer i{width:2px;height:17px;background:#427ded;margin-right:6px}
+iframe{display:block;width:100%;height:351px;border:0}.home{height:20px;display:grid;place-items:center;background:#edeff2}.home:after{content:"";width:104px;height:4px;border-radius:4px;background:#242a35}.side h2{font-size:20px;font-weight:500;line-height:1.5;margin:0 0 14px}.side p{font-size:13px;line-height:1.9;color:#6c7584;margin:0 0 20px}.states{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px}button{font:inherit;font-size:12px;padding:10px 14px;border-radius:24px;color:#586477;border:1px solid #dce2eb;background:#fff;cursor:pointer}button[aria-pressed=true]{background:#eaf0fe;border-color:#a7bff3;color:#315fb4}button:focus-visible{outline:2px solid #437dea;outline-offset:3px}button:disabled{opacity:.45;cursor:default}.compare{display:flex;gap:20px;padding-top:24px;border-top:1px solid #e0e4eb}.compare figure{margin:0;text-align:center;flex:1}.compare img,.closeup{width:156px;height:156px;max-width:100%;display:block;margin:auto;border-radius:50%;overflow:hidden}.closeup{position:relative;background:linear-gradient(155deg,#3c70e8,#bbcafa)}.closeup canvas{width:100%;height:100%;display:block}.compare figcaption{font-size:11px;color:#8690a0;margin-top:12px}footer{font-size:11px;color:#8892a2;margin-top:36px;line-height:1.8}a{color:#426cad}.error{color:#b43d4b}
+@media(max-width:830px){main{padding:28px 16px}.layout{grid-template-columns:minmax(0,394px);justify-content:center;gap:30px}h1{font-size:24px}.intro{margin-bottom:24px}.side{padding:0 6px}}
+</style>
+<main>
+  <h1>语音球 · 交互预览</h1>
+  <p class="intro">蓝色向白雾自然融开，声音让云纹流动、球体轻轻鼓起。<br>在下方键盘按住空格说话，上滑取消，向下滑回继续。</p>
+  <div class="layout">
+    <div class="phone">
+      <div class="status"><span>9:41</span><span>▮▮▮　▰</span></div>
+      <div class="host"><p>正在使用 VoxFix</p><div class="composer"><i></i><span>语音文字会出现在这里</span></div></div>
+      <iframe id="keyboard" title="VoxFix 语音键盘预览"></iframe>
+      <div class="home"></div>
+    </div>
+    <div class="side">
+      <h2 id="caption">安静时，也有细微流动</h2>
+      <p id="description">球的圆形轮廓保持干净。内部的蓝白云纹缓慢变化，没有写实云海的灰色阴影。</p>
+      <div class="states" aria-label="体验语音状态">
+        <button data-mode="idle" aria-pressed="true" disabled>安静倾听</button>
+        <button data-mode="talk" aria-pressed="false" disabled>说话</button>
+        <button data-mode="cancel" aria-pressed="false" disabled>上滑取消</button>
+        <button data-mode="finish" aria-pressed="false" disabled>松手结束</button>
+        <button data-mode="restart" aria-pressed="false" disabled>重新开始</button>
+      </div>
+      <div class="compare">
+        <figure><img src="语音交互概念稿.assets/ref-orb.png" alt="项目中已有的 ChatGPT 蓝白球参考"><figcaption>原有参考</figcaption></figure>
+        <figure><div class="closeup"><canvas id="closeup" aria-label="新的蓝白流云纹理"></canvas></div><figcaption>新球体细节</figcaption></figure>
+      </div>
+    </div>
+  </div>
+  <footer id="note">使用真实键盘界面与同一套球体绘制，音量为模拟信号，本页不录音。<br>键盘里的颜色、形态和动作会随状态一起变化。</footer>
+</main>
+<script type="module">
+import {createVoiceOrb} from '../preview/voice-orb.mjs';
+const frame=document.getElementById('keyboard'),closeup=createVoiceOrb(document.getElementById('closeup'));
+const modes={idle:['安静时，也有细微流动','球的圆形轮廓保持干净。内部的蓝白云纹缓慢变化，没有写实云海的灰色阴影。'],talk:['声音停下，球就轻轻回落','声音推动球体和云纹，短暂的停顿也会自然回落。不会一直停在刚才的音量。'],cancel:['向上滑，准备取消','同一颗球跟着手指上移，逐渐转为柔和的红色。滑回原处，就能继续说。'],finish:['松手后，安静收束','球体略微缩小，云纹放慢，等待整句识别。完成后淡出，键盘立即恢复。'],restart:['重新开始，干净衔接','上一轮的音量、位移和颜色清空，新一轮从平静的蓝白球开始。']};
+let mode='idle',flow=0,previous=performance.now();const reduced=matchMedia('(prefers-reduced-motion: reduce)');
+function select(next){
+  const demo=frame.contentWindow.voxfixDemo;if(!demo)return;
+  mode=next;const copy=modes[next];document.getElementById('caption').textContent=copy[0];document.getElementById('description').textContent=copy[1];
+  document.querySelectorAll('[data-mode]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.mode===next));
+  if(next==='restart'){demo.cancel();demo.start();mode='idle';}
+  else if(next==='finish'){demo.drag(0);demo.finish();}
+  else{demo.start();demo.drag(next==='cancel'?-60:0);}
+}
+document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>select(b.dataset.mode));
+try{
+  const [html,app]=await Promise.all([fetch('../preview/index.html').then(r=>r.text()),fetch('../preview/app.mjs').then(r=>r.text())]);
+  const init=`<base href="${new URL('../preview/',location.href)}"><script>
+    window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','edit','ready','resize','refreshClipboard','importClipboard'].map(n=>[n,()=>{}]));
+    VoxFixIme.voiceReady=()=>true;VoxFixIme.handReady=()=>false;
+    let demoGeneration=0;VoxFixIme.startVoice=()=>demoGeneration++;VoxFixIme.cancelVoice=()=>demoGeneration++;
+    VoxFixIme.stopVoice=()=>{const serial=demoGeneration;setTimeout(()=>{if(serial===demoGeneration)voxfixVoiceDone('');},1100);};
+    window.addEventListener('pointerdown',()=>parent.postMessage('voice-interaction','*'));
+  <\/script>`;
+  const hooks=`\nglobalThis.voxfixDemo={start:()=>startVoice(),finish:()=>finishVoice(false),cancel:cancelVoice,drag:y=>{if(state.voice)syncVoiceDrag({y:0,cancel:state.voice.phase==='cancel'},y)}};parent.postMessage('voice-ready','*');`;
+  frame.srcdoc=html.replace('<head>',()=>'<head>'+init).replace('<script type="module" src="app.mjs"><\/script>',()=>'<script type="module">'+app+hooks+'<\/script>');
+}catch{document.getElementById('note').textContent='预览加载失败，请通过本机预览地址打开此页。';document.getElementById('note').className='error';}
+addEventListener('message',event=>{if(event.source!==frame.contentWindow)return;if(event.data==='voice-ready'){document.querySelectorAll('[data-mode]').forEach(b=>b.disabled=false);select('idle');}else if(event.data==='voice-interaction'&&mode==='finish')mode='talk';});
+function tick(now){
+  const dt=Math.min(.05,(now-previous)/1000);previous=now;
+  const level=mode==='talk'?Math.pow(Math.max(0,Math.sin(now*.005)),2)*.8:0;
+  frame.contentWindow.voxfixVoiceLevel?.(level*12);
+  if(!reduced.matches)flow+=dt*(.38+level*1.5);
+  closeup?.draw(reduced.matches?0:flow,level,mode==='cancel'?1:0);
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script>
+</html>

@@ -1,0 +1,21 @@
+schema:
+  schema_id: voxfix_personal
+  name: VoxFix个人词库
+  version: "1"
+engine:
+  # Deployment target: compiling this schema builds the personal dictionary that
+  # the main schema consumes through script_translator@personal.
+  processors: [speller, selector, express_editor]
+  segmentors: [abc_segmentor]
+  translators: [script_translator]
+speller:
+  alphabet: abcdefghijklmnopqrstuvwxyz
+  delimiter: " '"
+  algebra:
+    - abbrev/^([a-z]).+$/$1/
+    - abbrev/^([zcs]h).+$/$1/
+translator:
+  dictionary: voxfix_personal
+  enable_user_dict: true
+  enable_sentence: false
+  enable_completion: false

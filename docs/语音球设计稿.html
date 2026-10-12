@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VoxFix · 语音球设计稿 v2（对齐 ChatGPT Live）</title>
+<style>
+:root{
+  --accent:#4a86c8;--danger:#cf5347;--line:#d4d7df;--ink:#292d34;--ink-2:#5b6169;--muted:#858a93;--paper:#f7f8fa;--card-bg:#fff;
+  font-family:"Microsoft YaHei","PingFang SC",-apple-system,Arial,sans-serif;
+  color:var(--ink);background:var(--paper);font-synthesis:none;-webkit-font-smoothing:antialiased;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:0 0 80px}
+.wrap{max-width:1140px;margin:0 auto;padding:0 28px}
+header{padding:40px 0 24px;border-bottom:1px solid var(--line);margin-bottom:34px}
+h1{margin:0 0 8px;font-size:26px;font-weight:600;letter-spacing:-.2px}
+header .sub{margin:0;color:var(--ink-2);font-size:14px;line-height:1.75}
+.tag{display:inline-block;margin-left:10px;padding:2px 8px;border-radius:99px;background:#fdf0ee;color:#b4574c;font-size:12px;vertical-align:2px;font-weight:600}
+section{margin:0 0 52px}
+h2{font-size:15px;font-weight:600;margin:0 0 6px;display:flex;align-items:center;gap:10px}
+h2 .n{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--ink);color:#fff;font-size:11px;flex:none}
+h2+.lead{color:var(--ink-2);font-size:13px;margin:0 0 20px;line-height:1.75}
+h3{font-size:13px;font-weight:600;margin:0 0 10px;color:var(--ink)}
+
+/* ============ 球体组件（全页唯一来源） ============
+   硬边圆（border-radius+overflow:hidden），只有球内的雾是虚的。
+   色标取自参考图实测：正上 #4374ea / 左中 #618bed / 右中 #dfe5fb / 正下 #b7c7fa */
+.orb{
+  --level:0;--red:0;
+  position:relative;border-radius:50%;overflow:hidden;
+  /* 底色：蓝天在上（一直延续到约 50%），往下过渡成云海的底色。
+     参考图正下 #b7c7fa、右下 #bbccfa、左下 #cad8fd —— 都不是白，所以底色下端停在 periwinkle。 */
+  background:linear-gradient(180deg,#3f74ec 0%,#4776ec 8%,#4c7bee 18%,#517fee 30%,#5f8bf1 42%,#6c95f2 52%,#8db1f5 62%,#a9c3f8 72%,#bccbfa 80%,#b7c7fa 88%,#bac9fa 100%);
+  transform:scale(calc(1 + var(--level) * .16));
+  will-change:transform;flex:none;
+}
+.orb::after{content:"";position:absolute;inset:0;border-radius:50%;pointer-events:none;
+  box-shadow:0 0 0 1px rgba(58,110,220,.07) inset,0 2px 10px rgba(58,110,220,calc(.06 + var(--level) * .14));}
+.orb .red{position:absolute;inset:0;opacity:var(--red);
+  background:linear-gradient(168deg,#b8433a 0%,#cf5347 18%,#dd8076 42%,#eec0ba 68%,#f8e6e3 100%);}
+/* 慢旋改为"横向漂移"：云层地平线必须保持水平，旋转会让它立起来 */
+.orb .swirl{position:absolute;inset:0;animation:sway 17s ease-in-out infinite alternate}
+/* 快层：只在检测到人声时浮出来（用 opacity 而不是改 duration，避免中途跳帧） */
+.orb .swirlFast{position:absolute;inset:0;opacity:calc(var(--level) * .95);animation:sway 5.5s ease-in-out infinite alternate}
+/* 云层主体：竖向的"白云从 40% 急剧亮起、往下再收暗"的渐变，
+   再用横向 mask 让它「左边没有、右边厚」—— 这样才能同时满足
+   左中仍是蓝(#648ef0) 与 右中已近白(#dfe5fb)。 */
+.orb .cloudbody{position:absolute;inset:0;
+  background:linear-gradient(to bottom,
+    rgba(255,255,255,0) 33%,
+    rgba(255,255,255,.06) 39%,
+    rgba(255,255,255,.62) 47%,
+    rgba(255,255,255,.88) 55%,
+    rgba(255,255,255,.74) 63%,
+    rgba(255,255,255,.30) 71%,
+    rgba(255,255,255,.04) 80%,
+    rgba(255,255,255,0) 100%);
+  -webkit-mask-image:linear-gradient(100deg,transparent 4%,rgba(0,0,0,.45) 32%,#000 60%);
+          mask-image:linear-gradient(100deg,transparent 4%,rgba(0,0,0,.45) 32%,#000 60%);}
+/* 云层地平线：主雾团在右中（让右边先白），再叠两道横云做出起伏的边界。 */
+.orb .w1{width:70%;height:30%;left:24%;top:34%;opacity:.34;animation:driftA 13s ease-in-out infinite}
+.orb .w2{width:60%;height:22%;left:16%;top:44%;opacity:.2;animation:driftB 9.5s ease-in-out infinite -2.4s}
+.orb .w3{width:46%;height:24%;left:26%;top:28%;opacity:.22;animation:driftA 11s ease-in-out infinite -4.2s}
+.orb .w4{width:56%;height:24%;left:30%;top:58%;opacity:.18;animation:driftB 15s ease-in-out infinite -6s}
+@keyframes sway{from{transform:translateX(-2.5%) scale(1.03)}to{transform:translateX(2.5%) scale(1.06)}}
+.orb .wisp{position:absolute;border-radius:50%;filter:blur(11px);
+  background:radial-gradient(ellipse at 50% 50%,rgba(255,255,255,.99) 0%,rgba(255,255,255,.76) 38%,rgba(255,255,255,0) 74%)}
+@keyframes driftA{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-2.5%,-2%) scale(1.07)}}
+@keyframes driftB{0%,100%{transform:translate(0,0) scale(1)}40%{transform:translate(3.5%,1.5%) scale(.95)}72%{transform:translate(-2%,1%) scale(1.05)}}
+
+/* ============ 通用 ============ */
+.row{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.panel{background:var(--card-bg);border:1px solid var(--line);border-radius:14px;padding:20px}
+.panel .cap{font-size:12px;color:var(--muted);margin-top:14px;line-height:1.7}
+.stagebox{background:#fcfcfc;border:1px solid var(--line);border-radius:14px;display:grid;place-items:center;overflow:hidden}
+table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:13px}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:middle}
+th{background:var(--paper);font-size:12px;color:var(--ink-2);font-weight:600}
+tr:last-child td{border-bottom:0}
+code{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--accent);background:var(--paper);border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+.sw{display:inline-block;width:22px;height:14px;border-radius:3px;border:1px solid #0000001a;vertical-align:-2px;margin-right:6px}
+.note{background:#fff;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:0 12px 12px 0;padding:14px 18px;font-size:13px;color:var(--ink-2);line-height:1.8;margin-top:18px}
+.note b{color:var(--ink)}
+.note.warn{border-left-color:var(--danger)}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--ink-2)}
+
+/* 1:1 对照 */
+.compare{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.compare figure{margin:0}
+.compare img,.compare .orb{width:100%;aspect-ratio:1/1;display:block}
+.compare .orb{border-radius:50%}
+.compare figcaption{font-size:12px;color:var(--muted);margin-top:10px;line-height:1.7}
+.compare .shotwrap{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#fcfcfc}
+.compare .shotwrap .orb{width:100%;border-radius:0}
+
+/* 参数控制条（仅设计稿用，不属于设计本体） */
+.ctrl{display:flex;align-items:center;gap:12px;margin-top:16px;font-size:12px;color:var(--ink-2);flex-wrap:wrap}
+.ctrl input[type=range]{flex:1;min-width:120px;accent-color:var(--accent)}
+.ctrl button{border:1px solid var(--line);background:#fff;border-radius:7px;padding:7px 12px;font-size:12px;color:var(--ink-2);cursor:pointer}
+.ctrl button[aria-pressed=true]{border-color:var(--accent);color:var(--accent);background:#eef4fb}
+.volbar{height:6px;border-radius:3px;background:#e9edf3;flex:1;min-width:100px;overflow:hidden}
+.volbar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#8fb2f5,#4a86e0);border-radius:3px}
+
+/* 关闭特效三案 */
+.dismiss{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+.dcard{background:#fff;border:1px solid var(--line);border-radius:14px;padding:0;overflow:hidden;display:flex;flex-direction:column}
+.dcard.pick{border-color:var(--accent);box-shadow:0 0 0 3px #e6eff9}
+.dcard .dstage{height:200px;background:#fcfcfc;display:grid;place-items:center;position:relative;overflow:hidden}
+.dcard .dbody{padding:15px 16px 18px}
+.dcard h4{margin:0 0 6px;font-size:13px;display:flex;align-items:center;gap:8px}
+.dcard h4 em{font-style:normal;font-size:11px;color:var(--accent);background:#e6eff9;padding:2px 7px;border-radius:99px}
+.dcard p{margin:0;font-size:12px;color:var(--ink-2);line-height:1.75}
+.dcard .dctrl{margin-top:12px;display:flex;gap:8px}
+.dcard .dctrl button{border:1px solid var(--line);background:#fff;border-radius:7px;padding:6px 11px;font-size:12px;color:var(--ink-2);cursor:pointer;flex:1}
+
+/* 三种退场动画 */
+@keyframes dCollapse{0%{transform:scale(1);opacity:1}70%{transform:scale(.34);opacity:.9}100%{transform:scale(.06);opacity:0}}
+@keyframes dRipple{0%{transform:scale(1);opacity:.5}100%{transform:scale(2.1);opacity:0}}
+@keyframes dDissolve{0%{transform:scale(1);opacity:1;filter:blur(0)}100%{transform:scale(1.22);opacity:0;filter:blur(14px)}}
+@keyframes dSink{0%{transform:translateY(0) scale(1);opacity:1}100%{transform:translateY(120px) scale(.86);opacity:0}}
+.dstage .orb.d1{animation:dCollapse .34s cubic-bezier(.4,0,.2,1) both}
+.dstage .ring{position:absolute;width:130px;height:130px;border-radius:50%;border:1.5px solid #7fa3f2;opacity:0;pointer-events:none}
+.dcard.run .dstage .ring{animation:dRipple .5s cubic-bezier(.22,1,.36,1) both}
+.dcard.run .dstage .orb.d1{animation:dCollapse .34s cubic-bezier(.4,0,.2,1) both}
+.dcard.run.d2 .dstage .orb{animation:dDissolve .36s cubic-bezier(.4,0,.2,1) both}
+.dcard.run.d3 .dstage .orb{animation:dSink .34s cubic-bezier(.4,0,.2,1) both}
+
+/* 沉浸：大尺寸舞台 */
+.immersive{position:relative;height:300px;border-radius:14px;border:1px solid var(--line);background:#fcfcfc;display:grid;place-items:center;overflow:hidden}
+.immersive .orb{width:190px;height:190px}
+.immersive .hint{position:absolute;bottom:12px;left:0;right:0;text-align:center;font-size:11px;color:#b6bac1}
+footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+@media(max-width:820px){.compare,.dismiss{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>语音球设计稿 v2<span class="tag">已被 v3 取代 · 看演示页</span></h1>
+  <p class="sub"><b>这页停在 v2。</b>后来照 ChatGPT Live 的真实行为规格改成了 v3：监听是「心跳脉冲」而不是持续放大、云从 4 大团换成 14 朵云絮、关闭改用「乙 · 化开」。<br>要看最新效果和完整流程，请开 <b>语音球全流程演示.html</b>；这页保留作配色/几何取样的依据。</p>
+</header>
+
+<!-- ============ 01 一比一对照 ============ -->
+<section>
+  <h2><span class="n">1</span>一比一对照</h2>
+  <p class="lead">左边是你给的截图里裁出来的球（原图 512×512），右边是按同一套参数画的。同一尺寸并排，方便逐点看差别。</p>
+  <div class="compare">
+    <figure>
+      <div class="shotwrap"><img src="语音交互概念稿.assets/ref-orb.png" alt="ChatGPT Live 参考球"></div>
+      <figcaption><b>参考</b>　上沿饱和宝蓝 <span class="mono">#4374ea</span>，右侧已经接近白 <span class="mono">#dfe5fb</span>，蓝白的分界是一条斜线。</figcaption>
+    </figure>
+    <figure>
+      <div class="shotwrap"><div class="orb"><span class="cloudbody"></span><span class="red"></span><div class="swirl"><span class="wisp w1"></span><span class="wisp w2"></span><span class="wisp w3"></span><span class="wisp w4"></span></div><div class="swirlFast"><span class="wisp w1"></span><span class="wisp w2"></span></div></div></div>
+      <figcaption><b>本稿</b>　同一套色标与几何；白雾主体压在右下，所以「左边还是蓝、右边已经白」这条关系能对上。</figcaption>
+    </figure>
+  </div>
+  <div class="note"><b>三条从截图量出来的硬指标（不是感觉）：</b><br>
+    ① 球是<b>硬边</b>——截图里球外 6 个像素全是 <span class="mono">#fcfcfc</span>，没有任何光晕或投影；<br>
+    ② 蓝色集中在<b>上沿一整条</b>（正上 <span class="mono">#4374ea</span>、右上 <span class="mono">#5080ee</span>），并顺着左边往下渗（左中 <span class="mono">#618bed</span>）；<br>
+    ③ 从球心横向看，<b>左中 <span class="mono">#618bed</span> → 右中 <span class="mono">#dfe5fb</span></b>，一条水平线上从蓝到白跨度极大 ⇒ 蓝白分界其实是<b>斜的</b>，不是上下分的。</div>
+</section>
+
+<!-- ============ 02 监听反应 ============ -->
+<section>
+  <h2><span class="n">2</span>检测到人声 → 变大、动起来</h2>
+  <p class="lead">安静时只做极慢的内部翻涌（「它还活着」）；一旦检测到人声，整颗球<b>跟着音量胀大</b>，同时球内翻涌<b>明显加快</b>。下面是真跑的，拖动滑杆或点自动演示都能看。</p>
+  <div class="row">
+    <div class="panel" style="flex:1;min-width:320px">
+      <h3>安静 → 说话</h3>
+      <div class="stagebox" style="height:270px">
+        <div class="orb" id="reactOrb" style="width:170px;height:170px"><span class="cloudbody"></span>
+          <span class="red"></span>
+          <div class="swirl"><span class="wisp w1"></span><span class="wisp w2"></span><span class="wisp w3"></span><span class="wisp w4"></span></div>
+          <div class="swirlFast"><span class="wisp w1"></span><span class="wisp w2"></span></div>
+        </div>
+      </div>
+      <div class="ctrl">
+        <span>音量</span>
+        <input type="range" id="lvl" min="0" max="100" value="0">
+        <span class="mono" id="lvlOut">0.00</span>
+      </div>
+      <div class="ctrl">
+        <button id="autoBtn" aria-pressed="false">自动演示</button>
+        <div class="volbar"><i id="volFill"></i></div>
+      </div>
+      <p class="cap">胀大倍率 <span class="mono">1 + level × 0.16</span>（最大 1.16×）；快旋层用 <b>opacity</b> 浮出而不是改动画周期，所以不会中途跳帧。</p>
+    </div>
+    <div class="panel" style="flex:1;min-width:300px">
+      <h3>三档对比（同一时刻的静止帧）</h3>
+      <div style="display:flex;gap:18px;align-items:flex-end;justify-content:center;height:230px">
+        <div style="text-align:center">
+          <div class="orb" style="width:130px;height:130px"><span class="cloudbody"></span><div class="swirl"><span class="wisp w1"></span><span class="wisp w2"></span><span class="wisp w3"></span><span class="wisp w4"></span></div></div>
+          <div class="mono" style="margin-top:10px">安静 1.00×</div>
+        </div>
+        <div style="text-align:center">
+          <div class="orb" style="width:130px;height:130px;--level:.55"><span class="cloudbody"></span><div class="swirl"><span class="wisp w1"></span><span class="wisp w2"></span><span class="wisp w3"></span><span class="wisp w4"></span></div><div class="swirlFast" style="--level:.55"><span class="wisp w1"></span><span class="wisp w2"></span></div></div>
+          <div class="mono" style="margin-top:10px">中等 1.09×</div>
+        </div>
+        <div style="text-align:center">
+          <div class="orb" style="width:130px;height:130px;--level:1"><span class="cloudbody"></span><div class="swirl"><span class="wisp w1"></span><span class="wisp w2"></span><span class="wisp w3"></span><span class="wisp w4"></span></div><div class="swirlFast" style="--level:1"><span class="wisp w1"></span><span class="wisp w2"></span></div></div>
+          <div class="mono" style="margin-top:10px">大声 1.16×</div>
+        </div>
+      </div>
+      <p class="cap">放大倍率刻意压在 1.16× 以内：再大就会挤到「倾听中」那行字，也会让面板边界显得紧张。</p>
+    </div>
+  </div>
+  <div class="note warn"><b>这里有个必须做对的细节：</b>音量是每帧写入的 <code>--level</code>。<b>绝不能</b>给 <code>transform</code> 挂 CSS 过渡——挂了就会被 200ms 的缓动拖成「反应迟钝」。正确做法是<b>包络写在 JS 里</b>：快起（attack ≈ 60ms）+ 慢落（release ≈ 320ms），CSS 侧零过渡。</div>
+</section>
+
+<!-- ============ 03 沉浸运动 ============ -->
+<section>
+  <h2><span class="n">3</span>平时就是「沉浸地在那里动」</h2>
+  <p class="lead">没有任何指示加载的转圈、进度条、箭头。球内白雾一直在极慢地翻涌与旋转，这样安静时也像有生命。</p>
+  <div class="immersive">
+    <div class="orb"><span class="cloudbody"></span>
+      <div class="swirl"><span class="wisp w1"></span><span class="wisp w2"></span><span class="wisp w3"></span><span class="wisp w4"></span></div>
+      <div class="swirlFast" id="immFast"><span class="wisp w1"></span><span class="wisp w2"></span></div>
+    </div>
+    <div class="hint">球内的雾在极慢地翻涌（46s 转一圈）；上面这颗同时在模拟「有人在说话」</div>
+  </div>
+  <div class="note"><b>为什么用「慢旋 + 单独一层快旋」而不是「球在动」：</b>球本身一直在动会让人一直盯着它、也会让面板显得躁；而球稳定、内部在动，才像 ChatGPT Live 那种「安静但活着」。</div>
+</section>
+
+<!-- ============ 04 上滑取消 ============ -->
+<section>
+  <h2><span class="n">4</span>上滑取消：跟手 + 转红</h2>
+  <p class="lead">按住空格说话时，手指往上滑，整颗球<b>贴着手指走</b>（近乎 1:1），同时<b>跟着缩小</b>并<b>交叉淡入红调</b>。没有额外的环、靶心或箭头。</p>
+  <div class="row">
+    <div class="panel" style="flex:1;min-width:320px">
+      <div class="stagebox" style="height:250px">
+        <div class="orb" id="dragOrb" style="width:170px;height:170px"><span class="cloudbody"></span>
+          <span class="red"></span>
+          <div class="swirl"><span class="wisp w1"></span><span class="wisp w2"></span><span class="wisp w3"></span><span class="wisp w4"></span></div>
+        </div>
+      </div>
+      <div class="ctrl">
+        <span>上滑距离</span>
+        <input type="range" id="drag" min="0" max="90" value="0">
+        <span class="mono" id="dragOut">0px</span>
+      </div>
+      <p class="cap">位移 <span class="mono">0.9 × 手指</span>（旧版是 0.55，所以显得拖）；缩小 <span class="mono">1 → 0.66</span>；红色由 <code>--red</code> 交叉淡入，<b>不加过渡</b>，保证完全跟手。</p>
+    </div>
+    <div class="panel" style="flex:1;min-width:300px">
+      <h3>三档</h3>
+      <div style="display:flex;gap:16px;align-items:flex-start;justify-content:center;height:230px">
+        <div style="text-align:center;transform:translateY(0)"><div class="orb" style="width:120px;height:120px"><span class="cloudbody"></span><div class="swirl"><span class="wisp w1"></span><span class="wisp w2"></span><span class="wisp w3"></span></div></div><div class="mono" style="margin-top:10px">0px</div></div>
+        <div style="text-align:center;transform:translateY(-22px)"><div class="orb" style="width:120px;height:120px;--red:.42;transform:scale(.83)"><span class="cloudbody"></span><div class="swirl"><span class="wisp w1"></span><span class="wisp w2"></span><span class="wisp w3"></span></div></div><div class="mono" style="margin-top:22px">−22px</div></div>
+        <div style="text-align:center;transform:translateY(-50px)"><div class="orb" style="width:120px;height:120px;--red:1;transform:scale(.66)"><span class="cloudbody"></span><div class="swirl"><span class="wisp w1"></span><span class="wisp w2"></span><span class="wisp w3"></span></div></div><div class="mono" style="margin-top:22px">−50px 松手即取消</div></div>
+      </div>
+      <p class="cap">位移上限随缩小量放宽（<span class="mono">−(34 + 18t)</span>），这样球顶不会被键盘上沿裁掉。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 05 关闭特效 ============ -->
+<section>
+  <h2><span class="n">5</span>关闭特效（三个方案，点一下播放）</h2>
+  <p class="lead">退场要和球在同一个语汇里，不能突然换成一个别的形状。都控制在 <b>0.34s 以内</b>，收得干脆。</p>
+  <div class="dismiss">
+    <div class="dcard pick d1" id="dc1">
+      <div class="dstage">
+        <div class="orb d1" style="width:130px;height:130px"><div class="swirl"><span class="wisp w1"></span><span class="wisp w2"></span><span class="wisp w3"></span></div></div>
+        <div class="ring" style="width:130px;height:130px"></div>
+      </div>
+      <div class="dbody">
+        <h4>甲 · 内收成点 <em>推荐</em></h4>
+        <p>球从外向内缩成一点淡出（340ms），同时从球心向外扩散一圈极淡的波纹——正好是「被吸回话筒键」的语感，和呼出反向。</p>
+        <div class="dctrl"><button data-play="dc1">播放</button></div>
+      </div>
+    </div>
+    <div class="dcard d2" id="dc2">
+      <div class="dstage">
+        <div class="orb" style="width:130px;height:130px"><span class="cloudbody"></span><div class="swirl"><span class="wisp w1"></span><span class="wisp w2"></span><span class="wisp w3"></span></div></div>
+      </div>
+      <div class="dbody">
+        <h4>乙 · 化开</h4>
+        <p>球原地轻微放大、模糊度上升、透明度归零（360ms）。像雾散掉，最「无痕」，配取消收尾很自然。</p>
+        <div class="dctrl"><button data-play="dc2">播放</button></div>
+      </div>
+    </div>
+    <div class="dcard d3" id="dc3">
+      <div class="dstage">
+        <div class="orb" style="width:130px;height:130px"><span class="cloudbody"></span><div class="swirl"><span class="wisp w1"></span><span class="wisp w2"></span><span class="wisp w3"></span></div></div>
+      </div>
+      <div class="dbody">
+        <h4>丙 · 沉回话筒键</h4>
+        <p>球向下平移出面板下沿、微微缩小并淡出（340ms）。方向感最强——「它回到了空格键那里」。</p>
+        <div class="dctrl"><button data-play="dc3">播放</button></div>
+      </div>
+    </div>
+  </div>
+  <div class="note"><b>我的建议是甲。</b>唤出时球是从话筒键方向「长出来」的，甲是它的严格反向，一进一出成对；乙最柔和但方向感弱；丙方向感最强，不过向下沉会撞到键盘下方的空白区，面板短的时候会显得空。</div>
+</section>
+
+<!-- ============ 06 参数 ============ -->
+<section>
+  <h2><span class="n">6</span>参数表（可直接交给实现）</h2>
+  <table>
+    <tr><th>项</th><th>值</th><th>来源 / 理由</th></tr>
+    <tr><td>球直径</td><td><code>170px</code></td><td>参考图里球占屏宽约 52%，折算到 393px 宽键盘 ≈ 190px；留出标题行与上下留白后取 170</td></tr>
+    <tr><td>形状</td><td><code>border-radius:50%</code> + <code>overflow:hidden</code></td><td><b>硬边是关键</b>。截图里球外无光晕、边缘 1~2px 内完成过渡</td></tr>
+    <tr><td>底色渐变</td><td><code>linear-gradient(168deg,…)</code> 十档</td><td>近似竖直略偏，让「上沿一整条是蓝」成立：<span class="sw" style="background:#3c72ea"></span>#3c72ea → <span class="sw" style="background:#618bed"></span>#618bed → <span class="sw" style="background:#dfe6fd"></span>#dfe6fd → <span class="sw" style="background:#fafcff"></span>#fafcff</td></tr>
+    <tr><td>白雾</td><td>4 层，<code>blur(11px)</code></td><td>只有雾是虚的。主体压在<b>右下</b>，才能同时出现「左中蓝、右中白」</td></tr>
+    <tr><td>沉浸旋转</td><td>慢层 <code>46s</code> ／ 快层 <code>13s</code></td><td>快层靠 <code>opacity: var(--level)</code> 浮出，不改周期 ⇒ 不跳帧</td></tr>
+    <tr><td>人声反应</td><td><code>scale(1 + level×0.16)</code></td><td>上限 1.16×，避免顶到标题行</td></tr>
+    <tr><td>包络</td><td>attack <code>60ms</code> / release <code>320ms</code></td><td>写在 JS 里，CSS 侧 <b>零过渡</b>；快起慢落才「跟得上话」</td></tr>
+    <tr><td>上滑跟手</td><td><code>0.9 × 手指</code>，死区 <code>2px</code></td><td>旧版是 0.55 + 死区 6px，这就是你说的「不跟手」</td></tr>
+    <tr><td>取消阈值</td><td><code>55px</code></td><td>沿用现有手势常量，不改</td></tr>
+    <tr><td>取消表现</td><td>缩小到 <code>0.66</code> + 红色 <code>opacity</code> 0→1</td><td>无环、无靶心、无文字</td></tr>
+    <tr><td>退场</td><td>方案甲 <code>340ms</code></td><td>与呼出成对</td></tr>
+  </table>
+</section>
+
+<footer>
+  <span>VoxFix · 语音球设计稿 v2 · 待确认后再改代码</span>
+  <span>参考图取样：1280×2844 原图 · 球直径 671px · 2026-10-11</span>
+</footer>
+
+</div>
+
+<script>
+/* ---------- 共用：把 --level 写进所有 [data-live] 的球 ---------- */
+const lvl=document.getElementById('lvl'), lvlOut=document.getElementById('lvlOut');
+const reactOrb=document.getElementById('reactOrb');
+const volFill=document.getElementById('volFill');
+const immFast=document.getElementById('immFast');
+let level=0, target=0, raf=null, auto=false, t=0;
+
+function paint(){
+  const v=+level.toFixed(3);
+  reactOrb.style.setProperty('--level',v);
+  // 快旋层的 opacity 用的是父级 --level，这里同一个球用 var 继承即可
+  const f=reactOrb.querySelector('.swirlFast'); if(f) f.style.setProperty('--level',v);
+  lvlOut.textContent=v.toFixed(2);
+  volFill.style.width=(v*100)+'%';
+  if(!auto) lvl.value=Math.round(v*100);
+}
+function loop(){
+  // 包络：快起(0.38)慢落(0.10)
+  const a=target>level?0.38:0.10;
+  level+=(target-level)*a;
+  paint(); raf=requestAnimationFrame(loop);
+}
+lvl.addEventListener('input',()=>{auto=false;document.getElementById('autoBtn').setAttribute('aria-pressed','false');target=lvl.value/100;if(!raf)loop();});
+document.getElementById('autoBtn').addEventListener('click',e=>{
+  auto=!auto; e.target.setAttribute('aria-pressed',String(auto));
+  if(auto){ if(!raf) loop(); } else { target=0; }
+});
+
+/* 自动演示：模拟说话的停顿起伏 */
+setInterval(()=>{ if(!auto) return; t++;
+  if(Math.random()<0.16) target=0.22+Math.random()*0.78;
+  if(t%7===0) target=0.06+Math.random()*0.2;
+},180);
+
+/* 沉浸舞台：常驻模拟"有人在说话" */
+(()=>{
+  let lv=0,tg=.6;
+  setInterval(()=>{ if(Math.random()<0.2) tg=0.25+Math.random()*0.7;
+    lv+=(tg-lv)*(tg>lv?0.35:0.09);
+    immFast.style.setProperty('--level',lv.toFixed(3));
+    immFast.parentElement.style.setProperty('--level',lv.toFixed(3));
+  },90);
+})();
+
+/* ---------- 上滑取消 ---------- */
+const drag=document.getElementById('drag'), dragOut=document.getElementById('dragOut');
+const dragOrb=document.getElementById('dragOrb');
+function paintDrag(){
+  const d=+drag.value, t=Math.min(1,d/55);
+  const shift=Math.max(-(34+18*t), -d*0.9);
+  dragOrb.style.transform=`translateY(${shift}px) scale(${(1-t*0.34).toFixed(3)})`;
+  dragOrb.style.setProperty('--red',t.toFixed(3));
+  dragOut.textContent='-'+d+'px';
+}
+drag.addEventListener('input',paintDrag); paintDrag();
+
+/* ---------- 关闭特效播放 ---------- */
+document.querySelectorAll('[data-play]').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const card=document.getElementById(btn.dataset.play);
+    card.classList.remove('run');
+    void card.offsetWidth;              // 强制回流，保证动画能重放
+    card.classList.add('run');
+    setTimeout(()=>card.classList.remove('run'),700);
+  });
+});
+</script>
+</body>
+</html>

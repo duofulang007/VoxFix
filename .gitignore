@@ -1,13 +1,16 @@
+# 本地工具与依赖（不入库，首次克隆后另行准备）
 .venv/
 models/
 .model-downloads/
-*.log
-__pycache__/
 .android/
 android/.gradle/
 android/app/build/
 android/local.properties
 android/.kotlin/
+__pycache__/
+.workbuddy/
+
+# 密钥、安装包与模型权重
 .env
 .env.*
 !.env.example
@@ -17,23 +20,34 @@ android/.kotlin/
 *.aab
 *.onnx
 *.gguf
+
+# 媒体、录屏与压缩档案
 *.wav
 *.mp4
 *.zip
 *.7z
 *.rar
+
+# 日志与本地构建记录
+*.log
+build-log*.txt
+
+# 生成的词库与单文件试用页
 键盘试用页.html
 preview/pinyin-data.json
+preview/pinyin-lite.json
 preview/pinyin-initials.json
 preview/phrase-packs.json
+
+# 文档内的截图与抓取产物（体积大，不入库）
 docs/**/*.png
 docs/**/*.jpg
 docs/**/*.jpeg
 docs/recording-frames/
-docs/apk-analysis/reference/
-docs/apk-analysis/inventory.tsv
-docs/apk-analysis/AndroidManifest.decoded.xml
-docs/apk-analysis/summary.json
+docs/archive/apk-analysis/reference/
+docs/archive/apk-analysis/inventory.tsv
+docs/archive/apk-analysis/AndroidManifest.decoded.xml
+docs/archive/apk-analysis/summary.json
 docs/handwriting-engine-upstream.kt
 docs/*.json
 docs/android-native-model-output.txt

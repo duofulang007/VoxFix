@@ -56,15 +56,13 @@ specs=[
  (gradle['url'],gradle['sha256'],base/'gradle',1),
  ('https://dl.google.com/android/repository/platform-35_r02.zip','0bb560a90a7a2cbd0dd8348224d518b638fe7949',root/'.android/sdk/platforms/android-35',1),
  ('https://dl.google.com/android/repository/build-tools_r35_windows.zip','af059bb67cf7786f45ee0db85e2d24985df1b4b6',root/'.android/sdk/build-tools/35.0.0',1),
- ('https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.6/sherpa-onnx-static-link-onnxruntime-1.13.6.aar','01e87037afca2ed49085062aace5c012e60321e8e23e3a72b6d9ac02c843f66c',base/'sherpa-onnx-static-link-onnxruntime-1.13.6.aar',None),
- ('https://repo.maven.apache.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/1.27.0/onnxruntime-android-1.27.0.aar','077dec5e2d821234c7dc0aba584bec8f999854b546c754cab93a90741c56fbeb',base/'onnxruntime-android-1.27.0.aar',None)]
+ ('https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-static-link-onnxruntime-1.13.8.aar','b22c3fc1b6a45666d28892bb2f7694beeb77a8362d7ebd77c1a5431ec9435471',base/'sherpa-onnx-static-link-onnxruntime-1.13.8.aar',None)]
 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:list(pool.map(install,specs))
 (root/'android/local.properties').write_text('sdk.dir='+str(root/'.android/sdk').replace('\\','/')+'\n')
 '@
 $taskBootstrap | & .\.venv\Scripts\python.exe - $Proxy
 if ($LASTEXITCODE) { throw '安卓构建工具准备失败，未开始编译' }
 if ($PrepareOnly) { return }
-& (Join-Path $PSScriptRoot 'build_android_polish.ps1')
 $taskJava = Join-Path $taskRoot '.android\app-tools\jdk'
 $taskGradle = Join-Path $taskRoot '.android\app-tools\gradle\lib\gradle-launcher-8.9.jar'
 $taskKeystore = Join-Path $taskRoot '.android\app-tools\debug.keystore'

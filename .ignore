@@ -1,4 +1,5 @@
 .android/
+.workbuddy/
 .model-downloads/
 .venv/
 models/
@@ -8,6 +9,7 @@ android/app/build/
 *.log
 键盘试用页.html
 preview/pinyin-data.json
+preview/pinyin-lite.json
 preview/phrase-packs.json
 *.png
 *.jpg

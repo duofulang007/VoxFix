@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VoxFix · 语音输入全流程演示（流云球 v3）</title>
+<style>
+:root{
+  --accent:#4a86c8;--danger:#cf5347;--line:#d4d7df;--ink:#292d34;--ink-2:#5b6169;--muted:#858a93;
+  --kb-bg:#edeef2;--key-bg:#fff;--func-bg:#dce0e7;--key-color:#13171d;
+  font-family:"Microsoft YaHei","PingFang SC",-apple-system,Arial,sans-serif;
+  color:var(--ink);background:#f7f8fa;font-synthesis:none;-webkit-font-smoothing:antialiased;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:0 0 70px}
+.wrap{max-width:1080px;margin:0 auto;padding:0 26px}
+header{padding:36px 0 20px;border-bottom:1px solid var(--line);margin-bottom:30px}
+h1{margin:0 0 8px;font-size:25px;font-weight:600}
+header .sub{margin:0;color:var(--ink-2);font-size:14px;line-height:1.75}
+.tag{display:inline-block;margin-left:10px;padding:2px 8px;border-radius:99px;background:#eef4fb;color:var(--accent);font-size:12px;vertical-align:2px;font-weight:600}
+.layout{display:flex;gap:30px;align-items:flex-start;flex-wrap:wrap}
+.side{flex:1;min-width:300px}
+
+/* ============ 手机 ============ */
+.phone{width:390px;flex:none;background:#fff;border-radius:26px;overflow:hidden;box-shadow:0 0 0 1px #d7dce2,0 14px 34px #29374b14;display:flex;flex-direction:column;height:700px}
+.statusbar{display:flex;justify-content:space-between;padding:9px 20px 5px;font-size:11px;color:#171717}
+.host{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-end;background:linear-gradient(#fdfdfd 60%,#f4f5f7);position:relative}
+.host .hint{position:absolute;top:34%;width:100%;text-align:center;color:#d8dce1;font-size:12px;letter-spacing:2px}
+.composer{margin:0 10px 8px;min-height:44px;display:flex;align-items:center;background:#fff;border-radius:22px;padding:4px 6px;gap:6px;box-shadow:0 0 10px #00000005}
+.composer .draft{flex:1;min-height:22px;font-size:14px;color:#333;line-height:20px;padding:2px 4px;word-break:break-all}
+.composer .draft:empty::before{content:"问问 VoxFix";color:#b6bac1}
+.composer .caret{width:1.5px;height:18px;background:#3b82f6;flex:none;animation:blink 1.1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.composer .send{width:28px;height:28px;border-radius:50%;background:#0b0d10;color:#fff;display:grid;place-items:center;font-size:13px;flex:none}
+
+/* ============ 键盘 ============ */
+.keyboard{--kb-h:312px;flex:none;height:var(--kb-h);background:var(--kb-bg);position:relative;display:flex;flex-direction:column;padding:0 5px;user-select:none;-webkit-user-select:none;touch-action:none}
+.keyrows{flex:1;min-height:0;display:flex;flex-direction:column;gap:7px;padding:5px 0 8px;transition:opacity .28s ease,transform .28s ease}
+.keyboard.voicing .keyrows{opacity:0;transform:scale(.97);pointer-events:none}
+.krow{display:flex;gap:5px;flex:1;min-height:0}
+.key{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;background:var(--key-bg);border-radius:7px;box-shadow:0 1px 0 var(--line);font-size:17px;color:var(--key-color)}
+.key.fn{background:var(--func-bg);font-size:12px}
+.key.space{flex:2.9;flex-direction:column;position:relative;cursor:pointer}
+.key.space .mic{position:absolute;top:7px;width:11px;height:15px;color:#b7bbc3}
+.key.space .lbl{font-size:11px;color:#9aa1ab;margin-top:12px}
+.kfooter{height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 12px;color:#737984;font-size:12px}
+
+/* ============ 语音面板 ============ */
+.voice{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;padding:8px 10px 6px;transform-origin:50% 100%;pointer-events:none}
+.voice.hide{display:none}
+.voice.enter{animation:vGrow .26s cubic-bezier(.22,1,.36,1)}
+@keyframes vGrow{from{opacity:0;transform:scale(.94)}}
+/* 关闭：只动 opacity / transform（合成器处理，零重绘）。
+   绝对不要在这里动 filter:blur —— blur 半径一动，整个语音面（含 19 层模糊的云）
+   每帧都要重画一遍，这就是「关闭那一瞬间卡」的原因。 */
+.voice.leave{transform-origin:50% 50%;animation:vFade .17s ease-out both}
+@keyframes vFade{from{opacity:1;transform:scale(1)}to{opacity:0;transform:scale(1.035)}}
+.voice.leave.instant{animation:none;opacity:0}
+.vtitle{flex:none;height:16px;line-height:16px;font-size:12px;letter-spacing:.4px;color:#a3a8b0;transition:opacity .2s}
+.vtitle.gone{opacity:0}
+.vstage{--orb:172px;position:relative;flex:1;min-height:0;width:100%;display:grid;place-items:center}
+.vfollow{position:relative;width:min(var(--orb),86%);aspect-ratio:1/1;will-change:transform}
+
+/* ---- 球体：硬边圆 + 蓝底渐变 + 真云照片两层视差 ----
+   性能红线 1：轮廓 border-radius 绝对不能做动画（会让 overflow:hidden 的裁剪失效、整球重画）。
+   性能红线 2：滤镜/blur 也绝不能做动画（同样逐帧重画）。照片层只动 transform/opacity，合成器处理。 */
+.orb{--level:0;--red:0;position:absolute;inset:0;border-radius:50%;overflow:hidden;
+  background:linear-gradient(180deg,#3f74ec 0%,#4776ec 8%,#4c7bee 18%,#517fee 30%,#5f8bf1 42%,#6c95f2 52%,#8db1f5 62%,#a9c3f8 72%,#bccbfa 80%,#b7c7fa 88%,#bac9fa 100%)}
+/* 真云照片（Wikimedia Commons，裁横带 + 四周羽化，1100×556 webp 52KB）。
+   两层反向漂移做成视差，云才会「在里面翻」，而不是一张贴图平移。 */
+.orb .photo{position:absolute;background:url('语音交互概念稿.assets/cloud-layer.webp') center/cover no-repeat;will-change:transform}
+.orb .p1{left:-16%;width:132%;top:24%;height:82%;opacity:.96;animation:photo1 26s ease-in-out infinite alternate}
+.orb .p2{left:-34%;width:168%;top:34%;height:86%;opacity:calc(.22 + var(--level) * .5);
+  transform:scaleX(-1);animation:photo2 33s ease-in-out infinite alternate}
+/* p2 是镜像的副本、漂移方向相反：两层错动才像云在内部翻涌。说话时它浮上来，翻涌明显加快 */
+@keyframes photo1{from{transform:translate3d(-2.5%,0,0) scale(1.05)}to{transform:translate3d(2.5%,-1.5%,0) scale(1.12)}}
+@keyframes photo2{from{transform:translate3d(2%,1%,0) scaleX(-1) scale(1.1)}to{transform:translate3d(-2.5%,-1%,0) scaleX(-1) scale(1.04)}}
+.orb .red{position:absolute;inset:0;opacity:var(--red);z-index:3;
+  background:linear-gradient(168deg,#b8433a 0%,#cf5347 18%,#dd8076 42%,#eec0ba 68%,#f8e6e3 100%)}
+
+/* ============ 侧栏 ============ */
+.panel{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-bottom:16px}
+.panel h3{margin:0 0 12px;font-size:13px}
+.scen{display:flex;flex-direction:column;gap:8px}
+.scen button{text-align:left;border:1px solid var(--line);background:#fff;border-radius:10px;padding:11px 13px;font-size:13px;color:var(--ink-2);cursor:pointer;transition:.15s}
+.scen button:hover{border-color:var(--accent)}
+.scen button.on{border-color:var(--accent);color:var(--accent);background:#eef4fb}
+.scen button b{display:block;color:var(--ink);font-size:13px;margin-bottom:2px}
+.scen button span{font-size:12px;color:var(--muted)}
+.steps{list-style:none;padding:0;margin:0;font-size:12.5px;color:var(--ink-2);line-height:1.7;display:grid;gap:7px}
+.steps li{display:flex;gap:9px;align-items:flex-start}
+.steps li i{flex:none;width:17px;height:17px;border-radius:50%;background:#eef1f5;border:1px solid var(--line);display:grid;place-items:center;font-style:normal;font-size:10px;color:var(--ink);margin-top:2px}
+.steps li.on{color:var(--ink)}
+.steps li.on i{background:var(--accent);border-color:var(--accent);color:#fff}
+.meter{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--ink-2);margin-top:4px}
+.exitbtn{border:1px solid var(--line);background:#fff;border-radius:7px;padding:6px 10px;font-size:12px;color:var(--ink-2);cursor:pointer}
+.exitbtn.on{border-color:var(--accent);color:var(--accent);background:#eef4fb}
+.bar{flex:1;height:6px;border-radius:3px;background:#e9edf3;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#8fb2f5,#4a86e0)}
+.note{background:#fff;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:0 12px 12px 0;padding:13px 17px;font-size:13px;color:var(--ink-2);line-height:1.8;margin-top:14px}
+.note b{color:var(--ink)}
+.note.warn{border-left-color:var(--danger)}
+footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <p class="sub">此页保留旧版照片方案。最新蓝白流云球与真实键盘交互请看 <a href="语音球交互预览.html">语音球交互预览</a>。</p>
+  <h1>语音输入全流程演示<span class="tag">v4 · 气球</span></h1>
+  <p class="sub">这次照 ChatGPT Live 的<b>真实行为规格</b>做（不是我猜的）：球是一颗<b>气球</b>：说话=吹气、停了就自己回缩，带一点弹性回弹；<b>每识别出一个字再轻轻推一把</b>。内部是<b>成片的云絮</b>在翻涌，不再是一团糊。退场只用<b>透明度淡出 0.17s</b>（右侧可切成直接消失）—— 化开那种 blur 动画会让 19 层云逐帧重画，一卡一卡的，已弃。</p>
+</header>
+
+<div class="layout">
+  <div class="phone" id="phone">
+    <div class="statusbar"><span>17:45</span><span>▮▮▮ ⌁ ▰</span></div>
+    <div class="host">
+      <div class="hint">输入试用</div>
+      <div class="composer"><span class="draft" id="draft"></span><i class="caret"></i><span class="send">↑</span></div>
+    </div>
+    <div class="keyboard" id="kb">
+      <div class="keyrows" id="keyrows">
+        <div class="krow"><div class="key">Q</div><div class="key">W</div><div class="key">E</div><div class="key">R</div><div class="key">T</div><div class="key">Y</div><div class="key">U</div><div class="key">I</div><div class="key">O</div><div class="key">P</div></div>
+        <div class="krow" style="padding:0 16px"><div class="key">A</div><div class="key">S</div><div class="key">D</div><div class="key">F</div><div class="key">G</div><div class="key">H</div><div class="key">J</div><div class="key">K</div><div class="key">L</div></div>
+        <div class="krow"><div class="key fn">符</div><div class="key fn">123</div><div class="key fn">，</div><div class="key space" id="space">
+            <svg class="mic" viewBox="0 0 24 28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="8.5" y="2" width="7" height="14" rx="3.5"/><path d="M4.5 13.5a7.5 7.5 0 0 0 15 0"/><path d="M12 21v4"/></svg>
+            <span class="lbl">空格</span></div><div class="key fn">。</div><div class="key fn">拼</div><div class="key fn">⌫</div></div>
+      </div>
+      <div class="voice hide" id="voice">
+        <span class="vtitle" id="vtitle">倾听中</span>
+        <div class="vstage" id="vstage">
+          <div class="vfollow" id="vfollow">
+            <div class="orb" id="orb">
+              <div class="photo p1"></div>
+              <div class="photo p2"></div>
+              <span class="red"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="kfooter"><span>键盘</span><span>光标区</span><span>剪贴板</span></div>
+    </div>
+  </div>
+
+  <div class="side">
+    <div class="panel">
+      <h3>场景（点一个自动播放整段）</h3>
+      <div class="scen">
+        <button data-scen="say"><b>① 正常说一句话，松手上屏</b><span>长按 → 球像吹气球一样鼓起来 → 文字一个个上屏、每上一个字球顶一下 → 松手 → 淡出</span></button>
+        <button data-scen="loud"><b>② 大声说</b><span>音量大 ⇒ 吹得多 ⇒ 胀得也多</span></button>
+        <button data-scen="cancel"><b>③ 说到一半上滑取消</b><span>手指上滑：球跟手、缩小、转红 → 松手 → 淡出，一个字不上屏</span></button>
+        <button data-scen="quiet"><b>④ 按住了但没说话</b><span>球几乎不动，只有内部云在极慢翻涌</span></button>
+      </div>
+      <div class="meter" style="margin-top:14px"><span>音量</span><div class="bar"><i id="volFill"></i></div><span class="mono" id="volTxt" style="font-family:ui-monospace,Consolas,monospace">0.00</span></div>
+      <div class="meter"><span>充气</span><div class="bar"><i id="pulseFill" style="background:linear-gradient(90deg,#f0b4a8,#cf5347)"></i></div><span class="mono" id="pulseTxt" style="font-family:ui-monospace,Consolas,monospace">0.00</span></div>
+      <div class="meter"><span>退场</span>
+        <button id="exitFade" class="exitbtn on">淡出 0.17s（推荐）</button>
+        <button id="exitNow" class="exitbtn">直接消失</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>当前进行到</h3>
+      <ul class="steps" id="steps">
+        <li data-k="1"><i>1</i><span>长按空格，键盘收起、语音面长出来</span></li>
+        <li data-k="2"><i>2</i><span>监听：球跟着音量鼓起来、停了就回缩；云絮一直在翻</span></li>
+        <li data-k="3"><i>3</i><span>识别出一个字：球再顶一下（「一阵一阵」的另一半来源）</span></li>
+        <li data-k="4"><i>4</i><span>松手 → 识别中：球收小、云减速，不转圈</span></li>
+        <li data-k="5"><i>5</i><span>结果落地，球淡出退场（0.17s，不动 blur）</span></li>
+        <li data-k="6"><i>6</i><span>（或）上滑：球跟手、缩小、转红，松手即取消</span></li>
+      </ul>
+    </div>
+
+    <div class="note">
+      <b>手动试：</b>在下面键盘的「空格」上<b>按住不放</b>就开始；按住时往上拖是取消，直接松手是上屏。自动演示播到一半按空格会直接接管。<br>
+      <b>这次改了什么：</b>① 反应模型换成<b>气球弹簧</b>：说话=吹气、停=回缩，用二阶弹簧自带缓动和回弹 —— 之前用正弦脉冲，谷底有硬转折，每圈硌一下才像掉帧；② 云从 4 大团换成 <b>14 朵小云絮</b>、blur 从 11px 降到 5px，看得出云的形状；③ 退场从 blur 化开改成纯透明度淡出 —— blur 一动整个语音面逐帧重画，就是「关闭那一瞬间卡」的原因；现在两种退场都实测 184 fps。
+    </div>
+    <div class="note warn">
+      <b>还没做的：</b>这套参数还没落进 <code>preview/style.css</code> / <code>app.mjs</code>，你点头我再动源码和构建。
+    </div>
+  </div>
+</div>
+
+<footer>VoxFix · 语音输入全流程演示 v3 · 行为规格参考 ChatGPT Live 实际拆解（60fps.design）· 2026-10-11</footer>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+const kb=$('#kb'), voice=$('#voice'), vstage=$('#vstage'), vfollow=$('#vfollow'),
+      orb=$('#orb'), vtitle=$('#vtitle'), draft=$('#draft');
+const stepEls=[...document.querySelectorAll('#steps li')];
+const volFill=$('#volFill'), volTxt=$('#volTxt'), pulseFill=$('#pulseFill'), pulseTxt=$('#pulseTxt');
+
+/* ===== 状态 ===== */
+let phase='idle';       // idle | loading | listening | cancel | recognizing
+let level=0, target=0;
+
+let restScale=1, restTarget=1;
+let raf=null, timers=[], typeTimer=null;
+const clearTimers=()=>{timers.forEach(clearTimeout);timers=[];};
+const later=(fn,ms)=>timers.push(setTimeout(fn,ms));
+const mark=k=>stepEls.forEach(li=>li.classList.toggle('on',+li.dataset.k===k));
+const stopLoop=()=>{cancelAnimationFrame(raf);raf=null;};
+
+/* ===== 主循环：唯一写 transform 的地方（CSS 不挂 transform 过渡） ===== */
+let lastT=performance.now(), dragT=0, dragShift=0;
+/* 气球弹簧：size 有自己的速度，吹气就充、停了就回缩，自带缓动与轻微回弹。
+   之前用 max(0,sin(...)) 做脉冲，谷底有个硬转折，每一圈都硌一下 —— 这就是"像掉帧"的来源。 */
+let size=1, vel=0;
+function frame(now){
+  const dt=Math.min(.05,(now-lastT)/1000); lastT=now;
+  const a=target>level?0.38:0.10; level+=(target-level)*a;      // 音量包络：快起慢落
+  const tgt=1+level*0.13;                                        // 吹气=变大，停=回 1
+  const acc=(tgt-size)*90 - vel*13;                              // 刚度 90 / 阻尼 13 → 轻微回弹
+  vel+=acc*dt; size+=vel*dt;
+  if(size<0.92)size=0.92; if(size>1.2)size=1.2;
+  restScale+=(restTarget-restScale)*Math.min(1,dt*9);
+  const s=Math.min(1.2, size*restScale*(1-dragT*0.34));
+  vfollow.style.transform=`translateY(${dragShift.toFixed(1)}px) scale(${s.toFixed(4)})`;
+  orb.style.setProperty('--red',dragT.toFixed(3));
+  orb.style.setProperty('--level',level.toFixed(3));
+  volFill.style.width=(level*100)+'%'; volTxt.textContent=level.toFixed(2);
+  const inflate=Math.max(0,size-1);
+  pulseFill.style.width=(Math.min(1,inflate/0.16)*100)+'%'; pulseTxt.textContent=inflate.toFixed(3);
+  raf=requestAnimationFrame(frame);
+}
+const startLoop=()=>{ if(!raf){ lastT=performance.now(); raf=requestAnimationFrame(frame);} };
+
+/* ===== 语音面开合 ===== */
+function openVoice(){
+  phase='loading';
+  orb.style.removeProperty('--red');
+  vstage.classList.remove('dragging'); dragT=0; dragShift=0;
+  restScale=.78; restTarget=.78;
+  voice.classList.remove('hide','leave'); voice.classList.add('enter');
+  vstage.className='vstage loading'; vtitle.classList.remove('gone');
+  vtitle.textContent='正在开启麦克风';
+  kb.classList.add('voicing'); mark(1); startLoop();
+  later(()=>{ if(phase==='loading'){ phase='listening'; restTarget=1;
+    vstage.className='vstage listening'; vtitle.textContent='倾听中'; mark(2);} },420);
+}
+function closeVoice(cb){                    // 退场：只动 opacity，不动 blur
+  restTarget=1; dragT=0; dragShift=0; stopLoop();
+  /* 关键：键盘这一刻就开始回来，跟语音的退场交叉进行 —— 否则语音淡完、键盘还没起，
+     中间会有一帧近乎全空的画面 */
+  kb.classList.remove('voicing');
+  vstage.className='vstage';
+  if(exitMode==='instant'){
+    voice.classList.add('hide'); voice.classList.remove('leave','enter');
+    phase='idle'; cb&&cb(); return;
+  }
+  voice.classList.add('leave');
+  later(()=>{ voice.classList.add('hide'); voice.classList.remove('leave','enter');
+    phase='idle'; cb&&cb(); },185);
+}
+let exitMode='fade';
+$('#exitFade').addEventListener('click',()=>{ exitMode='fade';
+  $('#exitFade').classList.add('on'); $('#exitNow').classList.remove('on'); });
+$('#exitNow').addEventListener('click',()=>{ exitMode='instant';
+  $('#exitNow').classList.add('on'); $('#exitFade').classList.remove('on'); });
+function toRecognizing(){
+  phase='recognizing'; restTarget=.74; target=0;
+  vstage.className='vstage recognizing'; vtitle.textContent='识别中'; mark(4);
+}
+
+/* ===== 文字流式上屏 + 逐字顶一下 ===== */
+const SAY='今天下午三点开会，记得带上周报';
+let typed=0;
+function startTyping(){ clearInterval(typeTimer);
+  typeTimer=setInterval(()=>{ if(phase!=='listening'){clearInterval(typeTimer);return;}
+    typed=Math.min(SAY.length,typed+1); draft.textContent=SAY.slice(0,typed);
+    vel+=0.5; mark(3); },270);
+}
+function finishTyping(){ clearInterval(typeTimer);
+  const rest=SAY.slice(typed); let i=0;
+  const t=setInterval(()=>{ if(i>=rest.length){clearInterval(t);return;} i++;
+    draft.textContent=SAY.slice(0,typed+i); vel+=0.5; },55);
+  timers.push(t);
+}
+
+/* ===== 拖拽（跟手） ===== */
+let sy=null;
+const ARM=55;
+function applyDrag(clientY){
+  if(phase!=='listening'&&phase!=='cancel') return;
+  const dy=Math.min(0,clientY-sy);
+  if(dy<-2) vstage.classList.add('dragging');
+  if(!vstage.classList.contains('dragging')) return;
+  dragT=Math.min(1,Math.abs(dy)/ARM);
+  dragShift=Math.max(-(34+18*dragT),dy*0.9);
+  const cancelled=dy<=-ARM;
+  if(cancelled!==(phase==='cancel')){
+    phase=cancelled?'cancel':'listening';
+    vstage.classList.toggle('cancel',cancelled);
+    vtitle.classList.toggle('gone',cancelled);
+    if(cancelled){clearInterval(typeTimer);mark(6);}else{mark(2);startTyping();}
+  }
+}
+const space=$('#space');
+space.addEventListener('pointerdown',e=>{
+  clearTimers(); clearInterval(typeTimer); stopLoop();
+  voice.classList.add('hide'); voice.classList.remove('leave','enter');
+  vstage.className='vstage'; kb.classList.remove('voicing'); draft.textContent='';
+  space.setPointerCapture&&space.setPointerCapture(e.pointerId);
+  e.preventDefault(); sy=e.clientY; typed=0; openVoice();
+});
+window.addEventListener('pointermove',e=>{ if(sy!==null) applyDrag(e.clientY); });
+window.addEventListener('pointerup',()=>{
+  if(sy===null)return; sy=null;
+  if(phase==='cancel'){ mark(6); closeVoice(()=>{draft.textContent='';}); }
+  else{ toRecognizing(); later(()=>closeVoice(()=>{finishTyping();mark(5);}),1100); }
+});
+
+/* ===== 自动演示 ===== */
+const pressY=()=>space.getBoundingClientRect().top+space.getBoundingClientRect().height/2;
+function autoStart(){ sy=pressY(); typed=0; draft.textContent=''; openVoice(); }
+function autoRelease(){ sy=null;
+  if(phase==='cancel'){mark(6);closeVoice(()=>{draft.textContent='';});}
+  else{toRecognizing();later(()=>closeVoice(()=>{finishTyping();mark(5);}),1100);}
+}
+let speakOn=false;
+function speak(dur,lo,hi){
+  speakOn=true; const t0=performance.now();
+  (function tick(){ if(!speakOn||performance.now()-t0>dur){target=lo;return;}
+    if(Math.random()<0.7){ target=lo+Math.random()*(hi-lo);
+      later(()=>{ if(speakOn) target=lo*0.78+Math.random()*0.1; }, 80+Math.random()*130); }
+    requestAnimationFrame(tick); })();
+  later(()=>{speakOn=false;},dur);
+}
+function dragTo(y,ms){ const y0=pressY(), t0=performance.now();
+  (function tick(){ const p=Math.min(1,(performance.now()-t0)/ms);
+    applyDrag(y0+(y-y0)*p); if(p<1)requestAnimationFrame(tick); })(); }
+
+document.querySelectorAll('[data-scen]').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('[data-scen]').forEach(b=>b.classList.remove('on'));
+    btn.classList.add('on');
+    speakOn=false; clearTimers(); clearInterval(typeTimer); stopLoop();
+    if(phase!=='idle'){ voice.classList.add('hide'); voice.classList.remove('leave','enter');
+      vstage.className='vstage'; kb.classList.remove('voicing'); phase='idle'; }
+    draft.textContent=''; typed=0;
+    const scen=btn.dataset.scen;
+    later(()=>{
+      autoStart();
+      if(scen==='say'){        later(()=>{speak(2400,.25,1);startTyping();mark(2);},480);
+                               later(()=>autoRelease(),3100); }
+      else if(scen==='loud'){  later(()=>{speak(2400,.6,1);startTyping();mark(2);},480);
+                               later(()=>autoRelease(),3100); }
+      else if(scen==='cancel'){later(()=>{speak(1500,.3,.95);startTyping();mark(2);},480);
+                               later(()=>{dragTo(-88,540);},1950);
+                               later(()=>autoRelease(),2750); }
+      else{                    later(()=>{target=.05;mark(2);},480);
+                               later(()=>autoRelease(),2500); }
+    },260);
+  });
+});
+startLoop();
+</script>
+</body>
+</html>

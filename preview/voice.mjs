@@ -21,7 +21,7 @@ async function request(path, session='', body=new Uint8Array()) {
 }
 
 export class LocalVoice {
-  constructor(onText,onError,hotwords=[]) { this.onText=onText;this.onError=onError;this.hotwords=hotwords;this.cancelled=false;this.tail=Promise.resolve();this.pending=0; }
+  constructor(onText,onError,hotwords=[],onLevel=()=>{}) { this.onText=onText;this.onError=onError;this.hotwords=hotwords;this.onLevel=onLevel;this.cancelled=false;this.tail=Promise.resolve();this.pending=0; }
   async start() {
     try {
       const info=await request('start','',new TextEncoder().encode(JSON.stringify({hotwords:this.hotwords})));this.session=info.session;
@@ -43,6 +43,8 @@ export class LocalVoice {
         if(this.cancelled)return;
         if(++this.pending>20){this.fail(Error('本机识别暂时跟不上录音，请分段说话后重试'));return;}
         const samples=event.data.samples;
+        let energy=0;for(const sample of samples)energy+=sample*sample;
+        this.onLevel(Math.min(1,Math.sqrt(energy/Math.max(1,samples.length))/.12));
         this.tail=this.tail.then(async()=>{if(this.cancelled)return;const result=await request('chunk',this.session,samples);if(!this.cancelled)this.onText(result.text);}).catch(error=>this.fail(error)).finally(()=>this.pending--);
       };
       this.source.connect(this.node);this.node.connect(this.context.destination);

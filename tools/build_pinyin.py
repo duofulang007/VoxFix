@@ -53,6 +53,8 @@ for word, _, code in entries:
 data = {'schema': 2, 'syllables': syllables, 'entries': entries, 'characters': characters}
 target = ROOT/'preview/pinyin-data.json'
 target.write_text(json.dumps(data, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
+lite = dict(data, entries=[row for row in entries if len(row[0]) == 1 or row[1] >= 10000])
+(ROOT/'preview/pinyin-lite.json').write_text(json.dumps(lite, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
 optional = {}
 for name in ['quotes', 'technology', 'running']:
     optional[name] = []

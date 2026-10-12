@@ -61,6 +61,7 @@ try{
     await page.waitForFunction(()=>document.querySelector('#pinyin-status').textContent.includes('已就绪'));
     await page.locator('#phone').evaluate((el,width)=>el.style.width=width+'px',width);
     await page.locator('#editor').pressSequentially('nin');
+    assert.equal(await row.evaluate(el=>getComputedStyle(el).getPropertyValue('--candidate-count')),'3','Imported density cannot change the fixed layout');
     assert(await row.locator('button').evaluateAll(buttons=>buttons.every(b=>b.clientWidth>=b.scrollWidth)),'text fits at narrow widths and largest font');
     await row.evaluate(el=>el.scrollLeft=el.scrollWidth);
     await page.locator('#editor').pressSequentially('h');
@@ -75,5 +76,5 @@ try{
   await page.locator('#editor').fill('');
   await page.locator('#editor').pressSequentially('srf');
   await page.locator('#phone').screenshot({path:new URL('../docs/candidate-scroll.png',import.meta.url).pathname.slice(1)});
-  console.log('PASS: full text, mouse drag, native touch swipe, no accidental selection, expanded layout, 320/360px widths, 3/9 density, 22px font, query reset and bundled version');
+  console.log('PASS: full text, mouse drag, native touch swipe, no accidental selection, expanded layout, 320/360px widths, fixed density/font, query reset and bundled version');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
