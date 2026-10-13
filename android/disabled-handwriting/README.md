@@ -2,4 +2,4 @@
 
 2026-10-11按用户要求停用。原实现与测试保留在本目录，不参与 Android 编译；模型与手写 Java/JNI 运行库不打进 APK，手机键盘不展示手写布局，已有手写布局迁移至26键。
 
-原许可与版本记录在 `android/app/src/main/licenses/handwriting/`，属于历史实现。以后选择兼容实现并验证 K60 后再接回；不恢复旧的混用运行库配置。
+原许可与版本记录已随本目录移到 `android/disabled-handwriting/licenses/`，不再放进 `src/main/licenses/`（那里只留随包分发的依赖许可）。以后选择兼容实现并验证 K60 后再接回；不恢复旧的混用运行库配置。
