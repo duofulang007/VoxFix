@@ -16,7 +16,7 @@ try{
   page.setDefaultTimeout(5000);
   page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>requests.push(request.url()));
   await page.addInitScript(()=>{
-    window.calls=[];window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','gestureStart','gestureMove','gestureEnd','haptic','edit','ready','resize','refreshClipboard','importClipboard'].map(name=>[name,(...args)=>window.calls.push([name,...args])]));
+    window.calls=[];window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','gestureStart','gestureLock','gestureMove','gestureEnd','haptic','edit','ready','resize','refreshClipboard','importClipboard'].map(name=>[name,(...args)=>window.calls.push([name,...args])]));
     window.VoxFixIme.voiceReady=()=>true;
     window.VoxFixIme.handReady=()=>false;
     if(!localStorage.getItem('voxfix-keyboard-v1'))localStorage.setItem('voxfix-keyboard-v1',JSON.stringify({layout:'fullhand',language:'zh'}));
@@ -175,25 +175,105 @@ try{
   await key('layouts').click();assert(await page.locator('[data-action="layout"][data-value="en26"]').evaluate(button=>button.classList.contains('selected')));
   await page.locator('[data-action="layout"][data-value="9"]').click();await page.reload();await page.waitForFunction(()=>typeof voxfixReset==='function');assert(await page.locator('.t9-grid').isVisible());
   await key('layouts').click();await page.locator('[data-action="layout"][data-value="26"]').click();
-  const cursor=await page.locator('.cursor-zone').boundingBox(),trackX=cursor.x+cursor.width/2,trackY=cursor.y+cursor.height/2;
+  const cursor=await page.locator('.keyboard-footer .cursor-zone').boundingBox(),trackX=cursor.x+cursor.width/2,trackY=cursor.y+cursor.height/2;
   // 一碰滑轨就能无级拖动移动光标（不再要求先长按）。
   await page.mouse.move(trackX,trackY);await page.mouse.down();
   assert((await page.evaluate(()=>calls)).some(row=>row[0]==='gestureStart'&&row[1]===false),'Touching the track must start a cursor gesture');
   await page.mouse.move(trackX+24,trackY);
   assert((await page.evaluate(()=>calls)).some(row=>row[0]==='gestureMove'&&row[1]===2));
-  await page.evaluate(()=>voxfixCursor(3,10));assert.equal(await page.locator('.cursor-track i').evaluate(e=>e.style.left),'30%');
+  const contactTransform=await page.locator('.cursor-contact').evaluate(e=>e.style.transform);
+  await page.evaluate(()=>voxfixCursor(3,10));assert.equal(await page.locator('.keyboard-footer .cursor-zone').getAttribute('aria-valuenow'),'3');
+  assert.equal(await page.locator('.cursor-contact').evaluate(e=>e.style.transform),contactTransform,'Cursor readback must not displace the feedback from the finger');
   await page.mouse.up();
   assert((await page.evaluate(()=>calls)).some(row=>row[0]==='gestureEnd'));
-  assert(await page.locator('.cursor-track').evaluate(e=>e.hidden));
-  // 按住不动约 350ms 才切换成「框选文字」，松手保留选区交给输入框弹复制/粘贴。
+  await page.waitForTimeout(150);
+  assert.equal(await page.locator('.cursor-contact').evaluate(e=>getComputedStyle(e).opacity),'0');
+  // 两档：外圈以内纯跟手（松手就停，不会有速率），只有推到最外圈才持续跑。
+  const cursorMoves=()=>page.evaluate(()=>calls.filter(row=>row[0]==='gestureMove').map(row=>row[1]));
+  const advanceAt=async(direction,fraction)=>{
+    await page.evaluate(()=>{calls.length=0;});
+    await page.mouse.move(trackX,trackY);await page.mouse.down();
+    await page.mouse.move(trackX+direction*cursor.width/2*fraction,trackY);
+    const initial=(await cursorMoves()).at(-1);await page.waitForTimeout(850);
+    const advance=direction*((await cursorMoves()).at(-1)-initial);await page.mouse.up();
+    return advance;
+  };
+  for(const direction of [-1,1]){
+    const near=await advanceAt(direction,.6),far=await advanceAt(direction,.9);
+    assert.equal(Math.abs(near),0,'Inside the outer band the cursor must not run on its own: '+near);
+    assert(far>0,'Past the outer band the cursor must keep running: '+far);
+  }
+  for(const direction of [-1,1]){
+    await page.evaluate(()=>{calls.length=0;});
+    await page.mouse.move(trackX,trackY);await page.mouse.down();
+    await page.mouse.move(direction<0?cursor.x+5:cursor.x+cursor.width-5,trackY);
+    const initial=(await cursorMoves()).at(-1);
+    await page.waitForTimeout(850);
+    const moves=await cursorMoves();assert(moves.length>=4,'Stationary edge must keep moving');
+    assert.equal(moves.at(-1)-initial,direction*(moves.length-1));
+    assert.equal(await page.locator('.selection-pad').count(),0,'Dragging to an edge must remain cursor movement');
+    await page.mouse.move(trackX,trackY);const centered=await cursorMoves();await page.waitForTimeout(650);
+    assert.deepEqual(await cursorMoves(),centered,'Leaving the edge must stop repetition');
+    await page.mouse.move(direction<0?cursor.x+5:cursor.x+cursor.width-5,trackY);await page.waitForTimeout(600);
+    await page.mouse.up();const released=await cursorMoves();await page.waitForTimeout(650);assert.deepEqual(await cursorMoves(),released);
+  }
+  for(const stop of ['blur','pointercancel','reset']){
+    await page.mouse.move(trackX,trackY);await page.mouse.down();await page.mouse.move(cursor.x+5,trackY);await page.waitForTimeout(600);
+    await page.evaluate(stop=>{if(stop==='reset')voxfixReset();else if(stop==='blur')window.dispatchEvent(new Event('blur'));else document.querySelector('#keyboard').dispatchEvent(new PointerEvent('pointercancel',{pointerId:1,bubbles:true}));},stop);
+    const stopped=await cursorMoves();await page.waitForTimeout(650);assert.deepEqual(await cursorMoves(),stopped,`${stop} must stop edge movement`);await page.mouse.up();
+  }
+  // 按住不动约 350ms 切换成框选，松手后原工具栏提供编辑操作。
   await page.evaluate(()=>{window.calls.length=0;});
   await page.mouse.move(trackX,trackY);await page.mouse.down();await page.waitForTimeout(430);
   assert((await page.evaluate(()=>calls)).some(row=>row[0]==='gestureStart'&&row[1]===true),'Holding the track must switch into text selection');
-  assert((await page.evaluate(()=>calls)).some(row=>row[0]==='haptic'),'Switching into selection must fire exactly one haptic tick');
+  assert.equal((await page.evaluate(()=>calls)).filter(row=>row[0]==='haptic').length,1,'Switching into selection must fire exactly one haptic tick');
   await page.mouse.move(trackX-24,trackY);
   assert((await page.evaluate(()=>calls)).some(row=>row[0]==='gestureMove'&&row[1]===-2),'Selection drag must reuse the same relative step contract');
   assert((await page.evaluate(()=>calls)).some(row=>row[0]==='gestureEnd'));
   await page.mouse.up();
+  assert.equal(await page.locator('.selection-editor').count(),1);
+  assert.equal(await page.locator('#keyboard').evaluate(e=>e.getBoundingClientRect().height),351,'Selection panel must not change keyboard height');
+  await page.evaluate(()=>voxfixSelection(5,15,10));
+  await page.locator('.selection-editor [data-action="copy-text"]').click();
+  assert((await page.evaluate(()=>calls)).some(row=>row[0]==='edit'&&row[1]==='copy-text'));
+  assert.equal(await page.locator('.selection-editor').count(),1,'Copy keeps the editing panel');
+  await page.locator('.selection-editor-backdrop').click({position:{x:8,y:8}});
+  // 收起面板不解锁：先整体复位，后面几段要测的是「未锁定」的主轨行为。
+  await page.evaluate(()=>voxfixReset());
+  for(const width of [320,360,393]){
+    await page.setViewportSize({width,height:351});
+    const box=await page.locator('.keyboard-footer .cursor-zone').boundingBox();
+    assert(box.height>=44&&box.height<=50,'The whole middle blank must provide a moderate 44–50px touch target');
+    assert(box.width>150,'The touch target must be much wider than the visible hint');
+    for(const edge of [box.x-100,box.x+box.width+100]){
+      await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();await page.mouse.move(edge,box.y+box.height/2);
+      const bounds=await page.locator('.keyboard-footer .cursor-focus').evaluate(e=>{const a=e.getBoundingClientRect(),b=e.closest('.keyboard-footer .cursor-zone').getBoundingClientRect();return {left:a.left-b.left,right:b.right-a.right};});
+      assert(bounds.left>=7.9&&bounds.right>=7.9,'Both ends keep the entire halo inside an 8px inset');await page.mouse.up();
+    }
+    // 离短线很远、接近触控区上沿的位置，仍可长按框选。
+    await page.evaluate(()=>{calls.length=0;});
+    const offLineX=box.x+box.width*.2,offLineY=box.y+4;
+    assert(await page.locator('.keyboard-footer .cursor-zone').evaluate((e,p)=>document.elementFromPoint(p.x,p.y)?.closest('.keyboard-footer .cursor-zone')===e,{x:offLineX,y:offLineY}));
+    await page.mouse.move(offLineX,offLineY);await page.mouse.down();await page.waitForTimeout(380);
+    assert((await page.evaluate(()=>calls)).some(row=>row[0]==='gestureStart'&&row[1]===true),'Holding anywhere in the expanded blank must select');
+    await page.mouse.move(offLineX+22,offLineY);await page.mouse.up();
+    await page.locator('.selection-editor-backdrop').click({position:{x:8,y:8}});
+    await page.evaluate(()=>voxfixReset());
+    const footer=await page.locator('.keyboard-footer').boundingBox();
+    assert.equal(footer.height,49,'Expanding the touch target must not enlarge the footer');
+  }
+  await page.evaluate(()=>voxfixReset());
+  assert.equal(await page.locator('.selection-editor').count(),0);
+  assert.equal(await page.locator('.cursor-zone.dragging,.cursor-zone.selecting').count(),0);
+  const touchZone=await page.locator('.keyboard-footer .cursor-zone').boundingBox(),touchX=touchZone.x+touchZone.width*.7,touchY=touchZone.y+touchZone.height-4;
+  const trackTouch=await page.context().newCDPSession(page);
+  await trackTouch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:touchX,y:touchY}]});
+  await page.waitForTimeout(380);
+  await trackTouch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:touchX-22,y:touchY}]});
+  await trackTouch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  assert.equal(await page.locator('.selection-editor').count(),1,'Touch long-press works away from the line near the lower edge');
+  await page.evaluate(()=>voxfixSelection(5,5));
+  assert.equal(await page.locator('.selection-editor').count(),1,'A collapsed locked origin keeps the editing panel');
   assert(!requests.some(url=>url.includes('/api/')),'Native keyboard must not call the PC service');
   assert.deepEqual(errors,[]);
   await page.screenshot({path:new URL('../docs/native-ime-browser.png',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1')});

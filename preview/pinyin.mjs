@@ -35,6 +35,8 @@ export function setPinyinData(data,initials={}) {
   for(const rows of Object.values(shortPrefixes))rows.sort((a,b)=>b[1]-a[1]);
   pinyinCache=null;nineCache=null;
 }
+// 候选面板左侧“相近拼音”列使用：合法音节判定。
+export function isSyllable(value){return syllables.includes(value);}
 export async function loadPinyin(light=false){
   const data=typeof embeddedPinyinData!=='undefined'?embeddedPinyinData:await (await fetch(light?'pinyin-lite.json':'pinyin-data.json')).json();
   setPinyinData(data);

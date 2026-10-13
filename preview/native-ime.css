@@ -23,7 +23,8 @@ html.native-ime, .native-ime body {margin:0;padding:0;background:#edeff2;overflo
 .keyboard .keyboard-footer svg {width:30px;height:30px;}
 .keyboard .toolbar svg {width:22px;height:22px;}
 .keyboard .key-row .key {border:1px solid #d2d7df;box-shadow:none;font-size:var(--key-font);}
-.keyboard .key.pressed {background:#c7dbea;}
+/* 按下态不再单独覆盖：与网页共用 style.css 的 --key-press / --func-press（官方实测等效色）。
+   历史值 #c7dbea 偏蓝且与 :active 混用，Android WebView 上会残留，已移除。 */
 .keyboard .key-row .key.function {font-size:18px;}
 .keyboard .key-rows > .key-row:last-child > :first-child {flex:1.55;}
 .keyboard .key-rows > .key-row:last-child > :nth-child(2), .keyboard .key-rows > .key-row:last-child > :nth-child(6) {flex:1.2;}
@@ -44,8 +45,8 @@ html.native-ime, .native-ime body {margin:0;padding:0;background:#edeff2;overflo
 .keyboard .symbol-grid button {font-size:22px;border:0;border-right:1px solid #eceef1;border-bottom:1px solid #eceef1;}
 .keyboard .symbol-grid.url button {font-size:17px;}
 .keyboard .symbol-grid button.triple {grid-column:span 3;}
-.keyboard .candidate-controls {flex:0 0 40px;margin:4px 0;gap:6px;}
-.keyboard .candidate-bar {height:44px;flex-shrink:0;}
+.keyboard .candidate-bar {height:var(--bar);flex-shrink:0;}
+.native-ime .cursor-zone{top:-10px;height:calc(100% + 8px)}
 .keyboard .key-popup button.selected {background:#347fff;color:white;border-radius:6px;}
 .native-ime .toast {bottom:12px;}
 .native-ime dialog {max-height:85vh;overflow:auto;}

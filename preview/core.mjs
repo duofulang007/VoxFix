@@ -3,6 +3,51 @@ export const toolbarItems = [
   ['clipboard', '剪贴板'], ['emoji', '表情'], ['hide', '收起键盘'],
 ];
 export const keyboardGeometry = Object.freeze({height:351,fontSize:22,gap:4,radius:7,background:'#edeff2',candidateCount:3,candidateFont:22});
+// 66px 的整块触感区域两侧各留 8px，阻尼只能在安全边界内发生。
+export function cursorFeedbackPosition(width, x) {
+  const edge=Math.min(41,width/2),soft=Math.min(16,Math.max(0,width/2-edge));
+  if(!soft)return width/2;
+  const left=edge+soft,right=width-edge-soft;
+  if(x<left)return left-soft*(left-x)/(soft+left-x);
+  if(x>right)return right+soft*(x-right)/(soft+x-right);
+  return x;
+}
+// 底部滑轨摇杆：以触控点为原点，按到原点的距离分档调速。
+// 等值线是超椭圆 |dx/a|^n + |dy/b|^n = 1 —— n=3 近似圆角方：斜推不像正方形那样多走 1.41 倍，
+// 又不像正圆那样把键盘角落白白浪费。a/b 由按下瞬间的可用空间决定（joystickRadii），
+// 手势内锁死，否则手指一动半径就变、手感会漂。
+// 关键：「推进最深档」不等于「停下来」——ρ≥1 只是钉在最高档，整片区域始终有输出。
+export const joystick = Object.freeze({
+  shape: 3,
+  // 只分两档：绝大多数区域是「跟手」（手指移多少、光标/选区就动多少，能精确定位），
+  // 只有推到最外圈才切高速。
+  // 先前三档（0.42 / 0.72）门槛太低：向下可用空间只有几十像素，推 23px 就进 8 字/秒，
+  // 手感就是「稍微动一下就跨行」。门槛提到 0.78 后，短距离推不出速率。
+  gates: [0, 0.78],
+  rates: [0, 24],
+  hysteresis: 0.06,
+  minSide: 60,
+  minUp: 90,
+  // 上下分开定半径：滑轨贴着键盘底，向下只剩几十像素。minDown 取 40，让「推到键盘底」
+  // （约 32px）刚好落在最快档门槛上（32/40 = 0.8 ≥ 0.78）。
+  minDown: 40,
+});
+export function joystickRadii(side,up,down,config=joystick){
+  return {a:Math.max(config.minSide,side),bUp:Math.max(config.minUp,up),bDown:Math.max(config.minDown,down)};
+}
+export function joystickRho(dx,dy,{a,bUp,bDown},shape=joystick.shape){
+  const b=dy<0?bUp:bDown;
+  const x=Math.abs(dx)/Math.max(1,a),y=Math.abs(dy)/Math.max(1,b);
+  if(!x&&!y)return 0;
+  return Math.pow(Math.pow(x,shape)+Math.pow(y,shape),1/shape);
+}
+export function joystickLevel(rho,current,config=joystick){
+  const gates=config.gates,top=gates.length-1;
+  let level=Math.max(0,Math.min(top,Math.round(current)));
+  while(level<top&&rho>=gates[level+1])level++;
+  while(level>0&&rho<gates[level]-config.hysteresis)level--;
+  return level;
+}
 export const defaults = {
   ...keyboardGeometry,
   toolbar: toolbarItems.map(([id]) => id), footerSwitcher: true, footerClipboard: true,
@@ -29,7 +74,14 @@ export function settingsFrom(value) {
     const list = value.customToolbar;
     if (!Array.isArray(list) || list.length > 12) throw Error('自定义工具栏配置无效');
     if (list.some(row => !row || typeof row.label !== 'string' || typeof row.text !== 'string' || !row.label.trim() || row.label.length > 6 || !row.text.trim() || row.text.length > 10000)) throw Error('自定义工具栏配置无效');
-    result.customToolbar = list.map(row => ({ label: row.label, text: row.text }));
+    const legacyIds=result.toolbar.filter(id=>id.startsWith('custom:')),used=new Set();
+    result.customToolbar = list.map((row,index) => {
+      const id=row.id===undefined?(legacyIds[index]??'custom:legacy'+index):row.id;
+      if(typeof id!=='string'||!/^custom:[a-z0-9]{1,8}$/.test(id)||used.has(id))throw Error('自定义工具栏标识无效');
+      used.add(id);
+      if(row.id===undefined&&!result.toolbar.includes(id))result.toolbar.push(id);
+      return {id,label:row.label,text:row.text};
+    });
   }
   for (const key of ['comma', 'period', 'voiceText']) {
     if (key in value) {

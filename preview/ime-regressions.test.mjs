@@ -107,6 +107,43 @@ try{
     assert.equal(await page.locator('[data-action="letter"]').count(),26);
     assert(await page.evaluate(()=>calls.some(c=>c[0]==='commit')));
   });
+  await check('clipboard double tap locks repeated paste and keeps manual return',async({page,key,click})=>{
+    await page.evaluate(()=>{
+      voxfixStartInput(1,false);
+      const commit=VoxFixIme.commit;
+      VoxFixIme.commit=text=>{commit(text);setTimeout(()=>voxfixStartInput(1,true),10);};
+    });
+    await click('clipboard');
+    const tab=key('clip-tab','clipboard');
+    const before=await tab.boundingBox();
+    await tab.tap();await tab.tap();
+    assert.equal(await tab.getAttribute('aria-pressed'),'true','触屏双击应锁定');
+    assert.equal(await tab.locator('.clip-lock').count(),1,'锁定应有锁图标');
+    assert.deepEqual(await tab.boundingBox(),before,'锁图标不应改变标签位置和尺寸');
+    await page.locator('.clip-list').evaluate(e=>e.scrollTop=200);
+    const row=page.locator('.clip-text').nth(5),text=await row.textContent();
+    await row.tap();await page.waitForTimeout(40);await row.tap();await page.waitForTimeout(40);
+    assert(await page.locator('.clip-list').isVisible(),'锁定后连续粘贴及同输入框回调均留在剪贴板');
+    assert.deepEqual(await page.evaluate(()=>calls.filter(c=>c[0]==='commit').map(c=>c[1])),[text,text],'每次点击只粘贴一次');
+    assert.equal(await page.locator('.clip-list').evaluate(e=>e.scrollTop),200,'粘贴保留列表位置');
+    await click('return');assert.equal(await page.locator('[data-action="letter"]').count(),26,'锁定时仍可收起');
+    await click('clipboard');assert.equal(await tab.getAttribute('aria-pressed'),'true','收起再打开保留锁定');
+    await click('clip-tab','phrases');
+    await page.evaluate(()=>voxfixClipboard('常用语示例','c'.repeat(64)));
+    await click('clip-tab','clipboard');
+    await page.locator('.clip-text').first().click({button:'right'});await click('context-favorite');
+    await click('clip-tab','phrases');await page.locator('.clip-text').first().tap();
+    assert.equal(await page.locator('.clip-list').count(),0,'剪贴板锁定不改变常用语的返回行为');
+    await click('clipboard');
+    await tab.click();await page.waitForTimeout(400);await tab.click();
+    assert.equal(await tab.getAttribute('aria-pressed'),'true','间隔较久的单击不能解锁');
+    await click('return');await click('clipboard');
+    await tab.click();await tab.click();
+    assert.equal(await tab.getAttribute('aria-pressed'),'false','鼠标双击应解锁');
+    assert.equal(await tab.locator('.clip-lock').count(),0);
+    await page.locator('.clip-text').first().tap();
+    assert.equal(await page.locator('.clip-list').count(),0,'解锁后粘贴恢复返回键盘');
+  });
   await check('single delete and clear both ask for confirmation',async({page,click})=>{
     await click('clipboard');
     const before=await page.locator('.clip-text').count();
@@ -228,7 +265,7 @@ try{
     await click('return');
     await page.evaluate(()=>voxfixClipboard('候选栏内容','d'.repeat(64)));
     assert.equal(await page.locator('.clip-candidate').count(),1);
-    assert.equal(await page.locator('.clip-source').textContent(),'来自剪贴板');
+    assert.equal(await page.locator('.clip-preview-source').textContent(),'来自剪贴板');
     await page.locator('[data-action="clip-candidate-insert"]').click();
     assert.equal(await page.locator('.clip-candidate').count(),0);
     assert(await page.evaluate(()=>calls.some(c=>c[0]==='commit'&&c[1]==='候选栏内容')));

@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>按键按压反馈对照 · VoxFix</title>
+<style>
+  :root{
+    --kb-bg:#edeff2; --key-bg:#fff; --key-color:#13171d; --muted:#858a93; --line:#d4d7df;
+    --press-old:#c1d5e5; --press-old-func:#c7dbea;
+    --press-new:rgba(202,208,220,.451); --press-new-func:rgba(197,203,212,.796);
+    --ink:#292d34;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#f7f8fa;color:var(--ink);font:14px/1.7 "Microsoft YaHei","PingFang SC",Arial,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:32px 24px 56px}
+  h1{font-size:24px;margin:0 0 8px;font-weight:650}
+  .lede{color:#5d6672;margin:0 0 6px}
+  .src{color:var(--muted);font-size:12px;margin:0 0 26px}
+  code{background:#eef1f5;border-radius:3px;padding:1px 5px;font-size:12.5px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;align-items:start}
+  .card{background:#fff;border:1px solid #e1e5ea;border-radius:10px;padding:16px}
+  .card h2{font-size:14px;margin:0 0 2px;font-weight:600}
+  .card .sub{font-size:11.5px;color:var(--muted);margin:0 0 12px;min-height:32px}
+  .tag{display:inline-block;font-size:11px;padding:2px 7px;border-radius:99px;border:1px solid #d7dce2;color:#5d6672;background:#f7f8fa;margin-bottom:8px}
+  .tag.good{border-color:#bcd3bd;background:#eff7ef;color:#3b6b3d}
+  .tag.bad{border-color:#e2c6c6;background:#fbf0f0;color:#8c4545}
+  .board{background:var(--kb-bg);border-radius:8px;padding:6px;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent}
+  .row{display:flex;gap:4px;margin-bottom:4px}
+  .row:last-child{margin-bottom:0}
+  .row.mid{padding:0 10px}
+  .k{flex:1;height:42px;display:flex;align-items:center;justify-content:center;background:var(--key-bg);border:1px solid #d2d7df;border-radius:7px;font-size:17px;color:var(--key-color)}
+  .k.fn{background:#dce0e7;font-size:12px;white-space:nowrap}
+  .k.wide{flex:2.6;font-size:11px}
+  .row.mid .k.fn{flex:1.35}
+  /* 官方 / 改后：只认 .pressed，绝不用 :active */
+  .board.new .k.pressed{background:var(--press-new)}
+  .board.new .k.fn.pressed{background:var(--press-new-func)}
+  /* 改前：按下色写在 :active 与 .pressed 的同一条规则里 */
+  .board.old .k:active,.board.old .k.pressed{background:var(--press-old)}
+  .board.old .k.fn:active,.board.old .k.fn.pressed{background:var(--press-old-func)}
+  /* 演示：真实 WebView 上 :active 会在松手后继续挂着 */
+  .board.old.stuck .k.stuck{background:var(--press-old)}
+  .board.old.stuck .k.fn.stuck{background:var(--press-old-func)}
+  .read{margin-top:10px;font-size:12px;color:#5d6672;display:grid;grid-template-columns:auto 1fr;gap:2px 10px}
+  .read b{font-weight:600;color:var(--ink)}
+  .swatch{display:inline-block;width:11px;height:11px;border-radius:2px;border:1px solid #0002;vertical-align:-1px;margin-right:4px}
+  .note{font-size:11.5px;color:var(--muted);margin-top:10px}
+  .note b{color:#5d6672}
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:20px 0 0;padding-top:16px;border-top:1px solid #e5e9ee;font-size:12.5px;color:#5d6672}
+  .controls button{font:inherit;border:1px solid #d7dce2;background:#fff;border-radius:6px;padding:7px 12px;cursor:pointer;color:var(--ink)}
+  .controls button[aria-pressed=true]{background:#eef3f8;border-color:#a9bfd4;color:#33608c}
+  .verdict{margin:24px 0 0;background:#fff;border:1px solid #e1e5ea;border-radius:10px;padding:16px 18px}
+  .verdict h3{margin:0 0 10px;font-size:14px}
+  .verdict ul{margin:0;padding-left:20px}
+  .verdict li{margin:5px 0;color:#4b5560}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:8px}
+  th,td{border-bottom:1px solid #e8ecf0;padding:7px 8px;text-align:left}
+  th{color:#5d6672;font-weight:600;background:#fafbfc}
+  td.mono{font-variant-numeric:tabular-nums;font-family:Consolas,monospace}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>26 键按压反馈：官方 / 改前 / 改后</h1>
+  <p class="lede">按住下面的键试试。官方那一条与「改后」是同一个颜色模型，改前那一条是原来的高饱和蓝。</p>
+  <p class="src">官方取值来自手机上已安装的 <code>com.iflytek.inputmethod.miui</code> 8.1.8322：<code>assets/theme/white/res/image/btn_keyboard_key_pressed.png</code> = rgb(202,208,220) / alpha 115，官方键盘底 <code>#EDEFF2</code>。</p>
+
+  <div class="grid">
+    <div class="card">
+      <span class="tag good">1:1 目标</span>
+      <h2>官方 讯飞小米版（白皮）</h2>
+      <p class="sub">按下 = 往键盘底上盖一层 45% 中性冷灰。<br>无过渡、无缩放、无位移。</p>
+      <div class="board new" id="board-official"></div>
+      <div class="read">
+        <span>覆层</span><span><b class="mono">rgba(202,208,220,.451)</b></span>
+        <span>屏幕等效</span><span><span class="swatch" style="background:#dde1e8"></span><b class="mono">rgb(221,225,232)</b></span>
+        <span>按下耗时</span><span><b class="mono" data-lat>—</b></span>
+      </div>
+      <p class="note">功能键常态就长这样，按下再深一档 <b>rgb(205,211,218)</b>。</p>
+    </div>
+
+    <div class="card">
+      <span class="tag bad">改前</span>
+      <h2>VoxFix 原实现</h2>
+      <p class="sub">按下色写在 <code>:active</code> 与 <code>.pressed</code> 的同一条规则里。</p>
+      <div class="board old" id="board-old"></div>
+      <div class="read">
+        <span>字母键按下</span><span><span class="swatch" style="background:#c1d5e5"></span><b class="mono">#c1d5e5</b> → rgb(193,213,229)</span>
+        <span>功能键按下</span><span><span class="swatch" style="background:#c7dbea"></span><b class="mono">#c7dbea</b> → rgb(199,219,234)</span>
+        <span>残留</span><span><b class="mono" data-residue>0 个键</b></span>
+      </div>
+      <p class="note">比官方更蓝更深（ΔR −28），读起来像「被选中」而不是「被按下」。</p>
+    </div>
+
+    <div class="card">
+      <span class="tag good">改后</span>
+      <h2>VoxFix 现在</h2>
+      <p class="sub">按下只由 JS 的 <code>.pressed</code> 驱动；<code>:active</code> 已从按键上删除。</p>
+      <div class="board new" id="board-fixed"></div>
+      <div class="read">
+        <span>覆层</span><span><b class="mono">rgba(202,208,220,.451)</b></span>
+        <span>屏幕等效</span><span><span class="swatch" style="background:#dde1e8"></span><b class="mono">rgb(221,225,232)</b></span>
+        <span>松手后残留</span><span><b class="mono" data-residue2>0 个键</b></span>
+      </div>
+      <p class="note">自愈：下一次按下会先清掉上一次的残留；失焦、指针捕获丢失也会清。</p>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="stuck" aria-pressed="false">演示：Android WebView 的 :active 粘连</button>
+    <button id="burst">连按「改后」那一排 12 次</button>
+    <span id="burst-out">—</span>
+  </div>
+
+  <div class="verdict">
+    <h3>为什么原来会「颜色迟迟退不走」</h3>
+    <ul>
+      <li>原规则：<code>.key-row .key:active, .key-row .key.pressed { background:#c1d5e5 }</code> —— 两个状态挤在一条里。</li>
+      <li><code>.pressed</code> 是我们自己加的，松手一定删得掉；<code>:active</code> 是浏览器管的。</li>
+      <li>Android WebView 对 <code>:active</code> 的清除不可靠：第一次触摸还会被当成 hover 的起点，且没有确定的退出事件，于是松手了颜色还挂着。</li>
+      <li>点上面的「演示」按钮可以看这个残留长什么样 —— 这是把 WebView 的行为搬到桌面复现，不是桌面浏览器本身的行为。</li>
+    </ul>
+    <table>
+      <tr><th>项目</th><th>官方（白皮）</th><th>改前</th><th>改后</th></tr>
+      <tr><td>字母键常态</td><td class="mono">#FFFFFF</td><td class="mono">#FFFFFF</td><td class="mono">#FFFFFF</td></tr>
+      <tr><td>字母键按下</td><td class="mono">rgb(221,225,232)</td><td class="mono">rgb(193,213,229)</td><td class="mono">rgb(221,225,232)</td></tr>
+      <tr><td>功能键按下</td><td class="mono">rgb(205,211,218)</td><td class="mono">rgb(199,219,234)</td><td class="mono">rgb(205,211,218)</td></tr>
+      <tr><td>过渡动画</td><td class="mono">无</td><td class="mono">无</td><td class="mono">无（断言 0s）</td></tr>
+      <tr><td>缩放 / 位移</td><td class="mono">无</td><td class="mono">无</td><td class="mono">无</td></tr>
+    </table>
+  </div>
+</div>
+<script>
+const ROWS=[['Q','W','E','R','T','Y','U','I','O','P'],['A','S','D','F','G','H','J','K','L']];
+function build(el,{mid=false}={}){
+  el.innerHTML='';
+  ROWS.forEach((letters,i)=>{
+    const row=document.createElement('div');
+    row.className='row'+(i===1?' mid':'');
+    if(i===1){const f=document.createElement('div');f.className='k fn';f.textContent='符';row.append(f);}
+    for(const letter of letters){const k=document.createElement('div');k.className='k';k.textContent=letter;row.append(k);}
+    if(i===1){const f=document.createElement('div');f.className='k fn';f.textContent='删除';row.append(f);}
+    el.append(row);
+  });
+  const tail=document.createElement('div');tail.className='row';
+  tail.innerHTML='<div class="k fn">符</div><div class="k fn">123</div><div class="k">,</div><div class="k wide">空格</div><div class="k">。</div><div class="k fn">中/英</div><div class="k fn">回车</div>';
+  el.append(tail);
+}
+const official=document.getElementById('board-official');
+const old=document.getElementById('board-old');
+const fixed=document.getElementById('board-fixed');
+build(official);build(old);build(fixed);
+
+// 按下 → 同步读取浏览器算出来的颜色与耗时，证明「按下即变色、0 延迟」
+document.querySelectorAll('.board').forEach(board=>{
+  const latency=board.closest('.card').querySelector('[data-lat]');
+  const residue=board.closest('.card').querySelector('[data-residue],[data-residue2]');
+  const clear=()=>board.querySelectorAll('.k.pressed,.k.stuck').forEach(k=>k.classList.remove('pressed','stuck'));
+  board.addEventListener('pointerdown',event=>{
+    const key=event.target.closest('.k');if(!key)return;
+    const t0=performance.now();
+    board.setPointerCapture(event.pointerId);
+    clear();key.classList.add('pressed');
+    const after=performance.now();
+    if(latency){const rgba=getComputedStyle(key).backgroundColor;latency.textContent=after<t0+0.5?'0.0ms（同一帧）':(after-t0).toFixed(1)+'ms';latency.dataset.rgba=rgba;}
+    event.preventDefault();
+  });
+  const release=()=>{
+    clear();
+    if(residue)residue.textContent=board.querySelectorAll('.k.pressed').length+' 个键';
+  };
+  board.addEventListener('pointerup',release);
+  board.addEventListener('pointercancel',release);
+  board.addEventListener('lostpointercapture',release);
+  window.addEventListener('blur',release);
+});
+
+// 演示 WebView 的 :active 粘连：松手后仍然把那一格留成按下色
+const stuckButton=document.getElementById('stuck');
+let stuckOn=false;
+stuckButton.addEventListener('click',()=>{
+  stuckOn=!stuckOn;stuckButton.setAttribute('aria-pressed',String(stuckOn));
+  if(!stuckOn)old.querySelectorAll('.k.stuck').forEach(k=>k.classList.remove('stuck'));
+});
+old.addEventListener('pointerup',()=>{
+  if(!stuckOn)return;
+  const last=old.querySelector('.k.pressed');
+  if(last)last.classList.add('stuck');
+},{capture:true});
+
+// 连按「改后」那一排 12 次，统计期间出现的按下态峰值与最终残留
+document.getElementById('burst').addEventListener('click',()=>{
+  const keys=[...fixed.querySelectorAll('.k')];let peak=0;
+  for(let i=0;i<12;i++){
+    const key=keys[i%keys.length];
+    fixed.querySelectorAll('.k.pressed').forEach(k=>k.classList.remove('pressed'));
+    key.classList.add('pressed');
+    peak=Math.max(peak,fixed.querySelectorAll('.k.pressed').length);
+    key.classList.remove('pressed');
+  }
+  const left=fixed.querySelectorAll('.k.pressed').length;
+  document.getElementById('burst-out').textContent=`峰值 ${peak} 个按下态，结束后残留 ${left} 个`;
+  document.querySelector('[data-residue2]').textContent=left+' 个键';
+});
+</script>
+</body>
+</html>

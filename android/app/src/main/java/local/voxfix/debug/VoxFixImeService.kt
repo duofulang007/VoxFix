@@ -1,6 +1,19 @@
 package local.voxfix.debug
 
 import android.Manifest
+import android.graphics.Canvas
+import android.graphics.ColorFilter
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PixelFormat
+import android.graphics.RectF
+import android.graphics.drawable.Drawable
+import android.os.SystemClock
+import android.text.TextUtils
+import android.view.Gravity
+import android.widget.PopupWindow
+import android.widget.TextView
+import android.view.KeyCharacterMap
 import android.content.ClipboardManager
 import android.content.ClipData
 import android.content.pm.PackageManager
@@ -12,6 +25,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
@@ -19,7 +33,6 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import org.json.JSONObject
-import org.json.JSONArray
 import java.io.ByteArrayInputStream
 import java.io.File
 import android.view.inputmethod.ExtractedTextRequest
@@ -37,6 +50,11 @@ class VoxFixImeService : InputMethodService() {
     private val capturing = AtomicBoolean(false)
     @Volatile private var engine: SpeechEngine? = null
     private var web: WebView? = null
+    private var clipHint: PopupWindow? = null
+    /** 最近一次 resize() 请求的键盘像素高度。标签定位只认它，不认 view.height：
+     *  网页在同一帧里先调 clipHint() 再调 resize()，此时 layoutParams 刚改、layout 还没跑，
+     *  view.height 是旧值，拿它定位标签会差一整轮键盘高度。 */
+    private var keyboardHeightPx = 0
     @Volatile private var inputGeneration = 0L
     @Volatile private var shown = false
     @Volatile private var busy = false
@@ -59,6 +77,10 @@ class VoxFixImeService : InputMethodService() {
     private var composingStart: Int? = null
     private var selectionStart = 0
     private var selectionEnd = 0
+    private val selectionDrag = SelectionDrag()
+    private var selectionLockedAnchor = -1
+    private var selectionGestureActive = false
+    private var ownSelectionUntil = 0L
 
     override fun onEvaluateFullscreenMode() = false
 
@@ -173,6 +195,127 @@ class VoxFixImeService : InputMethodService() {
         // K60 can leave Chromium hidden while the IME window is visible; invalidation alone cannot recover it.
         if (web === view && shown && view.isShown) view.dispatchWindowVisibilityChanged(View.VISIBLE)
     }
+
+    /**
+     * 「来自剪贴板」标签。官方小米版把它做成挂在 IME 窗口上的独立 popup 窗口，浮在键盘上沿之上：
+     * K60 实测 window frame [0,1870][576,1971]、ty=APPLICATION_PANEL、fl=NOT_FOCUSABLE NOT_TOUCHABLE，
+     * 可见标签 126.3×28.86 CSS、左贴屏幕边、底部贴着候选条上沿那条线。
+     * 关键：它不占键盘高度。画在 WebView 里会把键盘撑高 29dp，宿主输入框随之被顶掉 29dp 空间。
+     */
+    private fun hideClipHint() {
+        clipHint?.let { if (it.isShowing) it.dismiss() }
+        clipHint = null
+    }
+
+    private fun showClipHint(label: String) {
+        val view = web
+        if (!shown || label.isEmpty() || view == null || !view.isShown) { hideClipHint(); return }
+        clipHint?.takeIf { it.isShowing }?.let { popup ->
+            if ((popup.contentView as? TextView)?.text?.toString() == label) { repositionClipHint(); return }
+            hideClipHint()
+        }
+        val density = resources.displayMetrics.density
+        val pillHeight = (PILL_HEIGHT_DP * density).toInt()
+        val pill = TextView(this).apply {
+            setTextColor(0xff000000.toInt())
+            textSize = PILL_TEXT_SP
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            val horizontal = (PILL_PADDING_X_DP * density).toInt()
+            setPadding(horizontal, 0, horizontal, 0)
+            minWidth = (PILL_MIN_WIDTH_DP * density).toInt()
+            maxWidth = ((screenWidthDp() - 24).coerceAtLeast(160) * density).toInt()
+            text = label
+            background = ClipHintBackground(4f * density, CLIP_HINT_FILL, CLIP_HINT_BORDER, density)
+        }
+        val popup = PopupWindow(pill, ViewGroup.LayoutParams.WRAP_CONTENT, pillHeight).apply {
+            isFocusable = false
+            isTouchable = false
+            setBackgroundDrawable(null)
+            elevation = 0f
+            inputMethodMode = PopupWindow.INPUT_METHOD_NOT_NEEDED
+        }
+        clipHint = popup
+        // 从 WebView 底边（= 屏幕底边）往上推「键盘高度 + 标签高度」：标签底边正好压在键盘上沿，
+        // 与官方 window frame 一致（K60：标签 [0,1870][576,1971] px，键盘上沿 1971 px）。
+        popup.showAsDropDown(view, 0, clipHintOffset())
+    }
+
+    /** 标签锚在 WebView 底边，向上偏移「键盘高度 + 标签高度」。 */
+    private fun clipHintOffset(): Int {
+        val density = resources.displayMetrics.density
+        val pillHeight = (PILL_HEIGHT_DP * density).toInt()
+        val keyboard = if (keyboardHeightPx > 0) keyboardHeightPx else (web?.height ?: 0)
+        return -(keyboard + pillHeight)
+    }
+
+    private fun screenWidthDp(): Int = (resources.displayMetrics.widthPixels / resources.displayMetrics.density).toInt()
+
+    /** 另一侧：标签已弹出但键盘高度变了（面板切换、候选行增减）时，只挪位置不重建窗口。 */
+    private fun repositionClipHint() {
+        val view = web ?: return
+        val popup = clipHint?.takeIf { it.isShowing } ?: return
+        popup.update(view, 0, clipHintOffset(), ViewGroup.LayoutParams.WRAP_CONTENT, popup.height)
+    }
+
+    private companion object {
+        /**
+         * K60 实测官方标签：可见 126.3×28.86 CSS。
+         * 19.4 是从官方墨迹反推的：官方 ink 宽 94.57、高 17.14 CSS，我们 20sp 量到 97.43/17.71，
+         * 长宽两个方向都恰差 3%（= 720 基准的 34 单位 × 0.5714），所以官方字号是 19.4 而不是 20。
+         * 12.1 是「文字推进框」到边的距离——肉眼量的 15.71 是**墨迹**起点，已经含了 1px 描边
+         * 和汉字两侧各 ~2.6px 的字面留白，照抄 15.71 会让标签胖 7dp。
+         */
+        private const val PILL_HEIGHT_DP = 28.86f
+        private const val PILL_TEXT_SP = 19.4f
+        private const val PILL_PADDING_X_DP = 12.1f
+        private const val PILL_MIN_WIDTH_DP = 126.3f
+        private const val CLIP_HINT_FILL = 0xfff4f6f9.toInt()
+        private const val CLIP_HINT_BORDER = 0xffdddee2.toInt()
+    }
+
+    /** 只描上、左、右三边的圆角矩形：官方标签底边压在候选条上沿的 1px 线上，自己不带下边。 */
+    private class ClipHintBackground(
+        private val radius: Float,
+        fillColor: Int,
+        strokeColor: Int,
+        strokeWidth: Float,
+    ) : Drawable() {
+        private val outline = Path()
+        private val corner = RectF()
+        private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = fillColor; style = Paint.Style.FILL }
+        private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = strokeColor; style = Paint.Style.STROKE; this.strokeWidth = strokeWidth
+        }
+
+        override fun draw(canvas: Canvas) {
+            // Drawable 没有 width/height，尺寸只从 bounds 里取；描边按半宽内缩，外沿正好落在 bounds 边上。
+            val box = bounds
+            val inset = stroke.strokeWidth / 2f
+            val left = box.left + inset
+            val top = box.top + inset
+            val right = box.right - inset
+            val bottom = box.bottom.toFloat()
+            outline.reset()
+            outline.moveTo(left, bottom)
+            outline.lineTo(left, top + radius)
+            corner.set(left, top, left + radius * 2, top + radius * 2)
+            outline.arcTo(corner, 180f, 90f, false)
+            outline.lineTo(right - radius, top)
+            corner.set(right - radius * 2, top, right, top + radius * 2)
+            outline.arcTo(corner, 270f, 90f, false)
+            outline.lineTo(right, bottom)
+            canvas.drawPath(outline, fill)
+            canvas.drawPath(outline, stroke)
+        }
+
+        override fun setAlpha(alpha: Int) { fill.alpha = alpha; stroke.alpha = alpha }
+        override fun setColorFilter(colorFilter: ColorFilter?) { fill.colorFilter = colorFilter; stroke.colorFilter = colorFilter }
+        @Deprecated("Deprecated in Java") override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+    }
+
     private fun script(code: String) { web?.evaluateJavascript(code, null) }
     private fun voiceDone(message: String = "") { script("globalThis.voxfixVoiceDone?.(${JSONObject.quote(message)})") }
     private fun resetKeyboard() {
@@ -185,6 +328,7 @@ class VoxFixImeService : InputMethodService() {
         val extracted = connection.getExtractedText(ExtractedTextRequest().apply { hintMaxChars = 1 }, 0)
         val end = composingStart?.plus(value.length) ?: extracted?.let { it.startOffset + minOf(it.selectionStart, it.selectionEnd) + value.length }
         if (!connection.commitText(value, 1)) return false
+        selectionDrag.clear(); selectionLockedAnchor = -1
         composingStart = null
         if (end != null) { if (ownSelections.size >= 100) ownSelections.clear(); ownSelections.add(end) }
         return true
@@ -200,6 +344,7 @@ class VoxFixImeService : InputMethodService() {
     override fun onStartInput(info: EditorInfo, restarting: Boolean) {
         super.onStartInput(info, restarting)
         if (!restarting) {
+            selectionDrag.clear(); selectionLockedAnchor = -1; selectionGestureActive = false
             inputGeneration++
             ownSelections.clear()
             composingStart = null
@@ -230,18 +375,22 @@ class VoxFixImeService : InputMethodService() {
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        selectionDrag.clear(); selectionLockedAnchor = -1; selectionGestureActive = false
         shown = false
         inputGeneration++
         cancelRecording()
         resetKeyboard()
+        hideClipHint()
         scheduleVoiceRelease()
         super.onFinishInputView(finishingInput)
     }
 
     override fun onFinishInput() {
+        selectionDrag.clear(); selectionLockedAnchor = -1; selectionGestureActive = false
         shown = false
         inputGeneration++
         cancelRecording()
+        hideClipHint()
         scheduleVoiceRelease()
         super.onFinishInput()
     }
@@ -250,6 +399,14 @@ class VoxFixImeService : InputMethodService() {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
         selectionStart = newSelStart
         selectionEnd = newSelEnd
+        selectionDrag.observe(newSelStart, newSelEnd)
+        // 宿主长按选字通常返回非折叠选区；输入法自己的编辑回调不能重新标定起点。
+        if (shown && !selectionGestureActive && selectionDrag.anchor < 0 && newSelStart >= 0 && newSelEnd >= 0 && newSelStart != newSelEnd && candidatesStart < 0 && SystemClock.uptimeMillis() > ownSelectionUntil) {
+            selectionDrag.beginPositions(newSelStart, newSelEnd)
+            selectionLockedAnchor = newSelStart
+            script("globalThis.voxfixSelectionOrigin?.()")
+        }
+        reportSelection(newSelStart, newSelEnd)
         if (oldSelStart != newSelStart || oldSelEnd != newSelEnd) {
             if (session.accepts(ticket) && !localVoice) {
                 if (InputSession.isVoiceSelection(voiceStart, streamedText.isNotEmpty(), newSelStart, newSelEnd, candidatesStart, candidatesEnd)) return
@@ -266,6 +423,18 @@ class VoxFixImeService : InputMethodService() {
                 clearComposition()
             }
         }
+    }
+
+    private fun reportSelection(start: Int, end: Int) {
+        val selected = if (start == end) "" else currentInputConnection?.getSelectedText(0)?.toString()
+        val count = selected?.let {
+            val breaks = android.icu.text.BreakIterator.getCharacterInstance()
+            breaks.setText(it)
+            var total = 0
+            while (breaks.next() != android.icu.text.BreakIterator.DONE) total++
+            total
+        } ?: -1
+        script("globalThis.voxfixSelection?.($start,$end,$count)")
     }
 
     private fun cancelRecording(restoreSelection: Boolean = false) {
@@ -375,7 +544,7 @@ class VoxFixImeService : InputMethodService() {
         }
         private fun editInput(action: () -> Unit) {
             val generation = inputGeneration
-            main.post { if (web === owner && shown && generation == inputGeneration) action() }
+            main.post { if (web === owner && shown && generation == inputGeneration) { ownSelectionUntil = SystemClock.uptimeMillis() + 250; action() } }
         }
         @JavascriptInterface fun ready() { main.post { if (web === owner) { currentInputEditorInfo?.let { startKeyboard(it, false) } ?: resetKeyboard(); updateClipboard(); if (pinyinFailed) script("globalThis.voxfixPinyinReady?.(true)") } } }
         @JavascriptInterface fun pinyinReady() = pinyin != null
@@ -396,6 +565,14 @@ class VoxFixImeService : InputMethodService() {
         }
         @JavascriptInterface fun refreshClipboard() = editInput { updateClipboard() }
         @JavascriptInterface fun importClipboard() = editInput { updateClipboard(true) }
+        /**
+         * 网页每次渲染都会回传当前标签文本（无内容时空串）。渲染常发生在键盘高度变化前后，
+         * 所以这里既负责首弹，也负责挪位——不能只把「文本相同」当无事发生。
+         */
+        @JavascriptInterface fun clipHint(label: String) {
+            if (label.length > 200) return
+            main.post { if (web === owner) showClipHint(label) }
+        }
         @JavascriptInterface fun copy(value: String) { if (value.length <= 10000) editInput { getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("VoxFix", value)); updateClipboard() } }
         @JavascriptInterface fun voiceReady() = engine != null
         @JavascriptInterface fun handReady() = false
@@ -403,7 +580,9 @@ class VoxFixImeService : InputMethodService() {
             if (height !in 220..550) return
             main.post { if (web === owner) owner.let { view ->
                 val pixels = (height * resources.displayMetrics.density).toInt()
+                keyboardHeightPx = pixels
                 if (view.layoutParams.height != pixels) view.layoutParams = view.layoutParams.apply { this.height = pixels }
+                repositionClipHint()
                 restoreKeyboardVisibility(view)
                 // Wait for the new DOM to be drawable before invalidating the IME window.
                 // 键盘隐藏期间也要照常请求重绘：否则这段时间的 DOM 变化会被丢掉，重新显示时屏幕上会残留旧页。
@@ -413,6 +592,7 @@ class VoxFixImeService : InputMethodService() {
             } }
         }
         @JavascriptInterface fun compose(value: String) { if (value.length <= 1000) editInput {
+            selectionDrag.clear()
             val connection = currentInputConnection ?: return@editInput
             if (composingStart == null) {
                 val text = connection.getExtractedText(ExtractedTextRequest().apply { hintMaxChars = 1 }, 0)
@@ -433,6 +613,7 @@ class VoxFixImeService : InputMethodService() {
             }
         }
         @JavascriptInterface fun delete() = editInput {
+            selectionDrag.clear(); selectionLockedAnchor = -1
             val connection = currentInputConnection ?: return@editInput
             val selected = !connection.getSelectedText(0).isNullOrEmpty()
             val extracted = connection.getExtractedText(ExtractedTextRequest().apply { hintMaxChars = 1 }, 0)
@@ -446,6 +627,7 @@ class VoxFixImeService : InputMethodService() {
             }
         }
         @JavascriptInterface fun enter() = editInput {
+            selectionDrag.clear(); selectionLockedAnchor = -1
             val info = currentInputEditorInfo ?: return@editInput
             val action = info.imeOptions and EditorInfo.IME_MASK_ACTION
             if (info.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION == 0 && action != EditorInfo.IME_ACTION_NONE && action != EditorInfo.IME_ACTION_UNSPECIFIED) currentInputConnection?.performEditorAction(action)
@@ -462,6 +644,7 @@ class VoxFixImeService : InputMethodService() {
         }
         @JavascriptInterface fun moveCursor(amount: Int) = editInput {
             if (amount == 0) return@editInput
+            selectionDrag.clear()
             val connection = currentInputConnection ?: return@editInput
             val extracted = connection.getExtractedText(ExtractedTextRequest(), 0)
             val text = extracted?.text?.toString()
@@ -496,10 +679,13 @@ class VoxFixImeService : InputMethodService() {
             main.post { view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP) }
         }
         // 底部无极滑轨：拖动移动光标，长按后拖动框选文字。
-        // 锚点在手势开始时只记一次，之后每次拖动都按「相对锚点的字符步数」重算绝对位置，
-        // 来回拖动不会累积误差；框选时保留非折叠选区，宿主输入框会自己弹出复制/粘贴浮框。
-        private var gestureAnchor = -1
+        // 普通光标走宿主方向键跨段落；框选保留固定锚点，右侧编辑框提供编辑操作。
+        private var gestureOrigin = -1
         private var gestureSelecting = false
+        private var gestureEpoch = 0
+        private val selectionSteps = SelectionSteps()
+        private var cursorSteps = 0
+        private var navigationTicket = 0
         private fun graphemeStep(text: String, from: Int, steps: Int): Int {
             val boundaries = android.icu.text.BreakIterator.getCharacterInstance()
             boundaries.setText(text)
@@ -511,36 +697,171 @@ class VoxFixImeService : InputMethodService() {
             }
             return position
         }
+        private fun selectionHead(start: Int, end: Int): Int =
+            if (selectionDrag.anchor >= 0 && minOf(start, end) == minOf(selectionDrag.anchor, selectionDrag.head) && maxOf(start, end) == maxOf(selectionDrag.anchor, selectionDrag.head)) selectionDrag.head else end
         @JavascriptInterface fun gestureStart(selecting: Boolean) = editInput {
-            val extracted = currentInputConnection?.getExtractedText(ExtractedTextRequest(), 0)
-            gestureAnchor = extracted?.let {
-                it.startOffset + if (selecting) minOf(it.selectionStart, it.selectionEnd) else maxOf(it.selectionStart, it.selectionEnd)
-            } ?: -1
+            val connection = currentInputConnection ?: return@editInput
+            val extracted = connection.getExtractedText(ExtractedTextRequest(), 0)
+            val start = extracted?.let { it.startOffset + it.selectionStart } ?: selectionStart
+            val end = extracted?.let { it.startOffset + it.selectionEnd } ?: selectionEnd
+            if (selecting) {
+                val text = extracted?.text?.toString()
+                val anchor = selectionLockedAnchor.takeIf { it >= 0 } ?: start
+                val head = selectionHead(start, end)
+                if (text != null) selectionDrag.begin(text, extracted.startOffset, anchor, head)
+                else selectionDrag.beginPositions(anchor, head)
+                if (selectionDrag.anchor >= 0 && selectionDrag.head >= 0) connection.setSelection(selectionDrag.anchor, selectionDrag.head)
+            }
+            gestureOrigin = (if (selecting) selectionDrag.head else maxOf(start, end)).coerceAtLeast(0)
             gestureSelecting = selecting
+            selectionGestureActive = selecting
+            gestureEpoch++; selectionSteps.clear(); cursorSteps = 0
+            if (selecting) {
+                reportSelection(selectionDrag.anchor, selectionDrag.head)
+            }
         }
         @JavascriptInterface fun gestureMove(steps: Int) = editInput {
-            val anchor = gestureAnchor
+            val anchor = gestureOrigin
             if (anchor < 0) return@editInput
             val connection = currentInputConnection ?: return@editInput
-            val extracted = connection.getExtractedText(ExtractedTextRequest(), 0) ?: return@editInput
+            if (!gestureSelecting) {
+                selectionDrag.clear()
+                navigateSelection(steps - cursorSteps, 0); cursorSteps = steps
+                return@editInput
+            }
+            val extracted = connection.getExtractedText(ExtractedTextRequest(), 0)
+            if (extracted == null) {
+                navigateSelection(steps - cursorSteps, 0); cursorSteps = steps
+                return@editInput
+            }
             val text = extracted.text?.toString() ?: return@editInput
             val offset = anchor - extracted.startOffset
             if (offset !in 0..text.length) return@editInput
             val head = graphemeStep(text, offset, steps)
-            if (gestureSelecting) {
-                connection.setSelection(extracted.startOffset + minOf(offset, head), extracted.startOffset + maxOf(offset, head))
-                script("globalThis.voxfixCursor?.($head,${text.length})")
-            } else {
-                connection.setSelection(extracted.startOffset + head, extracted.startOffset + head)
-                script("globalThis.voxfixCursor?.($head,${text.length})")
+            cursorSteps = steps
+            if (!selectionDrag.matches(text, extracted.startOffset, extracted.startOffset + extracted.selectionStart, extracted.startOffset + extracted.selectionEnd)) return@editInput
+            selectionDrag.move(extracted.startOffset + head)
+            connection.setSelection(selectionDrag.anchor, selectionDrag.head)
+            reportSelection(selectionDrag.anchor, selectionDrag.head)
+            script("globalThis.voxfixCursor?.($head,${text.length})")
+        }
+        @JavascriptInterface fun gestureEnd() = editInput {
+            selectionGestureActive = false
+            gestureOrigin = -1; gestureSelecting = false; gestureEpoch++; selectionSteps.clear()
+            val selected = currentInputConnection?.getExtractedText(ExtractedTextRequest(), 0)
+            reportSelection(selected?.let { it.startOffset + it.selectionStart } ?: selectionStart, selected?.let { it.startOffset + it.selectionEnd } ?: selectionEnd)
+        }
+        @JavascriptInterface fun gestureLock() = editInput {
+            val connection = currentInputConnection ?: return@editInput
+            val extracted = connection.getExtractedText(ExtractedTextRequest(), 0)
+            val start = extracted?.let { it.startOffset + it.selectionStart } ?: selectionStart
+            val end = extracted?.let { it.startOffset + it.selectionEnd } ?: selectionEnd
+            val head = selectionHead(start, end)
+            if (head < 0) return@editInput
+            selectionDrag.lock(extracted?.text?.toString(), extracted?.startOffset ?: 0, head)
+            selectionLockedAnchor = head
+            connection.setSelection(head, head)
+            reportSelection(head, head)
+        }
+        // 解除起点锁定：把选区收成「活动终点」处的光标。反向拖选后 selectionDrag.head 才是
+        // 手指那一端，不能取较大的索引 —— 那会跳到起点那一侧。
+        @JavascriptInterface fun gestureUnlock() = editInput {
+            val connection = currentInputConnection ?: return@editInput
+            val head = if (selectionDrag.anchor >= 0) selectionDrag.head else selectionEnd
+            selectionDrag.clear(); selectionLockedAnchor = -1
+            selectionGestureActive = false; gestureSelecting = false; gestureOrigin = -1
+            gestureEpoch++; selectionSteps.clear(); cursorSteps = 0
+            if (head >= 0) { connection.setSelection(head, head); reportSelection(head, head) }
+            else reportSelection(selectionStart, selectionEnd)
+        }
+        @JavascriptInterface fun selectionParagraph(direction: Int) = editInput {
+            if (direction != -1 && direction != 1) return@editInput
+            val connection = currentInputConnection ?: return@editInput
+            val extracted = connection.getExtractedText(ExtractedTextRequest(), 0)
+            val text = extracted?.text?.toString()
+            if (extracted == null || text == null) { script("globalThis.voxfixSelectionUnavailable?.()"); return@editInput }
+            val start = extracted.startOffset + extracted.selectionStart
+            val end = extracted.startOffset + extracted.selectionEnd
+            selectionDrag.begin(text, extracted.startOffset, selectionLockedAnchor.takeIf { it >= 0 } ?: start, selectionHead(start, end))
+            val relative = selectionDrag.head - extracted.startOffset
+            if (relative !in 0..text.length || selectionDrag.anchor !in extracted.startOffset..(extracted.startOffset + text.length)) { script("globalThis.voxfixSelectionUnavailable?.()"); return@editInput }
+            val next = ParagraphSelection.boundary(text, relative, direction)
+            // shortcut: 部分宿主只返回局部文本，到局部边界后需滑轨续选，不能假装选到了全文末尾。
+            if ((next == 0 && extracted.startOffset > 0) || next == text.length && (extracted.partialStartOffset >= 0 || extracted.partialEndOffset >= 0)) { script("globalThis.voxfixSelectionUnavailable?.()"); return@editInput }
+            selectionDrag.move(extracted.startOffset + next)
+            connection.setSelection(selectionDrag.anchor, selectionDrag.head)
+            reportSelection(selectionDrag.anchor, selectionDrag.head)
+        }
+        @JavascriptInterface fun gestureMove2D(x: Float, y: Float) {
+            if (!x.isFinite() || !y.isFinite() || kotlin.math.abs(x) > 100000 || kotlin.math.abs(y) > 100000) return
+            editInput {
+                if (!gestureSelecting || gestureOrigin < 0) return@editInput
+                val (columns, lines) = selectionSteps.take(x, y)
+                navigateSelection(columns, lines)
             }
         }
-        @JavascriptInterface fun gestureEnd() = editInput { gestureAnchor = -1; gestureSelecting = false }
+        private fun navigateSelection(columns: Int, lines: Int) {
+            if (columns == 0 && lines == 0) return
+            val connection = currentInputConnection ?: return
+            // 光标贴到文本首/尾后不能再发方向键：宿主会把焦点交给下一个可聚焦的 View，
+            // 光标离开输入框后滑轨怎么拖都找不回来（详见 CursorBoundary）。框选共用 keys 的
+            // 折叠语义，不受此限。
+            val movable = if (gestureSelecting || columns == 0 || canStepCursor(connection, forward = columns > 0)) columns else 0
+            if (movable == 0 && lines == 0) return
+            val generation = inputGeneration; val epoch = gestureEpoch; val ticket = ++navigationTicket
+            val before = selectionStart to selectionEnd
+            fun key(action: Int, code: Int, meta: Int) {
+                val now = SystemClock.uptimeMillis()
+                connection.sendKeyEvent(KeyEvent(now, now, action, code, 0, meta, KeyCharacterMap.VIRTUAL_KEYBOARD, 0, KeyEvent.FLAG_SOFT_KEYBOARD))
+            }
+            val meta = if (gestureSelecting) KeyEvent.META_SHIFT_ON else 0
+            if (gestureSelecting) key(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_SHIFT_LEFT, meta)
+            try {
+                for ((amount, negative, positive) in listOf(Triple(lines, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN), Triple(movable, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT))) {
+                    repeat(kotlin.math.abs(amount).coerceAtMost(if (gestureSelecting) 20 else 100)) {
+                        val code = if (amount < 0) negative else positive
+                        key(KeyEvent.ACTION_DOWN, code, meta); key(KeyEvent.ACTION_UP, code, meta)
+                    }
+                }
+            } finally { if (gestureSelecting) key(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_SHIFT_LEFT, 0) }
+            // 等宿主处理按键后再确认，不把异步输入连接的旧选区当作失败。
+            main.postDelayed({
+                if (generation == inputGeneration && epoch == gestureEpoch && web === owner && ticket == navigationTicket) {
+                    val actual = currentInputConnection?.getExtractedText(ExtractedTextRequest(), 0)
+                    val start = actual?.let { it.startOffset + it.selectionStart } ?: selectionStart
+                    val end = actual?.let { it.startOffset + it.selectionEnd } ?: selectionEnd
+                    selectionDrag.observe(start, end); reportSelection(start, end)
+                    actual?.let { script("globalThis.voxfixCursor?.(${it.selectionEnd},${it.text?.length ?: 0})") }
+                    if (before == (start to end)) script("globalThis.voxfixSelectionBlocked?.()")
+                }
+            }, 180)
+        }
+        // 目标方向还有字符可移动吗。提取文本拿不到时退回「光标前后各取一个字符」的探测；
+        // 探测返回 null（宿主没实现）一律放行，宁可不封也不误封。
+        private fun canStepCursor(connection: InputConnection, forward: Boolean): Boolean {
+            val extracted = connection.getExtractedText(ExtractedTextRequest(), 0)
+            val text = extracted?.text
+            if (extracted != null && text != null) {
+                return CursorBoundary(
+                    hasSelection = extracted.selectionStart != extracted.selectionEnd,
+                    completeText = extracted.partialStartOffset < 0 && extracted.partialEndOffset < 0,
+                    startOffset = extracted.startOffset,
+                    selectionStart = extracted.selectionStart,
+                    selectionEnd = extracted.selectionEnd,
+                    textLength = text.length,
+                ).canStep(forward)
+            }
+            val probe = (if (forward) connection.getTextAfterCursor(1, 0) else connection.getTextBeforeCursor(1, 0)) ?: return true
+            return probe.isNotEmpty()
+        }
         @JavascriptInterface fun edit(action: String) = editInput {
+            if (action != "copy-text") selectionDrag.clear()
+            if (action != "copy-text" && action != "select-all") selectionLockedAnchor = -1
             val id = when (action) {
                 "select-all" -> android.R.id.selectAll
                 "copy-text" -> android.R.id.copy
                 "cut-text" -> android.R.id.cut
+                "paste-text" -> android.R.id.paste
                 "cursor-left", "cursor-right" -> { moveCursor(if (action == "cursor-left") -1 else 1); return@editInput }
                 else -> return@editInput
             }
@@ -553,6 +874,7 @@ class VoxFixImeService : InputMethodService() {
         destroyed = true
         main.removeCallbacks(releaseVoice)
         shown = false
+        hideClipHint()
         cancelRecording()
         destroyKeyboardView()
         pinyin?.close(); pinyin = null

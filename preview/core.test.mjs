@@ -1,4 +1,43 @@
 import assert from 'node:assert/strict';
+import {cursorFeedbackPosition,joystick,joystickLevel,joystickRadii,joystickRho} from './core.mjs';
+// 量「形状」用一组各向同性半径（a=b），这样斜推衰减只剩 n=3 本身带来的那部分；
+// 若 a≠b，衰减里会混进椭圆的各向异性，那是设计使然、不是形状的锅。
+const R={a:150,bUp:150,bDown:150};
+// 触控点本身零速度；任何方向推出去都要有输出；越界只能钉在最高档，不能变成停住。
+assert.equal(joystickRho(0,0,R),0);
+assert.equal(joystickLevel(0,0),0,'触控点本身是唯一零速率的点');
+assert.equal(joystickLevel(0.5,0),0,'短距离推不出速率（门槛 0.78），否则「稍微动一下就跨行」');
+assert.equal(joystickLevel(0.8,0),1);
+assert.equal(joystickLevel(9,0),1,'推到键盘外仍是最高档，不是停住');
+assert.equal(joystickLevel(0.74,1),1,'迟滞：没跌破降档线就不回落');
+assert.equal(joystickLevel(0.7,1),0,'跌破降档线才回落');
+assert.equal(joystickLevel(0.85,0),1,'最外圈才升档');
+assert.equal(joystick.rates.length,2,'只要两个速度分区');
+// 半径随按下点收缩到最小行程，避免贴边按下时向外推不动。
+assert.deepEqual(joystickRadii(20,300,500),{a:joystick.minSide,bUp:300,bDown:500});
+assert.deepEqual(joystickRadii(140,40,10),{a:140,bUp:joystick.minUp,bDown:joystick.minDown});
+// 上下必须分开定半径：滑轨贴着键盘底、向下只剩几十像素，共用一个半径时正下方永远推不动
+// （斜下能推只是因为水平分量在撑 ρ，表现为「只有底下左右两边能用」）。
+const railEdge={a:131,bUp:329,bDown:joystick.minDown};
+assert.equal(joystickLevel(joystickRho(0,-30,railEdge),0),0,'向上 30px 仍是跟手档');
+assert.equal(joystickLevel(joystickRho(0,20,railEdge),0),0,'向下 20px 仍是跟手档，才定位得准行');
+assert.equal(joystickLevel(joystickRho(0,32,railEdge),0),1,'推到键盘底（向下约 32px）才切最快档');
+// 圆角方不该像正方形那样斜推迟钝（正方形斜推要多走 1.41 倍，这里必须在 15% 内）。
+for(const ratio of [0.4,0.8]){
+  const straight=joystickRho(ratio*150,0,R);
+  const diagonal=joystickRho(ratio*150/Math.SQRT2,ratio*150/Math.SQRT2,R);
+  assert(diagonal/straight>0.85,`斜推衰减 ${(1-diagonal/straight).toFixed(3)} 过大`);
+}
+for(const width of [110,148,196,253]){
+  let previous=-Infinity;
+  for(const x of [-10000,-100,0,41,57,width/2,width-57,width-41,width,width+100,width+10000].sort((a,b)=>a-b)){
+    const center=cursorFeedbackPosition(width,x);
+    assert(center-33>=8&&center+33<=width-8,'The whole feedback halo stays inside its 8px inset');
+    assert(center>=previous,'Edge resistance must not reverse the pointer direction');previous=center;
+    assert(Math.abs(center+cursorFeedbackPosition(width,width-x)-width)<1e-9,'Both edges use the same resistance');
+  }
+}
+assert.equal(cursorFeedbackPosition(0,0),0);
 import { defaults, keyboardGeometry, settingsFrom, replaceRange, erase, moveCursor, voiceResult, validateSnippets, addSnippet, validateLearning, learnWord, rankLearned, snippetLimit, validatePhraseGroups, migratePhraseGroups, flattenPhrases, phraseGroupLimit, phraseItemLimit, phraseLengthLimit } from './core.mjs';
 assert.deepEqual(replaceRange('前后',1,1,'中'),{text:'前中后',cursor:2});
 assert.deepEqual(replaceRange('abc',1,3,'你'),{text:'a你',cursor:2});
@@ -67,4 +106,12 @@ assert.throws(()=>validatePhraseGroups([{name:'x',items:['z'.repeat(phraseLength
 assert.deepEqual(settingsFrom({toolbar:['menu','custom:ab12cd','clipboard']}).toolbar,['menu','custom:ab12cd','clipboard']);
 assert.throws(()=>settingsFrom({toolbar:['menu','custom:']}));
 assert.throws(()=>settingsFrom({customToolbar:[{label:'',text:'x'}]}));
+const custom={id:'custom:ab12cd',label:'问候',text:'你好'};
+const customSettings=settingsFrom({toolbar:['menu',custom.id],customToolbar:[custom]});
+assert.deepEqual(settingsFrom(JSON.parse(JSON.stringify(customSettings))).customToolbar,[custom],'Saved/imported toolbar keeps its identity');
+assert.deepEqual(settingsFrom({toolbar:['menu',custom.id],customToolbar:[{label:custom.label,text:custom.text}]}).customToolbar,[custom],'Old entries without IDs reuse their toolbar reference');
+const orphan=settingsFrom({customToolbar:[{label:'旧项',text:'保留旧内容'}]});
+assert(orphan.toolbar.includes(orphan.customToolbar[0].id),'Old content without a reference still has a reachable button');
+assert.throws(()=>settingsFrom({customToolbar:[{...custom,id:'invalid'}]}));
+assert.throws(()=>settingsFrom({customToolbar:[custom,custom]}));
 console.log('PASS: text selection, grapheme deletion/cursor movement, voice cancellation and layout validation');

@@ -26,7 +26,8 @@ try{
       const k=document.getElementById('keyboard'),key=[...k.getElementsByTagName('button')].find(b=>b.dataset.action==='letter'),s=getComputedStyle(key);
       return {height:k.getBoundingClientRect().height,keyHeight:key.getBoundingClientRect().height,font:s.fontSize,radius:s.borderRadius,gap:getComputedStyle(key.parentElement).gap,bg:getComputedStyle(k).backgroundColor,stored:JSON.parse(localStorage.getItem('voxfix-layout-v1'))};
     });
-    assert.equal(result.height,351);assert.equal(result.keyHeight,52);assert.equal(result.font,'22px');assert.equal(result.radius,'7px');assert.equal(result.gap,'4px');assert.equal(result.bg,'rgb(237, 239, 242)');
+    // 键高 = (351 - 候选栏 45 - 底部条 49 - key-rows 上下内边距 5+15 - 行间距 30) / 4 = 51.75。
+    assert.equal(result.height,351);assert.equal(Math.round(result.keyHeight*100)/100,51.75);assert.equal(result.font,'22px');assert.equal(result.radius,'7px');assert.equal(result.gap,'4px');assert.equal(result.bg,'rgb(237, 239, 242)');
     for(const [key,value] of Object.entries(keyboardGeometry))assert.equal(result.stored[key],value);
     assert.equal(result.stored.rememberInput,false);assert.equal(result.stored.clipboardHistory,false);
     assert.equal(await page.locator('input[type="range"],input[type="color"]').count(),0);

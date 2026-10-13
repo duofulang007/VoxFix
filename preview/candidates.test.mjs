@@ -35,11 +35,16 @@ try{
   await page.mouse.up();
   assert(await row.evaluate(el=>el.scrollLeft)>100,'left drag must reveal later candidates');
   assert.equal(await page.locator('#editor').inputValue(),'nin','drag must not commit a candidate');
-  const scroll=await row.evaluate(el=>el.scrollLeft);
   await page.locator('.candidate-expand').click();
-  assert.equal(await row.evaluate(el=>el.scrollLeft),scroll,'opening expanded candidates preserves scroll');
+  // 官方展开候选时顶部候选栏被面板整体取代（K60 实测：面板顶边即键盘顶边），不再重复显示候选条。
+  assert.equal(await page.locator('.candidate-visible').count(),0,'expanded candidates must replace the strip');
+  assert.equal(await page.locator('.candidate-card').count(),1,'expanded panel uses the official white card');
+  assert.equal(await page.locator('.panel-pinyin').count(),1,'expanded panel keeps the nearby-pinyin column');
+  assert.equal(await page.locator('.panel-actions .panel-key').count(),5,'expanded panel keeps the five-key action column');
   assert(await page.locator('.candidate-grid button').evaluateAll(buttons=>buttons.every(b=>b.scrollWidth<=b.clientWidth)),'expanded candidates must fit their content');
-  await page.locator('.candidate-expand').click();
+  await page.locator('.panel-actions [data-action="more-candidates"]').click();
+  await page.waitForTimeout(120);
+  assert.equal(await page.locator('.candidate-visible').count(),1,'closing the panel brings the strip back');
   await row.evaluate(el=>el.scrollLeft=0);
   const cdp=await page.context().newCDPSession(page);
   const x=box.x+box.width-20,y=box.y+box.height/2;
@@ -76,5 +81,67 @@ try{
   await page.locator('#editor').fill('');
   await page.locator('#editor').pressSequentially('srf');
   await page.locator('#phone').screenshot({path:new URL('../docs/candidate-scroll.png',import.meta.url).pathname.slice(1)});
-  console.log('PASS: full text, mouse drag, native touch swipe, no accidental selection, expanded layout, 320/360px widths, fixed density/font, query reset and bundled version');
+  const native=await browser.newPage({viewport:{width:411,height:351},hasTouch:true});
+  const errors=[];native.on('pageerror',error=>errors.push(error.message));
+  await native.addInitScript(()=>{
+    window.calls=[];
+    window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','gestureStart','gestureMove','gestureEnd','edit','ready','resize','refreshClipboard','importClipboard'].map(name=>[name,(...args)=>calls.push([name,...args])]));
+    VoxFixIme.voiceReady=()=>true;VoxFixIme.handReady=()=>false;VoxFixIme.pinyinReady=()=>true;
+    VoxFixIme.pinyinCandidates=raw=>JSON.stringify({preedit:raw,words:['你好','你好吗','你好很高兴认识你','你好很高兴认识你欢迎回来我们明天下午三点在咖啡店见面','你','呢',...Array.from({length:76},(_,i)=>String.fromCodePoint(0x4e00+i))]});
+    VoxFixIme.pinyinChoose=(raw,word)=>{calls.push(['pinyinChoose',raw,word]);return JSON.stringify({committed:true,remaining:'haoma'});};
+  });
+  await native.goto(`http://127.0.0.1:${server.address().port}/`);
+  await native.waitForFunction(()=>typeof voxfixReset==='function'&&document.querySelector('#pinyin-status').textContent.includes('已就绪'));
+  const type=async raw=>{for(const letter of raw)await native.locator(`[data-action="letter"][data-value="${letter.toUpperCase()}"]`).click();};
+  await type('nihaoma');
+  assert.equal(await native.locator('.candidate-expand').count(),1,'official strip has one expand control');
+  assert.equal(await native.locator('.candidate-visible button').first().evaluate(el=>getComputedStyle(el).fontSize),'22px');
+  assert.equal(await native.locator('.candidate-visible button').first().evaluate(el=>getComputedStyle(el).paddingLeft),'17px');
+  await native.locator('.candidate-expand').click();
+  assert.deepEqual(await native.locator('.pinyin-item').allTextContents(),['nin','niu','bi','ji'],'multi-syllable alternatives match the measured nihao case');
+  const geometry=await native.evaluate(()=>{
+    const card=document.querySelector('.candidate-card'),pinyin=document.querySelector('.pinyin-item'),grid=document.querySelector('.candidate-grid'),actions=document.querySelector('.panel-actions');
+    return {height:card.clientHeight,top:card.getBoundingClientRect().top,font:getComputedStyle(grid.firstElementChild).fontSize,pinyinFont:getComputedStyle(pinyin).fontSize,gap:getComputedStyle(actions).gap,border:getComputedStyle(grid.firstElementChild).borderRightWidth};
+  });
+  assert.equal(geometry.height,285);assert.equal(geometry.top,2);assert.equal(geometry.font,'22px');assert.equal(geometry.pinyinFont,'16px');assert.equal(geometry.gap,'6.4px');assert.equal(geometry.border,'0px');
+  const long=native.locator('.candidate-grid [data-value="你好很高兴认识你"]');
+  assert(await long.evaluate(el=>el.clientWidth>=el.scrollWidth),'long phrase uses enough columns without clipping');
+  assert((await long.boundingBox()).width>(await native.locator('.candidate-grid [data-value="你好"]').boundingBox()).width,'long phrase expands beyond the short-word cell');
+  const up=native.locator('[data-action="candidate-page"][data-value="up"]'),down=native.locator('[data-action="candidate-page"][data-value="down"]');
+  assert(await up.isDisabled());assert(await down.isEnabled());
+  await down.click();await native.waitForFunction(()=>document.querySelector('.candidate-grid').scrollTop>200);
+  assert(await up.isEnabled());
+  await native.locator('.candidate-grid').evaluate(el=>el.scrollTop=el.scrollHeight);
+  await native.waitForFunction(()=>document.querySelector('[data-action="candidate-page"][data-value="down"]').disabled);
+  await native.locator('[data-action="candidate-mode"]').click();
+  assert.equal(await native.locator('[data-action="candidate-mode"]').getAttribute('aria-pressed'),'true');
+  assert(await native.locator('.candidate-grid button').evaluateAll(items=>items.every(el=>/^[\u3400-\u9fff]$/u.test(el.textContent))),'character mode shows actual single-character candidates');
+  await native.locator('[data-action="candidate-mode"]').click();
+  assert.equal(await native.locator('.candidate-grid [data-value="你好"]').count(),1,'word mode restores the original list');
+  await native.locator('[data-action="candidate-mode"]').click();
+  await native.locator('.candidate-grid [data-value="你"]').click();
+  assert((await native.evaluate(()=>calls)).some(call=>call[0]==='pinyinChoose'&&call[1]==='nihaoma'&&call[2]==='你'),'character selection keeps the native partial-selection path');
+  await native.evaluate(()=>voxfixReset());
+  await type('xi');await native.locator('[data-action="split"]').click();await type('an');
+  await native.locator('.candidate-expand').click();
+  await native.locator('.pinyin-item').first().click();
+  const composed=(await native.evaluate(()=>calls)).filter(call=>call[0]==='compose').at(-1)[1];
+  assert(composed.endsWith("'an"),'nearby-pinyin replacement preserves an explicit syllable boundary');
+  for(const raw of ['ning','niang']){
+    await native.evaluate(()=>voxfixReset());await type(raw);await native.locator('.candidate-expand').click();
+    const positions=await native.locator('.pinyin-item').evaluateAll(items=>items.map(item=>{
+      const range=document.createRange();range.selectNodeContents(item);
+      const text=range.getBoundingClientRect(),cell=item.getBoundingClientRect();
+      return {word:item.textContent,offset:Math.abs(text.x+text.width/2-cell.x-cell.width/2),inside:text.left>=cell.left&&text.right<=cell.right};
+    }));
+    assert(positions.length>0,'real nearby-pinyin buttons must be present');
+    assert(positions.every(item=>item.offset<1&&item.inside),'nearby pinyin must be centred and complete: '+JSON.stringify(positions));
+  }
+  for(const width of [320,375,411,740]){
+    await native.setViewportSize({width,height:351});
+    await native.locator('[data-action="more-candidates"]').click();await native.locator('.candidate-expand').click();
+    assert(await native.locator('.candidate-grid button').evaluateAll(items=>items.every(el=>el.scrollWidth<=el.clientWidth)),'panel candidates remain complete at '+width+'px');
+  }
+  assert.deepEqual(errors,[]);await native.close();
+  console.log('PASS: complete candidate text, drag/swipe, official typography/geometry, word/character switch, paging boundaries, native partial selection, explicit pinyin boundary and bundled version');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

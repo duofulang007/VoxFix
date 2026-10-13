@@ -1,7 +1,7 @@
-import { defaults, keyboardGeometry, toolbarItems, settingsFrom, replaceRange, erase, moveCursor, voiceResult, validateSnippets, addSnippet, validateLearning, learnWord, rankLearned, snippetLimit, phraseItemLimit, phraseLengthLimit, phraseGroupLimit, flattenPhrases, migratePhraseGroups } from './core.mjs';
+import { defaults, keyboardGeometry, cursorFeedbackPosition, joystick, joystickLevel, joystickRadii, joystickRho, toolbarItems, settingsFrom, replaceRange, erase, moveCursor, voiceResult, validateSnippets, addSnippet, validateLearning, learnWord, rankLearned, snippetLimit, phraseItemLimit, phraseLengthLimit, phraseGroupLimit, flattenPhrases, migratePhraseGroups } from './core.mjs';
 import { LocalVoice, voiceStatus, enableMicrophone } from './voice.mjs';
 import { createVoiceOrb } from './voice-orb.mjs';
-import { loadPinyin, pinyinCandidates, nineCandidates, setPhraseOptions, phraseCandidates, phraseSearch, associationCandidates, pinyinConsumed, hasPinyinMatch } from './pinyin.mjs';
+import { loadPinyin, pinyinCandidates, nineCandidates, setPhraseOptions, phraseCandidates, phraseSearch, associationCandidates, pinyinConsumed, hasPinyinMatch, isSyllable } from './pinyin.mjs';
 import { InkPad } from './ink.mjs';
 import { loadEnglish,loadPersonalEnglish,englishCandidates,hasEnglishWord } from './english.mjs';
 
@@ -25,10 +25,11 @@ if(nativeSettings){nativeSettings.className='snippet-dialog';const close=documen
 let settings = structuredClone(defaults);
 try { const stored = localStorage.getItem('voxfix-layout-v1'); if (stored) {const saved=JSON.parse(stored);settings=settingsFrom(saved);localStorage.setItem('voxfix-layout-v1',JSON.stringify({...saved,...keyboardGeometry}));} } catch { /* Keep malformed or unwritable saved data untouched. */ }
 if(nativeIme&&!settings.toolbar.includes('menu'))settings.toolbar.unshift('menu');
-const state = { page: 'letters', returnPage:'letters', symbolReturn:'letters', language: 'zh', shift: 0, symbol: '常用', locked: false, night: false, clipTab: 'clipboard', popup: null, comp: null, voice: null, hidden: false, emojiTab: 'Emoji', emojiCategory: '常用', layout: '26', voiceTimer: null, cursorDrag: null, clipGroup: 0, clipManage: false, clipSelected: [], clipConfirm: null, clipCandidate: '', toolbarSort: false, clipGroupMenu: null };
+const state = { page: 'letters', returnPage:'letters', symbolReturn:'letters', language: 'zh', shift: 0, symbol: '常用', locked: false, night: false, clipTab: 'clipboard', clipLocked: false, popup: null, comp: null, voice: null, hidden: false, emojiTab: 'Emoji', emojiCategory: '常用', layout: '26', voiceTimer: null, cursorDrag: null, selectionActions: false, clipGroup: 0, clipManage: false, clipSelected: [], clipConfirm: null, clipCandidate: '', toolbarSort: false, clipGroupMenu: null };
+let clipTabTap=null;
 try{const saved=JSON.parse(localStorage.getItem('voxfix-keyboard-v1'));if(saved){if(['9','26','fullhand'].includes(saved.layout))state.layout=saved.layout;if(['zh','en'].includes(saved.language))state.language=saved.language;if(typeof saved.night==='boolean')state.night=saved.night;}}catch{}
 if(nativeIme&&!nativeIme.handReady()&&state.layout==='fullhand'){state.layout='26';saveKeyboard();}
-function saveKeyboard(){fieldPreference=null;try{localStorage.setItem('voxfix-keyboard-v1',JSON.stringify({layout:state.layout,language:state.language,night:state.night}));}catch{}}
+function saveKeyboard(){const preference=fieldPreference||state;try{localStorage.setItem('voxfix-keyboard-v1',JSON.stringify({layout:preference.layout,language:preference.language,night:state.night}));}catch{}}
 let clips = ['有没有免费的', 'https://example.com/演示链接', 'obsidian'];
 // 常用语按官方结构分组存放：每个分组有自己的名称和条目。
 let phraseGroups = [{name:'常用语',items:['常用语示例','example@example.com','稍后回复你']}];
@@ -54,9 +55,177 @@ let emojiQuery='',emojiSearchOpen=false;
 let gesture = null, candidateSuppressUntil=0, toastTimer, speechReady = false, nativeComposition = false;
 // 底部滑轨每一格对应的像素：越小越"无极"（每滑一小段就动一个字），同时大于触摸抖动阈值。
 const cursorStep = 11, cursorHoldDelay = 350;
+let cursorFeedback={clientX:0,visible:false,selecting:false};
+// ── 起点锁定 ────────────────────────────────────────────────────────────────
+// 长按任一条滑轨都在两种状态之间切换「一次」：
+//   未锁定：拖动 = 移动光标，长按 = 把当前光标标定为固定起点并呼出右侧编辑框；
+//   已锁定：拖动 = 只调整选区终点（起点不动），长按 = 把选区收成活动终点处的光标并解除锁定。
+// 键盘底部主轨与编辑框内小轨共用这套手势，区别只有尺寸和位置。
+// 锁定只活在本次输入会话里：换输入框、结束输入或正文让旧起点失效时静默清理。
+let selectedCount=0,localSelection=null,lockedSelection=null,selectionLocked=false;
+const selectionRowStep=28;
+function releaseSelectionLock(){selectionLocked=false;lockedSelection=null;localSelection=null;selectedCount=0;}
+function clearSelectionLock(){releaseSelectionLock();state.selectionActions=false;}
+// 面板可见 ≠ 已锁定：收起面板不动锁定，重新触碰滑轨时状态与收起前一致。
+function lockedNow(){
+  if(!selectionLocked)return false;
+  if(nativeIme&&!localInput)return true;
+  if(lockedSelection&&lockedSelection.editor===editor&&lockedSelection.text===editor.value)return true;
+  releaseSelectionLock();state.selectionActions=false;return false;
+}
+function resetDragDelta(g){g.steps=0;g.dragX=0;g.dragY=0;g.extraX=0;g.extraY=0;delete g.targetX;delete g.targetY;}
+// 二维拖动要按字符索引落点，先量一遍每个字符的坐标。
+function primeSelectionGeometry(g,head){
+  g.origin=head;g.points=selectionPoints();
+  const base=g.points.find(p=>p.index===head)||g.points.at(-1),next=g.points.find(p=>p.y===base.y&&p.x>base.x);
+  g.charWidth=next?next.x-base.x:parseFloat(getComputedStyle(editor).fontSize)||16;
+  g.lineHeight=parseFloat(getComputedStyle(editor).lineHeight)||base.height||20;
+}
+// 锁定起点：把「当前光标」钉成固定起点（有选区时取活动的那一端）。
+function lockSelection(g){
+  if(selectionLocked)return;
+  selectionLocked=true;resetDragDelta(g);g.selecting=true;g.selectionReady=false;
+  state.cursorDrag.selecting=true;state.selectionActions=true;cursorFeedback.selecting=true;
+  if(nativeIme&&!localInput){selectedCount=0;nativeIme.gestureEnd?.();nativeIme.gestureLock?.();nativeIme.gestureStart?.(true);return;}
+  const start=editor.selectionStart,end=editor.selectionEnd;
+  const head=editor.selectionDirection==='backward'?start:end;
+  lockedSelection={editor,text:editor.value,anchor:head};
+  localSelection={editor,text:editor.value,anchor:head,head};
+  editor.setSelectionRange(head,head);selectedCount=0;
+  primeSelectionGeometry(g,head);
+}
+// 已锁定：手势一开始就进入「调终点」模式，长按不再重标起点。
+function beginSelectionAdjust(g){
+  resetDragDelta(g);g.selecting=true;g.selectionReady=true;
+  state.cursorDrag.selecting=true;cursorFeedback.selecting=true;
+  if(nativeIme&&!localInput){nativeIme.gestureStart?.(true);return;}
+  const start=editor.selectionStart,end=editor.selectionEnd;
+  const valid=localSelection?.editor===editor&&localSelection.text===editor.value&&Math.min(localSelection.anchor,localSelection.head)===start&&Math.max(localSelection.anchor,localSelection.head)===end;
+  const head=valid?localSelection.head:editor.selectionDirection==='backward'?start:end;
+  if(!valid)localSelection={editor,text:editor.value,anchor:lockedSelection?.editor===editor&&lockedSelection.text===editor.value?lockedSelection.anchor:start,head};
+  editor.setSelectionRange(Math.min(localSelection.anchor,head),Math.max(localSelection.anchor,head),head<localSelection.anchor?'backward':'forward');
+  primeSelectionGeometry(g,head);
+  selectedCount=characterCount(editor.value.slice(Math.min(localSelection.anchor,head),Math.max(localSelection.anchor,head)));
+}
+// 解除锁定：把选区收成「活动终点」处的光标。反向拖选后 head 才是手指那一端，
+// 不能用较大的索引 —— 那会跳到起点那一侧。
+function unlockSelection(g){
+  const native=nativeIme&&!localInput;
+  let head=-1;
+  if(native)nativeIme.gestureUnlock?.();
+  else{
+    head=localSelection&&localSelection.editor===editor&&localSelection.text===editor.value?localSelection.head:(editor.selectionDirection==='backward'?editor.selectionStart:editor.selectionEnd);
+    if(head>=0)editor.setSelectionRange(head,head);
+  }
+  releaseSelectionLock();
+  // 同一次长按后续的拖动不再移动任何东西，抬手后滑轨恢复自由移动。
+  if(g){g.selecting=false;g.selectionReady=false;g.ceased=true;haltJoystick(g);}
+  if(state.cursorDrag)state.cursorDrag.selecting=false;
+  cursorFeedback.selecting=false;
+}
+function characterCount(text){return [...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(text)].length;}
+function selectionPoints(){
+  const style=getComputedStyle(editor),mirror=document.createElement('div');
+  for(const property of ['font','lineHeight','letterSpacing','padding','borderWidth','boxSizing','wordBreak','overflowWrap','textIndent'])mirror.style[property]=style[property];
+  Object.assign(mirror.style,{position:'absolute',left:'-100000px',top:'0',width:editor.clientWidth+'px',whiteSpace:editor.tagName==='TEXTAREA'?'pre-wrap':'pre',overflowWrap:'break-word',border:'0',visibility:'hidden'});
+  const segments=[...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(editor.value)];
+  for(const {segment,index} of segments){const span=document.createElement('span');span.textContent=segment;span.dataset.index=index;mirror.append(span);}
+  const end=document.createElement('span');end.textContent='\u200b';end.dataset.index=editor.value.length;mirror.append(end);document.body.append(mirror);
+  const rect=mirror.getBoundingClientRect(),points=[...mirror.children].map(span=>{const r=span.getBoundingClientRect();return {index:Number(span.dataset.index),x:r.left-rect.left,y:r.top-rect.top+r.height/2,height:r.height};});
+  mirror.remove();return points;
+}
+function moveSelection(x,y){
+  const g=gesture;if(!g?.selecting)return;
+  const dx=x-(g.dragX||0),dy=y-(g.dragY||0);g.dragX=x;g.dragY=y;
+  if(nativeIme&&!localInput){
+    if(typeof nativeIme.gestureMove2D==='function')nativeIme.gestureMove2D(dx,dy);
+    else nativeIme.gestureMove?.(Math.trunc(x/cursorStep));
+    return;
+  }
+  if(!localSelection||localSelection.editor!==editor||localSelection.text!==editor.value)return;
+  const base=g.points.find(p=>p.index===g.origin)||g.points.at(-1);
+  g.targetX=(g.targetX??base.x)+dx/cursorStep*g.charWidth;
+  g.targetY=Math.max(g.points[0].y,Math.min(g.points.at(-1).y,(g.targetY??base.y)+dy/selectionRowStep*g.lineHeight));
+  const targetX=g.targetX,targetY=g.targetY;
+  const nearestY=g.points.reduce((best,p)=>Math.abs(p.y-targetY)<Math.abs(best-targetY)?p.y:best,base.y);
+  const point=g.points.filter(p=>Math.abs(p.y-nearestY)<1).reduce((best,p)=>Math.abs(p.x-targetX)<Math.abs(best.x-targetX)?p:best);
+  const row=g.points.filter(p=>Math.abs(p.y-nearestY)<1);g.targetX=Math.max(row[0].x,Math.min(row.at(-1).x,g.targetX));
+  localSelection.head=point.index;
+  const {anchor,head}=localSelection;editor.setSelectionRange(Math.min(anchor,head),Math.max(anchor,head),head<anchor?'backward':'forward');
+  const height=editor.clientHeight;editor.scrollTop=Math.max(0,Math.min(editor.scrollTop,point.y-12));if(point.y>editor.scrollTop+height-12)editor.scrollTop=point.y-height+24;
+  selectedCount=characterCount(editor.value.slice(Math.min(anchor,head),Math.max(anchor,head)));syncSelectionFeedback();
+}
+function syncSelectionFeedback(){
+  const count=keyboard.querySelector('.selection-count');if(count)count.textContent=selectedCount<0?'已选文字':`已选 ${selectedCount} 字`;
+  for(const button of keyboard.querySelectorAll('.selection-editor [data-action="copy-text"],.selection-editor [data-action="cut-text"]'))button.disabled=selectedCount===0;
+}
+function moveCursorGesture(g){
+  const steps=Math.trunc((g.lastX-g.x)/cursorStep)+g.joy.steps;
+  if(steps===g.steps)return;
+  g.steps=steps;
+  if(nativeIme&&!localInput){nativeIme.gestureMove?.(steps);return;}
+  const position=moveCursor(editor.value,editor.selectionEnd,steps-(g.cursorSteps||0));g.cursorSteps=steps;
+  localSelection=null;editor.setSelectionRange(position,position);
+  keyboard.querySelector('.cursor-zone')?.setAttribute('aria-valuenow',position);
+}
+// 摇杆速率档：手指停在远处不动、光标也要继续走，所以按帧推进而不是按位移。
+// 必须攒小数 —— 8 字/秒 ÷ 60fps = 0.13 步/帧，直接取整永远是 0，光标会一动不动。
+// dt 夹到 50ms：WebView 切后台回来时 rAF 会跳一大帧，不夹会瞬间冲出去几十个字。
+// 摇杆速率档：手指停在远处不动、光标/选区也要继续走，所以按帧推进而不是按位移。
+// 必须攒小数 —— 8 字/秒 ÷ 60fps = 0.13 步/帧，直接取整永远是 0，光标会一动不动。
+// dt 夹到 50ms：WebView 切后台回来时 rAF 会跳一大帧，不夹会瞬间冲出去几十个字。
+// 移动光标是一维（方向只取 dx 符号）；框选是二维，按单位方向在两个轴上同时推进。
+function jogCursor(g){
+  if(g.joy.raf)return;
+  const frame=ts=>{
+    g.joy.raf=0;
+    if(gesture!==g||!g.joy.rate)return;
+    const dt=Math.min(.05,(ts-(g.joy.ts||ts))/1000);g.joy.ts=ts;
+    if(g.selecting){
+      const length=Math.hypot(g.joy.dx,g.joy.dy)||1;
+      g.extraX+=g.joy.dx/length*g.joy.rate*cursorStep*dt;
+      g.extraY+=g.joy.dy/length*g.joy.rate*selectionRowStep*dt;
+      moveSelection(g.lastX-g.x+g.extraX,g.lastY-g.y+g.extraY);
+    }else{
+      g.joy.acc+=dt*g.joy.rate;
+      const whole=Math.trunc(g.joy.acc);
+      if(whole){g.joy.acc-=whole;g.joy.steps+=whole;moveCursorGesture(g);}
+    }
+    g.joy.raf=requestAnimationFrame(frame);
+  };
+  g.joy.raf=requestAnimationFrame(frame);
+}
+// 框选：算一次「离长按激活点多远」→ 档位 → 速率，再交给 rAF。就位完成时也必须调一次——
+// 「垂直向上拖」的那步 pointermove 会走 lifting 分支提前 return，不在这里启动就永远不会持续扩展。
+function joystickSync(g,x,y){
+  const joy=g.joy;
+  joy.dx=x-joy.originX;joy.dy=y-joy.originY;
+  joy.level=joystickLevel(joystickRho(joy.dx,joy.dy,joy),joy.level);
+  const rate=joystick.rates[joy.level];
+  if(rate!==joy.rate){joy.rate=rate;joy.ts=0;}
+  jogCursor(g);
+}
+// 摇杆原点 = 长按激活点，此后不再变（理由见 selectionReady 里的说明）。
+function rejoy(g,x,y){
+  const kb=keyboard.getBoundingClientRect();
+  g.joy={...g.joy,...joystickRadii(Math.min(x-kb.left,kb.right-x),y-kb.top,kb.bottom-y),originX:x,originY:y,dx:0,dy:0,level:0,rate:0,acc:0,steps:0,ts:0};
+}
+// 停掉正在跑的摇杆速率（原生的「选区被阻止」和重置钩子都要用）。
+function haltJoystick(g=gesture){
+  if(!g?.joy)return;
+  g.joy.rate=0;g.joy.level=0;
+  if(g.joy.raf){cancelAnimationFrame(g.joy.raf);g.joy.raf=0;}
+}
+function selectionReady(g,x=g.lastX,y=g.lastY){
+  if(gesture!==g)return;
+  // 不重设摇杆原点：原点固定为「长按激活点」。若跟着手指走，就位后停住时 ρ 立刻回 0，
+  // 选区又变回「不动就不扩展」——那正是这套摇杆要解决的问题。
+  clearTimeout(g.liftTimer);g.selectionReady=true;g.x=x;g.y=y;g.dragX=0;g.dragY=0;g.extraX=0;g.extraY=0;joystickSync(g,x,y);
+  syncSelectionFeedback();
+}
 // 表情长按连发、候选词长按、工具栏长按排序共用的按住计时状态。
 let itemHold = null, toolbarHold = null, toolbarDrag = null, groupHold = null;
-let context='',associatedWords=[];
+let context='',associatedWords=[],candidateMode='words',candidateGridWords=[],candidateGridShown=0;
 function rememberContext(text){context=(context+text).match(/[\u3400-\u9fff]+$/)?.[0]?.slice(-6)||'';associatedWords=associationCandidates(context,240);}
 const scrollPositions=new Map(),nightShade=document.createElement('div');
 nightShade.id='night-shade';nightShade.className='night-shade';nightShade.hidden=true;$('phone').append(nightShade);
@@ -89,8 +258,8 @@ const icons = {
 };
 function icon(name, cls = '') { return `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.menu}</svg>`; }
 function esc(value) { return String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
-function button(label, action, value = '', cls = '', body = '') {
-  return `<button type="button" class="${cls}" data-action="${action}" data-value="${esc(value)}" aria-label="${esc(label)}">${body || esc(label)}</button>`;
+function button(label, action, value = '', cls = '', body = '', extra = '') {
+  return `<button type="button" class="${cls}" data-action="${action}" data-value="${esc(value)}" aria-label="${esc(label)}"${extra}>${body || esc(label)}</button>`;
 }
 function key(label, action = 'insert', value = label, cls = '', hint = '') {
   return button(label, action, value, `key ${cls}`, (hint ? `<span class="hint">${esc(hint)}</span>` : '') + esc(label));
@@ -107,7 +276,8 @@ function clipHeader() {
     const remove = `<button type="button" class="ctl danger" data-action="clip-manage-delete" aria-label="删除所选"${state.clipSelected.length ? '' : ' disabled'}>${icon('trash')}</button>`;
     return `<div class="panel-title">${ctl('clip-manage', '完成', 'check')}<span class="title-note">已选 ${state.clipSelected.length} 条</span>${state.clipSelected.length < list.length ? button('全选', 'clip-select-all', '', 'text-action') : ''}${remove}</div>`;
   }
-  const tabs = `<div class="tabs-pill">${button('剪贴板', 'clip-tab', 'clipboard', state.clipTab === 'clipboard' ? 'selected' : '')}${button('常用语', 'clip-tab', 'phrases', state.clipTab === 'phrases' ? 'selected' : '')}</div>`;
+  const clipTab = `<button type="button" class="${state.clipTab === 'clipboard' ? 'selected' : ''}${state.clipLocked ? ' clip-locked' : ''}" data-action="clip-tab" data-value="clipboard" aria-label="剪贴板，${state.clipLocked ? '已锁定，双击解锁' : '双击锁定'}" aria-pressed="${state.clipLocked}">剪贴板${state.clipLocked ? icon('lock', 'clip-lock') : ''}</button>`;
+  const tabs = `<div class="tabs-pill">${clipTab}${button('常用语', 'clip-tab', 'phrases', state.clipTab === 'phrases' ? 'selected' : '')}</div>`;
   const trailing = state.clipTab === 'clipboard' ? ctl('clip-manage-menu', '更多管理操作', 'more') : button('添加常用语', 'snippet-add', '', 'ctl', icon('add')) + ctl('clip-manage-menu', '更多管理操作', 'more');
   return `<div class="panel-title">${ctl('return', '返回键盘', 'hide')}${tabs}${trailing}</div>`;
 }
@@ -116,16 +286,75 @@ function sheet(title, rows) {
   return `<div class="clip-menu-backdrop" data-action="clip-close"><div class="clip-menu-sheet"><div class="clip-menu-title">${esc(title)}</div>${rows.map(([action, label, cls]) => button(label, action, '', 'row' + (cls ? ' ' + cls : ''))).join('')}${button('取消', 'clip-close', '', 'clip-menu-cancel')}</div></div>`;
 }
 function footer() {
-  const total=nativeIme&&!localInput?nativeCursor.total:editor.value.length,cursor=nativeIme&&!localInput?nativeCursor.position:editor.selectionEnd,position=total?cursor/total*100:50;
-  const drag=state.cursorDrag,zoneClass='cursor-zone'+(drag?drag.selecting?' selecting':' dragging':'');
-  return `<div class="keyboard-footer">${settings.footerSwitcher ? button('底部输入法菜单', 'switcher', '', '', icon('keyboard')) : '<span class="empty"></span>'}<div class="${zoneClass}" data-action="cursor-gesture" role="slider" tabindex="0" aria-label="底部光标滑轨，左右拖动移动光标，长按后拖动框选文字" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${cursor}"><span class="cursor-track" ${drag?'':'hidden'}><i style="left:${position}%"></i></span></div>${settings.footerClipboard ? button('底部剪贴板', 'clipboard', '', '', icon('copy')) : '<span class="empty"></span>'}</div>`;
+  const total=nativeIme&&!localInput?nativeCursor.total:editor.value.length,cursor=nativeIme&&!localInput?nativeCursor.position:editor.selectionEnd;
+  const drag=state.cursorDrag,locked=lockedNow(),zoneClass='cursor-zone'+(drag?drag.selecting?' selecting':' dragging':'')+(locked?' locked':'');
+  const label=locked?'起点锁定，拖动调整终点，长按解除锁定':'底部中间空白可拖动光标，长按后拖动框选文字';
+  return `<div class="keyboard-footer">${settings.footerSwitcher ? button('底部输入法菜单', 'switcher', '', '', icon('keyboard')) : '<span class="empty"></span>'}<div class="${zoneClass}" data-action="cursor-gesture" role="slider" tabindex="0" aria-label="${label}" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${cursor}"><span class="cursor-hint"></span><span class="cursor-focus"></span><span class="cursor-contact"></span></div>${settings.footerClipboard ? button('底部剪贴板', 'clipboard', '', '', icon('copy')) : '<span class="empty"></span>'}</div>${joyGuide()}`;
 }
-// 「来自剪贴板」：官方在候选栏展示刚复制的内容，验证码还会提示不要转发。
+function selectionEditor(){
+  if(!state.selectionActions||state.voice||state.hidden)return '';
+  // 面板只由外部点击关闭，页头不再放「完成」：左边选中字数、右边「全选」，中间不留空位。
+  const locked=lockedNow(),mode=locked?'起点锁定 · 拖动调整终点':'移动光标 · 长按锁定起点';
+  const zero=selectedCount===0?' disabled':'';
+  return `<div class="selection-editor-backdrop" data-action="selection-close"></div><section class="selection-editor" aria-label="选字编辑框"><div class="selection-editor-header"><span class="selection-count">${selectedCount<0?'选字':`已选 ${selectedCount} 字`}</span>${button('全选','select-all','','selection-all','全选')}</div><div class="selection-paragraphs">${button('向上选段','selection-paragraph','-1','','↑ 向上选段',locked?'':' disabled')}${button('向下选段','selection-paragraph','1','','↓ 向下选段',locked?'':' disabled')}</div><div class="cursor-zone selection-mini-track${locked?' locked':''}" data-action="cursor-gesture" data-track="mini" role="slider" tabindex="0" aria-label="${esc(mode)}"><span class="cursor-hint"></span><span class="cursor-focus"></span><span class="cursor-contact"></span><span class="selection-mini-label">${esc(mode)}</span><span class="selection-mini-left">←</span><span class="selection-mini-right">→</span></div><div class="selection-editor-clipboard">${button('剪切','cut-text','','',`剪切`,zero)}${button('复制','copy-text','','selection-copy','复制',zero)}${button('粘贴',nativeIme&&!localInput?'paste-text':'paste-last','','','粘贴')}</div></section>`;
+}
+function feedbackZone(){return keyboard.querySelector(cursorFeedback.mini?'.selection-mini-track':'.keyboard-footer .cursor-zone');}
+// 摇杆辅助线：门槛环画出「推到这里才开始加速」，原点标出「长按激活的中心」，
+// 连线给出当前推力方向。没有它根本看不出该往哪拖、拖多远。
+function joyGuide() {
+  return '<div class="joy-guide" hidden><i class="joy-band"></i><i class="joy-ray"></i><i class="joy-origin"></i></div>';
+}
+function syncJoyGuide() {
+  const guide=keyboard.querySelector('.joy-guide');if(!guide)return;
+  const joy=gesture?.joy;
+  if(!joy||!cursorFeedback.visible||gesture?.mini){guide.hidden=true;return;}
+  guide.hidden=false;
+  const kb=keyboard.getBoundingClientRect();
+  const ox=joy.originX-kb.left,oy=joy.originY-kb.top;
+  // 环画在「最后一档的门槛」上，不是 ρ=1 的边界——那才是实际开始加速的位置。
+  const gate=joystick.gates[joystick.gates.length-1];
+  const halfW=Math.max(2,joy.a*gate),up=Math.max(2,joy.bUp*gate),down=Math.max(2,joy.bDown*gate);
+  const height=up+down;
+  const band=guide.querySelector('.joy-band');
+  band.style.cssText=`left:${ox-halfW}px;top:${oy-up}px;width:${halfW*2}px;height:${height}px;border-radius:50% / ${(up/height*100).toFixed(2)}% ${(up/height*100).toFixed(2)}% ${(down/height*100).toFixed(2)}% ${(down/height*100).toFixed(2)}%`;
+  const origin=guide.querySelector('.joy-origin');
+  origin.style.cssText=`left:${ox-4}px;top:${oy-4}px`;
+  const dx=cursorFeedback.clientX-kb.left-ox,dy=cursorFeedback.clientY-kb.top-oy;
+  const ray=guide.querySelector('.joy-ray');
+  ray.style.cssText=`left:${ox}px;top:${oy}px;width:${Math.hypot(dx,dy).toFixed(1)}px;transform:rotate(${(Math.atan2(dy,dx)*180/Math.PI).toFixed(1)}deg)`;
+  guide.classList.toggle('fast',joy.level>0);
+}
+function setHintOpacity(zone,value){
+  const hint=zone.querySelector('.cursor-hint');if(!hint)return;
+  // 锁定态的短线亮度由 CSS 决定（.locked），别用内联值把它压回拖动时的透明度。
+  if(zone.classList.contains('locked'))hint.style.removeProperty('opacity');
+  else hint.style.opacity=String(value);
+}
+function syncCursorFeedback() {
+  syncJoyGuide();
+  const zone=feedbackZone();if(!zone||!cursorFeedback.visible)return;
+  const bounds=zone.getBoundingClientRect(),x=cursorFeedbackPosition(bounds.width,cursorFeedback.clientX-bounds.left);
+  zone.classList.toggle('selecting',cursorFeedback.selecting);zone.classList.toggle('dragging',!cursorFeedback.selecting);
+  const line=zone.querySelector('.cursor-contact'),focus=zone.querySelector('.cursor-focus');
+  line.style.transform=`translateX(${x-18}px) scaleX(${cursorFeedback.selecting?1.12:1})`;focus.style.transform=`translateX(${x-33}px)`;
+  line.style.opacity='.88';focus.style.opacity='.7';setHintOpacity(zone,0);
+}
+function fadeCursorFeedback() {
+  syncCursorFeedback();cursorFeedback.visible=false;
+  const zone=feedbackZone();if(!zone)return;
+  const duration=matchMedia('(prefers-reduced-motion: reduce)').matches?0:125;
+  for(const node of zone.querySelectorAll('.cursor-contact,.cursor-focus'))node.animate([{opacity:node.style.opacity||0},{opacity:0}],{duration,easing:'cubic-bezier(.23,1,.32,1)',fill:'forwards'});
+  zone.classList.remove('dragging','selecting');setHintOpacity(zone,.23);
+}
+// 「来自剪贴板」：官方在候选栏展示刚复制的内容。标签（验证码时换成防转发提示）悬在键盘上沿之上、
+// 不占键盘高度：真机是原生 popup 窗口（clipHint 桥接，与官方 window 一致），网页原型用同样位置的浮层。
+function clipCandidateLabel(){
+  return /^\d{4,6}$/.test(state.clipCandidate.trim())?'请勿转发验证码，避免财产损失':'来自剪贴板';
+}
 function clipCandidateBar(){
   const text=state.clipCandidate;
   if(!text)return '';
-  const hint=/^\d{4,6}$/.test(text.trim())?'请勿转发验证码，避免财产损失':'';
-  return `<div class="candidate-bar clip-candidate"><span class="clip-source">来自剪贴板</span>${button(text.slice(0,40),'clip-candidate-insert',text,'','')}${hint?`<span class="clip-hint">${esc(hint)}</span>`:''}</div>`;
+  return `<div class="clip-preview"><span class="clip-preview-source">${esc(clipCandidateLabel())}</span><div class="candidate-bar clip-candidate">${button(text,'clip-candidate-insert',text,'clip-preview-text',esc(text))}${button('关闭剪贴板预览','clip-candidate-dismiss','','clip-preview-close','<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/></svg>')}</div></div>`;
 }
 function toolbarItemButton(key){
   if(String(key).startsWith('custom:')){
@@ -142,7 +371,7 @@ function toolbarItemButton(key){
 }
 function toolbar() {
   if (state.comp) return `<div class="candidate-bar">${candidateStrip(currentCandidates())}${button('更多候选', 'more-candidates', '', 'candidate-expand', icon(state.page==='candidates'?'hide':'forward'))}</div>`;
-  if(state.language==='zh'&&associatedWords.length&&(!privateField||localInput))return `<div class="candidate-bar">${candidateStrip(associatedWords,'association-candidate')}${button('功能菜单','menu','','candidate-expand',icon('menu'))}${button('更多候选','more-candidates','','candidate-expand',icon(state.page==='candidates'?'hide':'forward'))}</div>`;
+  if(state.language==='zh'&&associatedWords.length&&(!privateField||localInput))return `<div class="candidate-bar">${candidateStrip(associatedWords,'association-candidate')}${button('更多候选','more-candidates','','candidate-expand',icon(state.page==='candidates'?'hide':'forward'))}</div>`;
   if(englishPrefix&&!privateField&&state.language==='en')return `<div class="candidate-bar">${candidateStrip(englishCandidates(englishPrefix),'english-candidate')}</div>`;
   if(state.toolbarSort)return `<div class="candidate-bar clip-candidate"><span class="clip-source">拖动图标排序</span>${button('完成','toolbar-sort-done','','toolbar-done')}<span class="clip-hint">${settings.toolbar.some(key=>String(key).startsWith('custom:'))?'点自定义项上的 × 可移除':'长按自定义项无法移除'}</span></div><div class="toolbar toolbar-sort">${settings.toolbar.map(toolbarItemButton).join('')}</div>`;
   const clipBar=state.clipCandidate&&settings.clipboardCandidate?clipCandidateBar():'';
@@ -150,7 +379,7 @@ function toolbar() {
   return clipBar||bar;
 }
 function candidateStrip(words,action='candidate') {
-  return `<div class="candidate-visible" tabindex="0" aria-label="候选字，左右滑动浏览" data-query="${esc(state.comp?.raw||words.join(','))}" style="--candidate-count:${settings.candidateCount};--candidate-font:${settings.candidateFont}px">${words.map(word=>button('候选：'+word,action,word,'candidate-hold',esc(word))).join('')}</div>`;
+  return `<div class="candidate-visible" tabindex="0" aria-label="候选字，左右滑动浏览" data-query="${esc(state.comp?.raw||words.join(','))}" style="--candidate-count:${settings.candidateCount}">${words.map(word=>button('候选：'+word,action,word,'candidate-hold',esc(word))).join('')}</div>`;
 }
 function currentCandidates() {
   if(!state.comp)return associatedWords;
@@ -166,7 +395,53 @@ function currentCandidates() {
   }
   return words.length?words:[state.comp.raw];
 }
-function candidatePanel(){return `${toolbar()}<div class="candidate-spelling">${esc(state.comp?.raw||'')}</div><div class="candidate-grid" style="--candidate-font:${settings.candidateFont}px">${currentCandidates().map(word=>button('候选：'+word,state.comp?'candidate':'association-candidate',word,'candidate-hold',esc(word))).join('')}</div><div class="candidate-controls key-row">${func('分词','split')}${func('删除','delete','delete')}${func('返回键盘','more-candidates','back')}</div>${footer()}`;}
+// 展开候选面板：按讯飞小米版 K60 真机实测的三栏结构还原
+// （左侧相近拼音列 / 中间 4 列候选网格 / 右侧操作列），不再在面板里重复顶部候选栏。
+const NEIGHBOR_KEYS={q:'was',w:'qeasd',e:'wrsdf',r:'etdfg',t:'ryfgh',y:'tughj',u:'yihjk',i:'uojkl',o:'ipkl',p:'ol',a:'qwszx',s:'awedzxc',d:'serfxcv',f:'drtgcvb',g:'ftyhvbn',h:'gyujbnm',j:'huiknm',k:'jiulm',l:'kop',z:'asx',x:'zsdc',c:'xsdfv',v:'cdfgb',b:'vfghn',n:'bghjm',m:'nhjk'};
+const PINYIN_FINALS=['iang','iong','uang','ueng','uai','uan','iao','ian','ing','ong','ang','eng','ai','ei','ui','ao','ou','iu','ie','ue','ve','er','an','en','in','un','ia','ua','uo','a','o','e','i','u','v'];
+function pinyinFinal(syllable){for(const final of PINYIN_FINALS)if(syllable.endsWith(final))return final;return '';}
+function firstSyllable(raw){const clean=(raw||'').split("'")[0].toLowerCase();for(let size=Math.min(6,clean.length);size>=1;size--){const part=clean.slice(0,size);if(isSyllable(part))return part;}return '';}
+// 官方左列实测：ni→bi/ji/mi、hao→bao/gao，即首个音节的声母换成键盘相邻键后的合法拼音，末尾补自身。
+function nearbyPinyin(raw){
+  const first=firstSyllable(raw);
+  if(!first)return [];
+  const final=pinyinFinal(first),head=first.slice(0,first.length-final.length);
+  if(head.length!==1||!final)return [];
+  const picks=[];
+  for(const letter of NEIGHBOR_KEYS[head]||''){const candidate=letter+final;if(isSyllable(candidate)&&!picks.includes(candidate))picks.push(candidate);}
+  picks.sort();
+  if(raw.length>first.length){
+    // shortcut: 仅复用实测的 n/u 尾音和邻键变体，获得完整易混拼音表后替换。
+    const variants=['n','u'].map(tail=>first+tail).filter(isSyllable);
+    return [...new Set([...variants,...picks])].slice(0,4);
+  }
+  return [...picks.slice(0,3),first];
+}
+function candidatePanel(){
+  const picks=nearbyPinyin(state.comp?.raw||''),words=currentCandidates();
+  const characters=words.filter(word=>/^[\u3400-\u9fff]$/u.test(word)),chars=candidateMode==='characters';
+  const mode=button(chars?'切换词候选':'切换字候选','candidate-mode','','panel-key key function',`<span class="candidate-mode-label"><span${chars?'':' class="selected"'}>词</span><span class="mode-divider">/</span><span${chars?' class="selected"':''}>字</span></span>`).replace('<button ',`<button aria-pressed="${chars}"${!state.comp||!characters.length?' disabled':''} `);
+  candidateGridWords=chars?characters:words;candidateGridShown=Math.min(96,candidateGridWords.length);
+  return `<div class="candidate-panel"><div class="candidate-card"><div class="panel-pinyin" aria-label="相近拼音">${picks.map(syllable=>button(syllable,'candidate-pinyin',syllable,'pinyin-item',esc(syllable))).join('')}</div><div class="candidate-grid">${candidateCells(candidateGridWords.slice(0,candidateGridShown))}</div></div><div class="panel-actions">${mode}${button('删除','delete','','panel-key key function',icon('delete'))}${button('上一页','candidate-page','up','panel-key key function',icon('hide','flip'))}${button('下一页','candidate-page','down','panel-key key function',icon('hide'))}${button('返回键盘','more-candidates','','panel-key key function','返回')}</div></div>${footer()}`;
+}
+function candidateCells(words){return words.map(word=>button('候选：'+word,state.comp?'candidate':'association-candidate',word,'candidate-hold',`<span class="candidate-word">${esc(word)}</span>`)).join('');}
+function appendCandidates(){
+  const grid=keyboard.querySelector('.candidate-grid');if(!grid||candidateGridShown>=candidateGridWords.length)return false;
+  const start=candidateGridShown;candidateGridShown=Math.min(start+96,candidateGridWords.length);
+  grid.insertAdjacentHTML('beforeend',candidateCells(candidateGridWords.slice(start,candidateGridShown)));
+  layoutCandidateGrid([...grid.children].slice(start));return true;
+}
+function layoutCandidateGrid(newItems){
+  const grid=keyboard.querySelector('.candidate-grid');if(!grid)return;
+  const width=grid.clientWidth,items=newItems||[...grid.children];
+  const widths=items.map(item=>item.firstElementChild.getBoundingClientRect().width+16);
+  items.forEach((item,index)=>{item.style.gridColumn=`span ${Math.min(4,Math.ceil(widths[index]/(width/4)))}`;item.classList.toggle('wrap-word',widths[index]>width);});
+}
+function updateCandidatePages(){
+  const grid=keyboard.querySelector('.candidate-grid');if(!grid)return;
+  keyboard.querySelector('[data-action="candidate-page"][data-value="up"]').disabled=grid.scrollTop<=1;
+  keyboard.querySelector('[data-action="candidate-page"][data-value="down"]').disabled=candidateGridShown>=candidateGridWords.length&&grid.scrollTop+grid.clientHeight>=grid.scrollHeight-1;
+}
 const upperHints = ['1','2','3','4','5','6','7','8','9','0'];
 const middleHints = ['~','!','@','/','%','“','”','*','?'];
 const bottomHints = ['(',')','-','_',':',';','`'];
@@ -219,31 +494,41 @@ function createPhraseGroup(rawName){
   const name=String(rawName||'').trim();
   groupNameError(name,-1);
   if(phraseGroups.length>=phraseGroupLimit)throw Error('分组数目已达上限（'+phraseGroupLimit+' 个）');
+  const previous=phraseGroups;
   phraseGroups=[...phraseGroups,{name,items:[]}];
-  state.clipGroup=phraseGroups.length-1;state.clipTab='phrases';saveSnippets();render();
+  if(!saveSnippets()){phraseGroups=previous;throw Error('未能保存，分组名称已保留，请重试');}
+  state.clipGroup=phraseGroups.length-1;state.clipTab='phrases';render();
   toast('已新建分组「'+name+'」');
   return name;
 }
 function renamePhraseGroup(index,rawName){
   const name=String(rawName||'').trim();
   groupNameError(name,index);
-  phraseGroups=phraseGroups.map((group,i)=>i===index?{name,items:group.items}:group);
-  saveSnippets();render();toast('分组已改名为「'+name+'」');
+  const group=phraseGroups[index],previous=group.name;
+  group.name=name;
+  if(!saveSnippets()){group.name=previous;throw Error('未能保存，分组名称已保留，请重试');}
+  render();toast('分组已改名为「'+name+'」');
 }
 function deletePhraseGroup(index){
   const group=phraseGroups[index];
   if(!group)return;
   if(phraseGroups.length<=1)throw Error('至少要保留一个常用语分组');
-  groupUndo={groups:phraseGroups,index:state.clipGroup};
+  const previous=phraseGroups;
   phraseGroups=phraseGroups.filter((_,i)=>i!==index);
+  if(!saveSnippets()){phraseGroups=previous;throw Error('未能保存，分组没有删除，请重试');}
+  groupUndo={group,index};
   state.clipGroup=Math.max(0,Math.min(state.clipGroup>index?state.clipGroup-1:state.clipGroup,phraseGroups.length-1));
   state.clipGroupMenu=null;snippetUndo=null;
-  saveSnippets();render();toast('已删除分组「'+group.name+'」，可在管理菜单里撤销。');
+  render();toast('已删除分组「'+group.name+'」，可在管理菜单里撤销。');
 }
 function undoGroupDelete(){
   if(!groupUndo)return;
-  phraseGroups=groupUndo.groups;state.clipGroup=Math.min(groupUndo.index,phraseGroups.length-1);groupUndo=null;
-  saveSnippets();render();toast('已恢复分组');
+  if(phraseGroups.length>=phraseGroupLimit){toast('分组已达上限，请先腾出位置再撤销');return;}
+  if(phraseGroups.some(group=>group.name===groupUndo.group.name)){toast('已有同名分组，请先重命名后再撤销');return;}
+  const previous=phraseGroups,index=Math.min(groupUndo.index,phraseGroups.length);
+  phraseGroups=[...phraseGroups.slice(0,index),groupUndo.group,...phraseGroups.slice(index)];
+  if(!saveSnippets()){phraseGroups=previous;return;}
+  state.clipGroup=index;groupUndo=null;toast('已恢复分组');
 }
 // 新建 / 重命名分组共用键盘内编辑框。
 function openPhraseGroupEditor(index=-1){
@@ -269,9 +554,20 @@ function clipConfirmPanel(){ return sheet(state.clipConfirm.title,[['clip-confir
 // 新建常用语分组：官方上限 20 个分组。
 // 删除若干条剪贴板/常用语记录，并保留一次撤销。
 function removeSnippets(predicate){
-  const list=currentList();
-  snippetUndo={tab:state.clipTab,group:state.clipGroup,list:[...list]};
-  setSnippetList(list.filter((text,i)=>!predicate(text,i)));
+  const list=currentList(),next=list.filter((text,i)=>!predicate(text,i));
+  if(next.length===list.length)return false;
+  const undo={tab:state.clipTab,group:currentGroup(),list:[...list],removed:list.filter(text=>!next.includes(text))};
+  if(!setSnippetList(next))return false;
+  snippetUndo=undo;return true;
+}
+function undoSnippetDelete(){
+  const prior=snippetUndo;if(!prior)return;
+  if(prior.tab==='phrases'&&!phraseGroups.includes(prior.group)){toast('原分组已变化，不能撤销到其它分组');return;}
+  const list=prior.tab==='clipboard'?clips:prior.group.items,missing=prior.removed.filter(text=>!list.includes(text));
+  if(list.length+missing.length>(prior.tab==='clipboard'?snippetLimit:phraseItemLimit)){toast('列表已达上限，请先腾出位置再撤销');return;}
+  const restored=[...list];
+  for(const text of missing){const next=prior.list.slice(prior.list.indexOf(text)+1).find(item=>list.includes(item));restored.splice(next===undefined?restored.length:restored.indexOf(next),0,text);}
+  if(setSnippetList(restored,prior.tab,prior.group))snippetUndo=null;
 }
 // R2-18：把剪贴板/常用语里的内容固定成工具栏按钮（官方「添加到自定义工具栏」）。
 function addCustomToolbar(text){
@@ -302,14 +598,14 @@ function clipContextMenu(){
     :state.clipTab==='clipboard'
       ?[['snippet-add','添加内容'],['system-paste','从系统剪贴板导入'],['clip-manage','批量管理'],['clear-snippets','清空列表','danger']]
       :[['snippet-add','添加常用语'],['clip-group-add','新建分组'],['clear-snippets','清空这个分组的常用语','danger']];
-  if(snippetUndo)rows.push(['undo-snippet','撤销删除']);
+  if(snippetUndo&&snippetUndo.tab===state.clipTab&&(state.clipTab==='clipboard'||snippetUndo.group===currentGroup()))rows.push(['undo-snippet','撤销删除']);
   if(groupUndo)rows.push(['group-undo','撤销删除分组']);
   return sheet(item?clipMenu.text:'管理内容',rows);
 }
 function openClipMenu(index=-1){const list=currentList();clipMenu={index,text:index<0?'':list[index]};render();keyboard.querySelector('.clip-menu-sheet button')?.focus({preventScroll:true});}
 function closeClipMenu(){clipMenu=null;state.clipConfirm=null;state.clipGroupMenu=null;render();}
-function saveSnippets(){updatePhraseOptions();try{localStorage.setItem('voxfix-snippets-v1',JSON.stringify({clips,phrases:phraseGroups,clipSignature:/^[a-f0-9]{64}$/.test(nativeClipSignature)?nativeClipSignature:''}));return true;}catch{const message='未能保存，请检查可用空间后重试';if(localInput===$('snippet-content'))$('snippet-error').textContent=message;else toast(message);return false;}}
-function setSnippetList(list){if(state.clipTab==='clipboard')clips=list;else currentGroup().items=list;saveSnippets();}
+function saveSnippets(){try{localStorage.setItem('voxfix-snippets-v1',JSON.stringify({clips,phrases:phraseGroups,clipSignature:/^[a-f0-9]{64}$/.test(nativeClipSignature)?nativeClipSignature:''}));updatePhraseOptions();return true;}catch{const message='未能保存，请检查可用空间后重试';if(localInput===$('snippet-content'))$('snippet-error').textContent=message;else toast(message);return false;}}
+function setSnippetList(list,tab=state.clipTab,group=currentGroup()){const previous=tab==='clipboard'?clips:group.items;if(tab==='clipboard')clips=list;else group.items=list;if(saveSnippets())return true;if(tab==='clipboard')clips=previous;else group.items=previous;return false;}
 function openSnippet(index=-1){
   if(localInput){state.page='letters';render();localInput.focus();toast('请先保存或取消当前编辑');return;}
   const original=index<0?'':currentList()[index];
@@ -477,7 +773,7 @@ function render() {
   if(state.voice&&keyboard.querySelector(':scope > .voice-panel'))paintVoice();
   else{
     voiceRenderer?.dispose();voiceRenderer=null;
-    keyboard.innerHTML=(state.voice?voicePanel():(pages[state.page]||letters)())+popup();
+    keyboard.innerHTML=(state.voice?voicePanel():(pages[state.page]||letters)())+popup()+selectionEditor();
     if(state.voice)voiceRenderer=createVoiceOrb(keyboard.querySelector('.voice-texture'));
     if(voiceGhost)keyboard.append(voiceGhost);
   }
@@ -487,12 +783,21 @@ function render() {
   }
   const candidates=keyboard.querySelector('.candidate-visible');
   if(candidates && previousCandidates?.dataset.query===candidates.dataset.query && previousCandidates.textContent===candidates.textContent)candidates.scrollLeft=candidateScroll;
-  for(const [selector,id] of [['.number-strip','numbers'],['.symbol-grid','symbols:'+state.symbol],['.clip-list','clipboard:'+state.clipTab],['.t9-symbols','nine'],['.candidate-grid','candidates:'+state.comp?.raw],['.emoji-body','emoji:'+state.emojiTab+':'+state.emojiCategory]]){
-    const node=keyboard.querySelector(selector);if(node){node.dataset.scrollKey=id;node.scrollTop=scrollPositions.get(id)||0;}
+  layoutCandidateGrid();
+  keyboard.classList.toggle('text-selecting',Boolean(state.cursorDrag?.selecting));syncSelectionFeedback();
+  for(const [selector,id] of [['.number-strip','numbers'],['.symbol-grid','symbols:'+state.symbol],['.clip-list','clipboard:'+state.clipTab],['.t9-symbols','nine'],['.candidate-grid','candidates:'+candidateMode+':'+(state.comp?.raw||associatedWords.join(','))],['.emoji-body','emoji:'+state.emojiTab+':'+state.emojiCategory]]){
+    const node=keyboard.querySelector(selector);if(node){node.dataset.scrollKey=id;const top=scrollPositions.get(id)||0;if(selector==='.candidate-grid')while(top+node.clientHeight>node.scrollHeight&&appendCandidates()){}node.scrollTop=top;}
   }
+  updateCandidatePages();
   $('page-label').textContent=state.hidden?'键盘已收起':pageLabel();
   $('send').innerHTML=icon(editor.value?'send':'voice');
+  // 「来自剪贴板」标签悬在键盘上沿之外（真机由原生 popup 画），键盘高度与「有没有预览」完全无关：
+  // 这里绝不能再拿 clip-preview 的实测高度反推增量——45.14 这种亚像素值经 Math.ceil 后会让整块键盘
+  // 在有预览／没预览之间抖 1 CSS px，正是用户抱怨的「顶出来」。高度仍由上面的基础路径统一决定。
+  const clipPreview=keyboard.querySelector('.clip-preview');
+  if(nativeIme)nativeIme.clipHint?.(clipPreview?clipCandidateLabel():'');
   if(nativeIme)nativeIme.resize(Math.ceil(settings.height+localHeight));
+  syncCursorFeedback();
   if(handVisible){$('handwriting-surface').style.bottom=nativeIme?'108px':($('phone').getBoundingClientRect().bottom-hostEditor.closest('.composer').getBoundingClientRect().top+5)+'px';if(nativeIme)$('handwriting-surface').style.top=(localHeight+44)+'px';$('ink-guide').hidden=Boolean(inkPad?.hasInk);inkPad?.draw();}
   nightShade.hidden=!state.night||state.hidden;
   nightShade.style.height=($('phone').getBoundingClientRect().bottom-(handVisible?$('handwriting-surface'):keyboard).getBoundingClientRect().top)+'px';
@@ -536,6 +841,7 @@ function inputLetter(value) {
     state.comp.raw+=letter; applyText(result);
 }
 function deleteText() {
+  const hadSelectionActions=state.selectionActions;clearSelectionLock();
   // 先记录删除前候选栏是否可见：清空文本后必须把联想/英文候选一起刷掉，否则会留下“文字删完了候选还在”。
   const hadCandidateBar=Boolean(englishPrefix)||(state.language==='zh'&&associatedWords.length>0)||state.page==='candidates';
   context='';associatedWords=[];
@@ -543,7 +849,7 @@ function deleteText() {
   if(nativeIme&&!localInput&&!state.comp){
     // 连删期间不再每个 tick 重建整键盘：只有候选栏内容确实会变化时才刷新。
     nativeIme.delete();englishPrefix=englishPrefix.slice(0,-1);
-    if(hadCandidateBar||englishPrefix)render();
+    if(hadCandidateBar||englishPrefix||hadSelectionActions)render();
     return;
   }
   const result=erase(editor.value,editor.selectionStart,editor.selectionEnd);
@@ -610,6 +916,23 @@ function finishVoice(cancelled) {
   setTimeout(()=>{ if(state.voice!==session) return; applyText(voiceResult(session.snapshot,settings.voiceText)); exitVoice(); feedback('语音演示结束；本页未使用真实语音识别。'); },900);
 }
 function activate(action,value='') {
+  if(action!=='clip-tab'||value!=='clipboard')clipTabTap=null;
+  // 关闭面板只收起面板：正文、光标、选区与起点锁定都按原样保留。
+  if(action==='selection-close'){state.selectionActions=false;render();return;}
+  // 除「保留现有选区」的几个操作外，其它按键都会改正文 —— 旧起点随之失效，锁定一并清掉。
+  if(!['select-all','copy-text','cut-text','paste-text','paste-last','selection-paragraph'].includes(action))clearSelectionLock();
+  else if(['cut-text','paste-text','paste-last'].includes(action))clearSelectionLock();
+  if(action==='selection-paragraph'){
+    if(!lockedNow())return;   // 未锁定时禁用选段：不允许暗中造出一个起点
+    if(nativeIme&&!localInput){nativeIme.selectionParagraph?.(Number(value));return;}
+    const start=editor.selectionStart,end=editor.selectionEnd;
+    if(!localSelection||localSelection.text!==editor.value)localSelection={editor,text:editor.value,anchor:lockedSelection?.editor===editor&&lockedSelection.text===editor.value?lockedSelection.anchor:start,head:end};
+    const head=localSelection.head;
+    if(Number(value)>0){const from=editor.value[head]==='\n'?head+1:head;localSelection.head=editor.value.indexOf('\n',from);if(localSelection.head<0)localSelection.head=editor.value.length;}
+    else localSelection.head=editor.value.lastIndexOf('\n',Math.max(-1,head-2))+1;
+    editor.setSelectionRange(Math.min(localSelection.anchor,localSelection.head),Math.max(localSelection.anchor,localSelection.head),localSelection.head<localSelection.anchor?'backward':'forward');
+    selectedCount=characterCount(editor.value.slice(editor.selectionStart,editor.selectionEnd));render();return;
+  }
   if(hasNativePinyin&&!fullPinyinLoaded&&action==='layout'&&value==='9')loadFullPinyin().catch(()=>feedback('拼音词库未能加载。'));
   if(nativeIme){
     if(action==='hide'){nativeIme.hide();return;}
@@ -618,7 +941,7 @@ function activate(action,value='') {
     if(action==='system-paste'){clipMenu=null;render();nativeIme.importClipboard();return;}
     if(action==='enter'&&!localInput){englishPrefix='';if(state.comp)commit(state.comp.raw);else nativeIme.enter();render();return;}
     if(['language','twentysix','layout','last-pinyin'].includes(action)&&state.comp)commit(state.comp.raw);
-    if(!localInput&&['select-all','copy-text','cut-text','cursor-left','cursor-right'].includes(action)){if(state.comp)commit(state.comp.raw);nativeIme.edit(action);return;}
+    if(!localInput&&['select-all','copy-text','cut-text','paste-text','cursor-left','cursor-right'].includes(action)){if(state.comp)commit(state.comp.raw);nativeIme.edit(action);render();return;}
     if(action==='layout'&&value==='fullhand')handReady=nativeIme.handReady();
   }
   switch(action) {
@@ -627,7 +950,22 @@ function activate(action,value='') {
     case 'insert': case 'long-insert': insert(value); state.popup=null;if(Object.values(emojiGroups).some(group=>group.includes(value))){recentEmoji=[value,...recentEmoji.filter(word=>word!==value)].slice(0,16);try{localStorage.setItem('voxfix-emoji-v1',JSON.stringify(recentEmoji));}catch{}} break;
     case 'candidate': commit(value); break;
     case 'association-candidate': insert(value);break;
-    case 'more-candidates': state.page=state.page==='candidates'?'letters':'candidates';break;
+    case 'more-candidates': candidateMode='words';state.page=state.page==='candidates'?'letters':'candidates';break;
+    case 'candidate-mode': candidateMode=candidateMode==='words'?'characters':'words';break;
+    case 'candidate-pinyin': {
+      if(!state.comp)break;
+      const head=firstSyllable(state.comp.raw);
+      if(!head||head===value)break;
+      const raw=value+state.comp.raw.slice(head.length);
+      if(nativeIme&&!localInput){state.comp.raw=raw;nativeIme.compose(raw);applyText({text:raw,cursor:raw.length});}
+      else{applyText(replaceRange(editor.value,state.comp.start,state.comp.start+state.comp.raw.length,raw));state.comp.raw=raw;}
+      break;
+    }
+    case 'candidate-page': {
+      const grid=keyboard.querySelector('.candidate-grid');
+      if(grid){const step=Math.max(1,Math.round(grid.clientHeight/57.1))*57.1;if(value==='down'&&grid.scrollTop+grid.clientHeight+step>=grid.scrollHeight)appendCandidates();grid.scrollTop+=(value==='up'?-1:1)*step;updateCandidatePages();}
+      return;
+    }
     case 'delete': deleteText(); return;
     case 'space': if(state.comp){commit(currentCandidates()[0]);if(state.language==='en')insert(' ');}else insert(' ');break;
     case 'enter': if(state.comp) commit(state.comp.raw); else insert('\n'); break;
@@ -651,9 +989,18 @@ function activate(action,value='') {
     case 'symbol-category': state.symbol=value; break;
     case 'symbol-lock': state.locked=!state.locked; break;
     case 'symbol': insert(value); if(symbolPairs.has(value)){if(nativeIme&&!localInput)nativeIme.moveCursor(-1);else editor.setSelectionRange(editor.selectionEnd-1,editor.selectionEnd-1);} if(!state.locked) state.page=state.symbolReturn; break;
-    case 'clip-tab': state.clipTab=value;clipMenu=null;state.clipConfirm=null;state.clipGroupMenu=null;state.clipManage=false;state.clipSelected=[];break;
-    case 'paste': insert(value); clipMenu=null; if(!state.clipManage)state.page=state.returnPage; break;
-    case 'clip-candidate-insert': insert(value);break;
+    case 'clip-tab': {
+      // 首次点击会重建按钮，按两次点击计时兼容触屏，不能依赖 DOM dblclick。
+      if(value==='clipboard'){
+        const now=performance.now();
+        if(clipTabTap!==null&&now-clipTabTap<=350){state.clipLocked=!state.clipLocked;clipTabTap=null;}
+        else clipTabTap=now;
+      }
+      state.clipTab=value;clipMenu=null;state.clipConfirm=null;state.clipGroupMenu=null;state.clipManage=false;state.clipSelected=[];break;
+    }
+    case 'paste': insert(value); clipMenu=null; if(!state.clipManage&&!(state.clipTab==='clipboard'&&state.clipLocked))state.page=state.returnPage; break;
+    case 'clip-candidate-insert': state.clipCandidate='';insert(value);break;
+    case 'clip-candidate-dismiss': state.clipCandidate='';break;
     case 'toolbar-custom': { if(state.toolbarSort)break; const row=settings.customToolbar.find(item=>item.id===value); if(row)insert(row.text); break; }
     case 'toolbar-custom-remove': removeCustomToolbar(value);return;
     case 'toolbar-sort-done': state.toolbarSort=false;toolbarDrag=null;render();break;
@@ -669,12 +1016,15 @@ function activate(action,value='') {
     case 'group-delete': { const index=state.clipGroupMenu?.index;state.clipGroupMenu=null;const group=phraseGroups[index];if(!group)break;
       if(phraseGroups.length<=1){toast('至少要保留一个常用语分组');break;}
       state.clipConfirm={action:'group-delete',value:String(index),title:`删除分组「${group.name}」及其中 ${group.items.length} 条常用语？`};break; }
-    case 'group-undo': undoGroupDelete();return;
+    case 'group-undo': clipMenu=null;undoGroupDelete();break;
     case 'toolbar-add': { const text=clipMenu?.text;clipMenu=null;if(text)try{addCustomToolbar(text);}catch(error){toast(error.message);} return; }
     case 'clip-confirm-cancel': state.clipConfirm=null;break;
     case 'clip-confirm-ok': { const pending=state.clipConfirm;state.clipConfirm=null;if(!pending)break;
       if(pending.action==='clip-manage-delete'){removeSnippets(text=>state.clipSelected.includes(text));state.clipSelected=[];}
-      else if(pending.action==='snippet-delete')removeSnippets((text,i)=>i===Number(pending.value));
+      else if(pending.action==='snippet-delete'){
+        if(pending.tab!==state.clipTab||pending.tab==='phrases'&&pending.group!==currentGroup()||!currentList().includes(pending.text)){toast('内容已更新，请重新长按。');break;}
+        removeSnippets(text=>text===pending.text);
+      }
       else if(pending.action==='clear-snippets')removeSnippets(()=>true);
       else if(pending.action==='group-delete'){try{deletePhraseGroup(Number(pending.value));}catch(error){toast(error.message);}}
       break; }
@@ -683,15 +1033,15 @@ function activate(action,value='') {
       const text=clipMenu?.text,list=currentList(),index=list.indexOf(text);clipMenu=null;
       if(index<0){toast('内容已更新，请重新长按。');render();return;}
       if(action==='context-edit'){openSnippet(index);render();return;}
-      if(action==='context-delete'){state.clipConfirm={action:'snippet-delete',value:String(index),title:'是否确定删除该条记录？'};render();return;}
+      if(action==='context-delete'){state.clipConfirm={action:'snippet-delete',text,tab:state.clipTab,group:currentGroup(),title:'是否确定删除该条记录？'};render();return;}
       if(action==='context-favorite'){try{if(addPhraseItem(phraseGroups[0],text)){snippetUndo=null;saveSnippets();toast('已添加到常用语。');}}catch(error){toast(error.message);}break;}
       if(nativeIme){nativeIme.copy(text);}else if(!navigator.clipboard?.writeText)toast('系统复制不可用，可短按内容插入输入框后复制。');else navigator.clipboard.writeText(text).catch(()=>toast('系统复制未获授权，可短按内容插入输入框后复制。'));break;
     }
     case 'snippet-add': clipMenu=null;openSnippet();render();return;
     case 'snippet-edit': openSnippet(Number(value));return;
-    case 'snippet-delete': {clipMenu=null;const list=currentList();snippetUndo={tab:state.clipTab,group:state.clipGroup,list:[...list]};setSnippetList(list.filter((_,i)=>i!==Number(value)));break;}
+    case 'snippet-delete': clipMenu=null;removeSnippets((text,i)=>i===Number(value));break;
     case 'clear-snippets': {clipMenu=null;state.clipConfirm={action:'clear-snippets',title:state.clipTab==='clipboard'?'确定清空剪贴板的所有内容？':'确定清空这个分组的常用语？'};break;}
-    case 'undo-snippet': clipMenu=null;if(snippetUndo){const prior=snippetUndo;snippetUndo=null;if(prior.tab==='clipboard')clips=prior.list;else phraseGroups[Math.min(prior.group||0,phraseGroups.length-1)].items=prior.list;saveSnippets();}break;
+    case 'undo-snippet': clipMenu=null;undoSnippetDelete();break;
     case 'system-paste': clipMenu=null;render();if(!navigator.clipboard?.readText){openSnippet();toast('请粘贴系统剪贴板内容。');return;}navigator.clipboard.readText().then(text=>{if(!text.trim())throw Error('系统剪贴板没有文字');clips=addSnippet(clips,text);snippetUndo=null;saveSnippets();render();}).catch(()=>{openSnippet();toast('可在这里粘贴系统剪贴板内容。');});return;
     case 'layout': if(['9','26','en26','fullhand'].includes(value)){if(value==='fullhand'&&!handReady){toast('手写模型还未就绪，请稍后再试。');return;}if(state.layout!=='fullhand')lastPinyin=state.layout;state.layout=value==='en26'?'26':value;state.language=value==='en26'?'en':'zh';state.comp=null;state.page='letters';inkPad.clear();}break;
     case 'emoji-tab': state.emojiTab=value; break;
@@ -700,16 +1050,22 @@ function activate(action,value='') {
     case 'switcher': state.popup=state.popup==='switcher'?null:'switcher'; break;
     case 'custom': showTab('custom'); state.popup=null;$('custom-panel').scrollIntoView({block:'nearest'}); feedback('可调整尺寸、颜色和保留入口。'); break;
     case 'cancel-recognition': if(state.voice?.phase==='recognizing') { cancelVoice(); } return;
-    case 'select-all': editor.setSelectionRange(0,editor.value.length); state.comp=null; break;
-    case 'copy-text': case 'cut-text': { const text=editor.value.slice(editor.selectionStart,editor.selectionEnd)||editor.value; if(text) {try{clips=addSnippet(clips,text);snippetUndo=null;saveSnippets();}catch(error){toast(error.message);return;} if(settings.clipboardCandidate)state.clipCandidate=text; if(action==='cut-text') { if(editor.selectionStart===editor.selectionEnd) applyText({text:'',cursor:0}); else insert(''); } if(nativeIme)nativeIme.copy(text);else navigator.clipboard?.writeText(text).catch(()=>toast('已存入本页剪贴板，系统复制未获授权。')); } break; }
+    case 'select-all': editor.setSelectionRange(0,editor.value.length);localSelection=null;selectedCount=characterCount(editor.value); state.comp=null; break;
+    case 'copy-text': case 'cut-text': { const text=editor.value.slice(editor.selectionStart,editor.selectionEnd); if(selectedCount===0||!text)break; {try{clips=addSnippet(clips,text);snippetUndo=null;saveSnippets();}catch(error){toast(error.message);return;} if(settings.clipboardCandidate)state.clipCandidate=text; if(action==='cut-text') { if(editor.selectionStart===editor.selectionEnd) applyText({text:'',cursor:0}); else insert(''); } if(nativeIme)nativeIme.copy(text);else navigator.clipboard?.writeText(text).catch(()=>toast('已存入本页剪贴板，系统复制未获授权。')); } break; }
     case 'paste-last': if(clips[0]) insert(clips[0]); break;
     case 'cursor-left': case 'cursor-right': { state.comp=null; const segments=[...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(editor.value)].map(s=>s.index); segments.push(editor.value.length); const pos=action==='cursor-left'?segments.filter(p=>p<editor.selectionStart).at(-1)??0:segments.find(p=>p>editor.selectionEnd)??editor.value.length; editor.setSelectionRange(pos,pos); break; }
     default: return;
   }
+  if(['language','twentysix','layout','last-pinyin'].includes(action))fieldPreference=null;
   if(['language','twentysix','layout','last-pinyin','night'].includes(action))saveKeyboard();
   render();
 }
 
+// 按键按压态只由 JS 的 .pressed 驱动：官方（讯飞小米版白皮）按下就是换一张
+// rgba(202,208,220,.451) 的 9-patch，直接叠在键盘底上，无过渡、无缩放、无位移。
+// CSS 里**不能**再给 .key 写 :active —— Android WebView 对 :active 的清除不可靠
+// （首次触摸还会被当成 hover 起点），会出现"松手了颜色还在"，这正是颜色退不走的根因。
+function clearKeyPress(){keyboard.querySelectorAll('.key.pressed').forEach(node=>node.classList.remove('pressed'));}
 keyboard.addEventListener('pointerdown',e=>{
   if(e.button!==0 || gesture) return;
   consumedClick=null;
@@ -725,24 +1081,39 @@ keyboard.addEventListener('pointerdown',e=>{
     // 滑轨上开始移动前先收尾未提交的拼音组合，和原来长按进入时的处理一致。
     if(nativeIme&&state.comp)commit(state.comp.raw);
     englishPrefix='';state.comp=null;state.popup=null;
-    const g={id:e.pointerId,action:'cursor-gesture',x:e.clientX,y:e.clientY,long:false,selecting:false,steps:0,moved:false,target};
+    // 摇杆半径在按下这一瞬间定死：原点始终是触控点，贴边按下时靠收缩半径保住向外行程，
+    // 否则在滑轨最左端按下会向左永远推不到高档、向右推一半就饱和。
+    const zoneRect=target.getBoundingClientRect(),kbRect=keyboard.getBoundingClientRect();
+    const side=Math.min(e.clientX-zoneRect.left,zoneRect.right-e.clientX);
+    const g={id:e.pointerId,action:'cursor-gesture',x:e.clientX,y:e.clientY,lastX:e.clientX,lastY:e.clientY,long:false,selecting:false,steps:0,moved:false,selectionMoved:false,extraX:0,extraY:0,target,joy:{...joystickRadii(side,e.clientY-kbRect.top,kbRect.bottom-e.clientY),originX:e.clientX,originY:e.clientY,level:0,rate:0,acc:0,steps:0,raf:0,ts:0}};
     gesture=g;
     state.cursorDrag={origin:nativeIme&&!localInput?nativeCursor.position:editor.selectionEnd,selecting:false};
-    if(nativeIme&&!localInput){nativeIme.cursorPosition?.();nativeIme.gestureStart?.(false);}
+    g.mini=target.dataset.track==='mini';
+    // 两条滑轨只有尺寸和位置不同：行为完全由「当前是否已锁定」决定。
+    const locked=lockedNow();
+    cursorFeedback={clientX:e.clientX,visible:true,selecting:locked,mini:g.mini};
+    if(nativeIme&&!localInput){nativeIme.cursorPosition?.();nativeIme.gestureStart?.(locked);}
     else editor.focus({preventScroll:true});
-    // 手指一碰滑轨就进入移动模式（不再要求先长按），按住不动约 350ms 才切到"框选文字"。
+    if(locked){
+      // 已锁定：拖动只调整终点；面板被收起过就顺手再呼出，状态与收起前一致。
+      state.selectionActions=true;
+      beginSelectionAdjust(g);
+    }
+    // 未锁定：手指一碰滑轨就进入移动模式（不再要求先长按），按住不动约 350ms 才标定起点。
     g.timer=setTimeout(()=>{
       if(gesture!==g||g.moved)return;
-      g.long=true;g.selecting=true;state.cursorDrag.selecting=true;
-      // 进入框选模式的这一瞬间给一次轻震：官方也是用触感确认"滑轨已切换成选择"。
-      if(nativeIme&&!localInput){nativeIme.gestureEnd?.();nativeIme.gestureStart?.(true);nativeIme.haptic?.();}
+      g.long=true;g.x=g.lastX;g.y=g.lastY;
+      if(selectionLocked)unlockSelection(g);
+      else{rejoy(g,g.lastX,g.lastY);lockSelection(g);}
+      // 锁定切换的这一瞬间给一次轻震：官方也是用触感确认"滑轨已切换成选择"。
+      if(nativeIme&&!localInput){nativeIme.haptic?.();}
       else navigator.vibrate?.(15);
-      render();feedback('拖动选择文字，松手保留选区。');
+      render();syncCursorFeedback();
     },cursorHoldDelay);
     render();
     return;
   }
-  if(target.tagName!=='BUTTON') return;
+  if(target.tagName!=='BUTTON'||target.disabled) return;
   // Scrollable lists use native scrolling and click; only keys need hold/slide capture.
   if(!target.classList.contains('key')) return;
   e.preventDefault();
@@ -750,6 +1121,7 @@ keyboard.addEventListener('pointerdown',e=>{
   keyboard.setPointerCapture(e.pointerId);
   const rect=target.getBoundingClientRect(), kbRect=keyboard.getBoundingClientRect();
   const g={id:e.pointerId,action:target.dataset.action,value:target.dataset.value,y:e.clientY,long:false,cancel:false,hint:target.querySelector('.hint')?.textContent,target}; gesture=g;
+  clearKeyPress();
   target.classList.add('pressed');
   if(g.action==='delete'){g.immediate=true;g.inkErase=state.layout==='fullhand'&&inkPad?.hasInk;deleteText();}
   g.timer=setTimeout(()=>{
@@ -776,15 +1148,36 @@ keyboard.addEventListener('pointermove',e=>{
   }
   if(gesture.action==='cursor-gesture' && state.cursorDrag) {
     const delta=e.clientX-gesture.x;
-    if(!gesture.moved&&Math.abs(delta)>cursorStep){gesture.moved=true;clearTimeout(gesture.timer);}
-    const steps=Math.trunc(delta/cursorStep);
-    if(steps===gesture.steps)return;
-    gesture.steps=steps;
-    if(nativeIme&&!localInput){nativeIme.gestureMove?.(steps);return;}
-    const origin=state.cursorDrag.origin,position=moveCursor(editor.value,origin,steps);
-    if(state.cursorDrag.selecting)editor.setSelectionRange(Math.min(origin,position),Math.max(origin,position));
-    else editor.setSelectionRange(position,position);
-    render();return;
+    const previousX=gesture.lastX,previousY=gesture.lastY;
+    gesture.lastX=e.clientX;gesture.lastY=e.clientY;
+    cursorFeedback.clientX=e.clientX;syncCursorFeedback();
+    // 解除锁定的那一次长按到此为止：后续拖动不再移动任何东西，抬手后恢复自由移动。
+    if(gesture.ceased)return;
+    if(gesture.mini&&!gesture.long&&Math.hypot(delta,e.clientY-gesture.y)>=cursorStep){gesture.moved=true;clearTimeout(gesture.timer);}
+    if(!gesture.selecting&&!gesture.moved&&Math.hypot(delta,e.clientY-gesture.y)>=cursorStep){gesture.moved=true;clearTimeout(gesture.timer);}
+    if(gesture.selecting){
+      if(!gesture.selectionReady){
+        if(gesture.lifting){
+          if(e.clientY>previousY+2||Math.abs(e.clientX-gesture.liftX)>=cursorStep)selectionReady(gesture,previousX,previousY);
+          else {clearTimeout(gesture.liftTimer);gesture.liftTimer=setTimeout(()=>selectionReady(gesture),180);syncSelectionFeedback();return;}
+        }else if(e.clientY-gesture.y<-5&&Math.abs(delta)<cursorStep){
+          gesture.lifting=true;gesture.liftX=e.clientX;gesture.liftTimer=setTimeout(()=>selectionReady(gesture),180);syncSelectionFeedback();return;
+        }else gesture.selectionReady=true;
+      }
+      const dx=e.clientX-gesture.x,dy=e.clientY-gesture.y;
+      if(!gesture.selectionMoved&&Math.hypot(dx,dy)<5)return;
+      gesture.selectionMoved=true;gesture.steps=Math.trunc(dx/cursorStep);
+      // 框选与移动光标共用同一套三档：ρ 决定快慢、方向取单位向量，360° 都能推。
+      moveSelection(dx+gesture.extraX,dy+gesture.extraY);syncSelectionFeedback();joystickSync(gesture,e.clientX,e.clientY);return;
+    }
+    // 360° 全向：ρ 用二维位移算（斜推一样能进高速档），但方向只取水平分量 ——
+    // 文本光标本来只能左右走，垂直推力只用来「更快」，不用来决定往哪走。
+    const joy=gesture.joy,dx=e.clientX-joy.originX,dy=e.clientY-joy.originY;
+    joy.level=joystickLevel(joystickRho(dx,dy,joy),joy.level);
+    const rate=dx===0?0:Math.sign(dx)*joystick.rates[joy.level];
+    if(rate!==joy.rate){joy.rate=rate;joy.ts=0;}
+    moveCursorGesture(gesture);jogCursor(gesture);
+    return;
   }
   // 上滑取消：改成"跟手"——只改类名与 CSS 变量，走 render 会把动画打断。
   if(gesture.long && gesture.action==='space' && state.voice) { syncVoiceDrag(gesture,e.clientY); }
@@ -801,7 +1194,8 @@ function scheduleRepeat(g,step){
 }
 function endGesture(e,cancelled=false) {
   const g=gesture; if(!g || g.id!==e.pointerId) return;
-  gesture=null; clearTimeout(g.timer); clearTimeout(g.repeatTimer); g.target.classList.remove('pressed');
+  gesture=null; clearTimeout(g.timer);clearTimeout(g.liftTimer); clearTimeout(g.repeatTimer); clearKeyPress();
+  if(g.joy?.raf){cancelAnimationFrame(g.joy.raf);g.joy.raf=0;g.joy.rate=0;}
   consumedClick={id:g.id,until:Date.now()+500};
   if(keyboard.hasPointerCapture(e.pointerId)) keyboard.releasePointerCapture(e.pointerId);
   if(g.action==='candidate-scroll') {
@@ -812,10 +1206,9 @@ function endGesture(e,cancelled=false) {
   }
   if(g.action==='cursor-gesture') {
     if(nativeIme&&!localInput)nativeIme.gestureEnd?.();
-    const selecting=state.cursorDrag?.selecting===true;
     state.cursorDrag=null;
-    if(selecting&&!cancelled)feedback('已选中文字，可用输入框上的复制或粘贴。');
-    render();return;
+    // 不改 state.selectionActions：面板只由「点击编辑框外」或改正文收起来。
+    render();fadeCursorFeedback();return;
   }
   if(!cancelled&&!(g.long&&g.action==='space')&&Number.isFinite(e.clientX)&&Number.isFinite(e.clientY)){
     const inside=element=>{if(!element)return false;const r=element.getBoundingClientRect();return e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom;};
@@ -828,6 +1221,15 @@ function endGesture(e,cancelled=false) {
 }
 keyboard.addEventListener('pointerup',e=>endGesture(e));
 keyboard.addEventListener('pointercancel',e=>endGesture(e,true));
+// 兜底自愈：WebView 失焦、页面转后台或指针捕获被抢走时，pointerup 可能永远不来。
+// 残留的按压态与被卡住的 gesture 都要在这一层清掉，否则那一下的颜色会留在屏幕上、
+// 并且之后所有按键都按不动。
+function dropGesture(){if(!gesture)return;if(gesture.action==='cursor-gesture'){endGesture({pointerId:gesture.id},true);return;}consumedClick={id:gesture.id,until:Date.now()+500};clearTimeout(gesture.timer);clearTimeout(gesture.repeatTimer);gesture=null;clearKeyPress();if(state.popup?.type==='key'){state.popup=null;render();}}
+keyboard.addEventListener('lostpointercapture',e=>{if(gesture&&gesture.id===e.pointerId)dropGesture();});
+// 失焦/转后台只清视觉，不动正在进行的语音或光标手势（它们靠自己的 pointerup 收尾）。
+window.addEventListener('blur',()=>{clearKeyPress();if(gesture&&!(gesture.long&&gesture.action==='space'))dropGesture();});
+keyboard.addEventListener('lostpointercapture',e=>{if(gesture?.action==='cursor-gesture')endGesture(e,true);});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)clearKeyPress();});
 keyboard.addEventListener('click',e=>{
   const pointerClick=e.detail!==0||Boolean(e.pointerType);
   if(pointerClick&&consumedClick&&Date.now()<consumedClick.until&&(e.pointerId===undefined||e.pointerId===consumedClick.id)){consumedClick=null;e.preventDefault();return;}
@@ -839,6 +1241,7 @@ keyboard.addEventListener('click',e=>{
   activate(target.dataset.action,target.dataset.value);
 });
 keyboard.addEventListener('contextmenu',e=>e.preventDefault());
+keyboard.addEventListener('scroll',e=>{if(e.target.matches('.candidate-grid')){const grid=e.target;if(grid.scrollTop+grid.clientHeight>=grid.scrollHeight-grid.clientHeight)appendCandidates();updateCandidatePages();}},true);
 // 表情长按连发 / 长按候选词加入常用语：不抢指针，只按住计时，滑动即取消（保留列表原生滚动）。
 function emojiEmit(value){
   insert(value);
@@ -918,7 +1321,7 @@ keyboard.addEventListener('pointerdown',e=>{
   if(e.button!==0||!e.target.closest('.clip-list'))return;
   clearTimeout(clipHold?.timer);
   const target=e.target.closest('.clip-text'),hold={id:e.pointerId,x:e.clientX,y:e.clientY,tab:state.clipTab,text:target?.dataset.value};clipHold=hold;
-  hold.timer=setTimeout(()=>{if(clipHold!==hold||state.clipTab!==hold.tab)return;const index=hold.text===undefined?-1:currentList().indexOf(hold.text);if(hold.text!==undefined&&index<0)return;clipSuppressUntil=Date.now()+700;openClipMenu(index);},500);
+  hold.timer=setTimeout(()=>{if(clipHold!==hold||state.clipTab!==hold.tab)return;const index=hold.text===undefined?-1:currentList().indexOf(hold.text);if(hold.text!==undefined&&index<0)return;hold.fired=true;consumedClick={id:hold.id,until:Date.now()+700};clipSuppressUntil=Date.now()+700;openClipMenu(index);},500);
 });
 keyboard.addEventListener('pointermove',e=>{if(clipHold&&e.pointerId===clipHold.id&&Math.hypot(e.clientX-clipHold.x,e.clientY-clipHold.y)>10){clearTimeout(clipHold.timer);clipHold=null;}});
 // 常用语分组：长按 pill 打开“重命名 / 删除分组”，轻点仍然是切换分组。
@@ -931,7 +1334,7 @@ keyboard.addEventListener('pointerdown',e=>{
 });
 keyboard.addEventListener('pointermove',e=>{if(groupHold&&e.pointerId===groupHold.id&&Math.hypot(e.clientX-groupHold.x,e.clientY-groupHold.y)>10){clearTimeout(groupHold.timer);groupHold=null;}});
 for(const event of ['pointerup','pointercancel'])keyboard.addEventListener(event,e=>{if(groupHold&&e.pointerId===groupHold.id){clearTimeout(groupHold.timer);groupHold=null;}});
-for(const event of ['pointerup','pointercancel'])keyboard.addEventListener(event,e=>{if(clipHold&&e.pointerId===clipHold.id){clearTimeout(clipHold.timer);clipHold=null;}});
+for(const event of ['pointerup','pointercancel'])keyboard.addEventListener(event,e=>{if(clipHold&&e.pointerId===clipHold.id){if(clipHold.fired)consumedClick={id:clipHold.id,until:Date.now()+500};clearTimeout(clipHold.timer);clipHold=null;}});
 keyboard.addEventListener('contextmenu',e=>{if(!e.target.closest('.clip-list'))return;const item=e.target.closest('.clip-text');openClipMenu(item?Number(item.dataset.index):-1);});
 keyboard.addEventListener('keydown',e=>{if(e.target.matches('.clip-text')&&(e.key==='ContextMenu'||(e.shiftKey&&e.key==='F10'))){e.preventDefault();openClipMenu(Number(e.target.dataset.index));}});
 keyboard.addEventListener('keydown',e=>{if(clipMenu&&e.key==='Escape'){e.preventDefault();closeClipMenu();}});
@@ -946,7 +1349,14 @@ keyboard.addEventListener('keydown',e=>{
   editor.setSelectionRange(position,position);render();keyboard.querySelector('.cursor-zone').focus({preventScroll:true});
 });
 keyboard.addEventListener('pointerdown',e=>{ if(e.target.closest('button') && !e.target.closest('.candidate-visible,.candidate-grid,.clip-list,.symbol-grid,.number-strip,.layout-grid,.emoji-body')) e.preventDefault(); });
-document.addEventListener('visibilitychange',()=>{ if(document.hidden) { if(state.voice)preserveVoice(state.voice);if(gesture)endGesture({pointerId:gesture.id},true); } });
+let editorHold=null;
+document.addEventListener('pointerdown',e=>{
+  if(e.target!==editor||nativeIme&&!localInput||e.button!==0)return;
+  clearTimeout(editorHold?.timer);const hold={id:e.pointerId,x:e.clientX,y:e.clientY};editorHold=hold;
+  hold.timer=setTimeout(()=>{if(editorHold!==hold)return;const head=editor.selectionDirection==='backward'?editor.selectionStart:editor.selectionEnd;selectionLocked=true;lockedSelection={editor,text:editor.value,anchor:head};localSelection={editor,text:editor.value,anchor:head,head};editor.setSelectionRange(head,head);selectedCount=0;state.selectionActions=true;render();},cursorHoldDelay);
+});
+for(const event of ['pointerup','pointercancel','pointermove'])document.addEventListener(event,e=>{if(editorHold&&e.pointerId===editorHold.id&&(event!=='pointermove'||Math.hypot(e.clientX-editorHold.x,e.clientY-editorHold.y)>8)){clearTimeout(editorHold.timer);editorHold=null;}});
+document.addEventListener('visibilitychange',()=>{ if(document.hidden) {clearTimeout(editorHold?.timer);editorHold=null;if(state.voice)preserveVoice(state.voice);if(gesture)endGesture({pointerId:gesture.id},true); } });
 document.addEventListener('compositionstart',e=>{if(e.target!==editor)return;nativeComposition=true;state.comp=null;render();});
 document.addEventListener('compositionend',e=>{if(e.target!==editor)return;nativeComposition=false;state.comp=null;render();});
 document.addEventListener('input',e=>{
@@ -997,11 +1407,11 @@ $('remember-input').onchange=e=>{settings.rememberInput=e.target.checked;persist
 let learningClearUntil=0;
 $('clear-learning').onclick=()=>{
   if(hasNativePinyin){
-    if(Date.now()>learningClearUntil){learningClearUntil=Date.now()+5000;feedback('再次点击确认清空选词记忆。');return;}
+    if(Date.now()>learningClearUntil){learningClearUntil=Date.now()+5000;toast('再次点击确认清空选词记忆。');return;}
     learningClearUntil=0;
-    if(!JSON.parse(nativeIme.pinyinClearLearning()).cleared){feedback('选词记忆未清空，请重试。');return;}
+    if(!JSON.parse(nativeIme.pinyinClearLearning()).cleared){toast('选词记忆未清空，请重试。');return;}
   }else if(!nativeIme&&!confirm('清空当前浏览器的选词记忆？此操作不能撤销。'))return;
-  learning=[];localStorage.removeItem('voxfix-learning-v1');updateLearningStatus();render();
+  learning=[];localStorage.removeItem('voxfix-learning-v1');updateLearningStatus();render();toast('已清空选词记忆。');
 };
 $('feature-toggles').onchange=e=>applyToggleChange(e.target);
 $('clipboard-toggles').onchange=e=>applyToggleChange(e.target);
@@ -1112,10 +1522,17 @@ $('undo-polish').onclick=()=>{
 updatePolishStatus();
 if(nativeIme){
   globalThis.voxfixPinyinReady=(failed=false)=>{if(failed)loadFullPinyin().catch(()=>feedback('拼音词库未能加载。'));else if(state.comp)render();};
-  globalThis.voxfixCursor=(position,total)=>{nativeCursor={position,total};const zone=keyboard.querySelector('.cursor-zone');if(zone){zone.setAttribute('aria-valuemax',total);zone.setAttribute('aria-valuenow',position);const marker=zone.querySelector('i');if(marker)marker.style.left=(total?position/total*100:50)+'%';}};
-  globalThis.voxfixReset=()=>{closeLocalEditor(true);stopVoiceLoop();englishPrefix='';context='';associatedWords=[];clearTimeout(gesture?.timer);clearTimeout(gesture?.repeatTimer);gesture=null;itemHold=null;state.voice=null;state.comp=null;state.popup=null;state.locked=false;state.hidden=false;state.page='letters';state.clipManage=false;state.clipSelected=[];state.clipConfirm=null;state.clipCandidate='';state.toolbarSort=false;state.clipGroupMenu=null;inkPad?.clear();applyText({text:'',cursor:0});render();};
+  globalThis.voxfixCursor=(position,total)=>{nativeCursor={position,total};const zone=keyboard.querySelector('.cursor-zone');if(zone){zone.setAttribute('aria-valuemax',total);zone.setAttribute('aria-valuenow',position);}};
+  globalThis.voxfixSelection=(start,end,count=-1)=>{if(localInput)return;selectedCount=start===end?0:count;syncSelectionFeedback();if((start<0||end<0)&&(state.selectionActions||selectionLocked)){clearSelectionLock();render();}};
+  // 宿主自己长按选中的文字：那里本来就有固定起点，按「已锁定」处理。
+  globalThis.voxfixSelectionOrigin=()=>{if(localInput||state.voice||gesture)return;selectionLocked=true;state.selectionActions=true;render();};
+  globalThis.voxfixSelectionUnavailable=()=>toast('当前输入框暂不提供段落文本，请使用滑轨框选。');
+  globalThis.voxfixSelectionBlocked=()=>{if(gesture?.selecting)haltJoystick(gesture);};
+  globalThis.voxfixReset=()=>{if(gesture)haltJoystick(gesture);releaseSelectionLock();state.selectionActions=false;state.cursorDrag=null;cursorFeedback.visible=false;closeLocalEditor(true);stopVoiceLoop();englishPrefix='';context='';associatedWords=[];clearTimeout(gesture?.timer);clearTimeout(gesture?.liftTimer);clearTimeout(gesture?.repeatTimer);gesture=null;itemHold=null;state.voice=null;state.comp=null;state.popup=null;state.locked=false;state.hidden=false;state.page='letters';state.clipManage=false;state.clipSelected=[];state.clipConfirm=null;state.clipCandidate='';state.toolbarSort=false;state.clipGroupMenu=null;inkPad?.clear();applyText({text:'',cursor:0});render();};
   globalThis.voxfixClearComposition=(keepEnglish=false)=>{if(localInput||keepEnglish)return;const changed=Boolean(englishPrefix||state.comp||associatedWords.length||state.page==='candidates');englishPrefix='';context='';associatedWords=[];state.comp=null;if(state.page==='candidates')state.page='letters';applyText({text:'',cursor:0});if(changed)render();};
   globalThis.voxfixInputType=type=>{
+    // 换了输入框，原来那份起点已经不指向同一个地方，锁定安全清理。
+    clearSelectionLock();
     const kind=type&15,variation=type&4080;
     privateField=kind===1&&[128,144,224].includes(variation)||kind===2&&variation===16;
     if(kind===2||kind===3)state.page='numbers';
@@ -1131,13 +1548,14 @@ if(nativeIme){
   globalThis.voxfixVoiceLevel=level=>setVoiceLevel(level/12);
   globalThis.voxfixClipboard=(text,signature=text,explicit=false)=>{
     if(privateField||!explicit&&signature===nativeClipSignature)return;
+    const previous=clips,previousSignature=nativeClipSignature;
     nativeClipSignature=signature;
-    if(!settings.clipboardHistory)return;
     if(text.trim()){
-      if(!clips.includes(text))clips=addSnippet(clips.slice(0,snippetLimit-1),text);
+      if((settings.clipboardHistory||explicit)&&!clips.includes(text))clips=addSnippet(clips,text);
       if(settings.clipboardCandidate)state.clipCandidate=text;
     }
-    saveSnippets();if(state.page==='clipboard'||state.clipCandidate)render();
+    if((settings.clipboardHistory||explicit)&&!saveSnippets()){clips=previous;nativeClipSignature=previousSignature;}
+    if(state.page==='clipboard'||state.clipCandidate)render();
   };
   nativeIme.ready();
 }
