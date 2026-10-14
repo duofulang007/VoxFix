@@ -29,7 +29,7 @@ val stageModels by tasks.registering(Sync::class) {
     into(layout.buildDirectory.dir("modelAssets"))
 }
 val stageKeyboard by tasks.registering(Sync::class) {
-    from("../../preview") { include("index.html", "*.css", "app.mjs", "core.mjs", "voice.mjs", "voice-orb.mjs", "pinyin.mjs", "ink.mjs", "english.mjs", "english-words.txt", "pinyin-data.json", "pinyin-lite.json", "phrase-packs.json", "vendor/rime-ice/LICENSE", "vendor/rime-ice/UPSTREAM.md") }
+    from("../../preview") { include("index.html", "*.css", "app.mjs", "core.mjs", "voice.mjs", "voice-orb.mjs", "pinyin.mjs", "english.mjs", "english-words.txt", "pinyin-data.json", "pinyin-lite.json", "phrase-packs.json", "vendor/rime-ice/LICENSE", "vendor/rime-ice/UPSTREAM.md") }
     from("src/main/licenses/sensevoice") { include("LICENSE", "UPSTREAM.md"); into("licenses/sensevoice") }
     from("src/main/licenses/sherpa") { include("LICENSE", "UPSTREAM.md"); into("licenses/sherpa") }
     into(layout.buildDirectory.dir("keyboardAssets/keyboard"))

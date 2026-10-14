@@ -52,8 +52,6 @@ html.native-ime, .native-ime body {margin:0;padding:0;background:#edeff2;overflo
 .native-ime dialog {max-height:85vh;overflow:auto;}
 .native-ime .config-actions {display:none;}
 /* 原生桥只传音量；球体与音量包络使用网页同一套绘制。 */
-.native-ime #phone > #handwriting-surface:not([hidden]) {display:block!important;top:44px;bottom:108px;}
-.native-ime #keyboard .hand-controls {flex:0 0 46px;margin-top:auto;margin-bottom:8px;}
 .native-ime #phone > #night-shade:not([hidden]) {display:block!important;}
 .night-shade {position:absolute;left:0;right:0;bottom:0;z-index:40;background:rgba(0,0,0,.46);pointer-events:none;}
 .snippet-dialog.night {filter:brightness(.54);}

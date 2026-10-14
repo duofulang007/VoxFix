@@ -18,7 +18,7 @@ try{
     page.on('pageerror',error=>errors.push(error.message));
     await page.addInitScript(native=>{
       localStorage.setItem('voxfix-layout-v1',JSON.stringify({height:321,fontSize:25,gap:9,radius:11,background:'#ff0000',candidateCount:9,candidateFont:13,rememberInput:false,clipboardHistory:false,toolbar:native?['menu','clipboard']:[]}));
-      if(native){window.calls=[];window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','edit','ready','resize','refreshClipboard','importClipboard'].map(n=>[n,(...args)=>calls.push([n,...args])]));VoxFixIme.voiceReady=()=>true;VoxFixIme.handReady=()=>false;}
+      if(native){window.calls=[];window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','edit','ready','resize','refreshClipboard','importClipboard'].map(n=>[n,(...args)=>calls.push([n,...args])]));VoxFixIme.voiceReady=()=>true;}
     },native);
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await page.waitForFunction(()=>document.querySelector('.key-rows'));

@@ -13,7 +13,6 @@ server.PORT = 18745
 if __name__=='__main__':
     http = ThreadingHTTPServer(('127.0.0.1',server.PORT),server.Handler)
     threading.Thread(target=server.engine.load,daemon=True).start()
-    threading.Thread(target=server.handwriting.load,daemon=True).start()
     threading.Thread(target=server.expire_sessions,daemon=True).start()
     print('ISOLATED_VALIDATION_SERVER http://127.0.0.1:18745',flush=True)
     try:

@@ -19,7 +19,7 @@ try{
   await page.locator('#editor').evaluate((e,t)=>{e.value=t;e.setSelectionRange(6,6);e.dispatchEvent(new Event('input'));},text);
   const caret=()=>page.locator('#editor').evaluate(e=>({start:e.selectionStart,end:e.selectionEnd,direction:e.selectionDirection,text:e.value}));
   const count=()=>page.locator('.selection-count').count()?page.locator('.selection-count').innerText():'';
-  const label=()=>page.locator('.selection-mini-label').count()?page.locator('.selection-mini-label').innerText():'';
+  const label=()=>page.locator('.selection-mini-track').getAttribute('aria-label');
   const geometry=()=>page.locator('#keyboard').evaluate(e=>({height:e.offsetHeight,keys:[...e.querySelectorAll('.key-row .key')].map(k=>{const r=k.getBoundingClientRect();return [r.x,r.y,r.width,r.height];})}));
   const original=await geometry();
   const box=sel=>page.locator(sel).boundingBox();
@@ -43,13 +43,10 @@ try{
   assert.equal(await page.locator('.selection-mini-track.locked').count(),1,'The mini rail marks the locked state');
   assert.equal(await label(),'起点锁定 · 拖动调整终点','Locked label');
   assert.deepEqual(await caret(),{start:origin,end:origin,direction:'forward',text},'Locking keeps the caret where it was');
-  assert.equal(await page.locator('.selection-paragraphs button:disabled').count(),0,'Paragraph jumps are available while locked');
   // 克制的颜色变化：锁定=浅蓝底 + 主色短线/标语，未锁定=灰。
   const styleOf=sel=>page.locator(sel).evaluate(e=>{const s=getComputedStyle(e);return {bg:s.backgroundColor,opacity:s.opacity,color:s.color};});
   assert.equal((await styleOf('.keyboard-footer .cursor-hint')).bg,'rgb(74, 134, 200)','The main rail hint turns into the accent colour while locked');
   assert.equal((await styleOf('.keyboard-footer .cursor-hint')).opacity,'1','No inline fade value may dim the locked hint');
-  assert.equal((await styleOf('.selection-mini-track')).bg,'rgb(230, 239, 249)','Mini rail uses the soft accent background while locked');
-  assert.equal((await styleOf('.selection-mini-label')).color,'rgb(74, 134, 200)');
   // 一次长按只切换一次：继续按住不会再翻回去。
   await page.waitForTimeout(600);assert.equal(await page.locator('.selection-mini-track.locked').count(),1,'One long press toggles once');
   await page.mouse.up();
@@ -76,7 +73,6 @@ try{
   assert.equal(await page.locator('.selection-mini-track.locked').count(),0,'The mini rail drops the locked state');
   assert.equal(await label(),'移动光标 · 长按锁定起点','Unlocked label');
   assert.equal(await count(),'已选 0 字');
-  assert.equal(await page.locator('.selection-paragraphs button:disabled').count(),2,'Paragraph jumps are disabled while unlocked');
   assert.equal((await styleOf('.keyboard-footer .cursor-hint')).bg,'rgb(129, 138, 152)','The main rail hint goes back to grey while unlocked');
   assert.equal(await page.locator('.selection-editor [data-action="copy-text"]').isDisabled(),true,'An empty selection disables copy');
   assert.equal(await page.locator('.selection-editor [data-action="cut-text"]').isDisabled(),true,'An empty selection disables cut');
@@ -90,7 +86,6 @@ try{
   await longPress('.selection-mini-track');await page.mouse.up();
   assert.equal(await page.locator('.selection-mini-track.locked').count(),1,'Long press again locks the new caret as the origin');
   assert.deepEqual(await caret(),{start:moved,end:moved,direction:'forward',text},'Re-locking pins the new position');
-  assert.equal(await page.locator('.selection-paragraphs button:disabled').count(),0,'Paragraph jumps come back with the lock');
   p=await press('.selection-mini-track');await page.mouse.move(p.x+22,p.y);await page.mouse.up();
   at=await caret();assert.equal(at.start,moved,'Re-locked origin stays put');assert(at.end>moved,'Re-locked origin extends the new end point');
   const lockedAgain=at;
@@ -125,9 +120,28 @@ try{
   p=await press('.selection-mini-track');await page.evaluate(()=>window.dispatchEvent(new Event('blur')));
   await page.mouse.move(p.x-22,p.y);await page.mouse.up();
   assert.deepEqual(await caret(),beforeCancel,'Losing focus must stop the drag as well');
+  await page.locator('#editor').click({position:{x:70,y:20}});
+  const manual=(await caret()).start;
+  assert.equal(await page.locator('.selection-editor').count(),0,'Manually repositioning in the editor must close the old selection panel');
+  assert.equal(await page.locator('.keyboard-footer .cursor-zone.locked').count(),0,'Manual repositioning must release the old anchor');
+  p=await press('.keyboard-footer .cursor-zone');await page.mouse.move(p.x+22,p.y);await page.mouse.up();
+  at=await caret();assert.equal(at.start,at.end,'After a manual move, the rail is a free caret again');assert.equal(at.start,manual+2);
+  const fresh=at.start;
+  await longPress('.keyboard-footer .cursor-zone');await page.mouse.up();
+  assert.deepEqual(await caret(),{start:fresh,end:fresh,direction:'forward',text},'Only a fresh long press locks the manually repositioned caret');
   await page.locator('#editor').evaluate(e=>{e.value='';e.setSelectionRange(0,0);});
   await dismiss();
   assert.equal(await page.locator('.selection-editor').count(),0);
+
+  // ── 主轨短按＝精调一个字：左半左移、右半右移，不形成选区、不重开面板 ──────────
+  await page.locator('#editor').evaluate((e,t)=>{e.value=t;e.setSelectionRange(10,10);e.dispatchEvent(new Event('input'));},text);
+  const railBox=await box('.keyboard-footer .cursor-zone');
+  await page.mouse.click(railBox.x+railBox.width*.15,railBox.y+railBox.height/2);
+  at=await caret();assert.equal(at.start,at.end,'A short tap on the main rail must never leave a selection');assert.equal(at.start,9,'A short tap on the left half steps one character left');
+  await page.mouse.click(railBox.x+railBox.width*.85,railBox.y+railBox.height/2);
+  assert.equal((await caret()).start,10,'A short tap on the right half steps one character right');
+  assert.equal(await page.locator('.selection-editor').count(),0,'A short tap must not reopen the editing panel');
+  await page.locator('#editor').evaluate(e=>{e.value='';e.setSelectionRange(0,0);});
   assert.deepEqual(await geometry(),original,'The 26-key geometry never changes');
   assert.deepEqual(errors,[]);
   console.log('PASS: dual-rail long-press toggle, locked end-point drag, reverse active end, free move, re-lock, outside tap consumed, panel re-open, broken touch/blur cleanup, unchanged geometry');

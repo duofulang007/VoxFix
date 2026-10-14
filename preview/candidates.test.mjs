@@ -86,7 +86,7 @@ try{
   await native.addInitScript(()=>{
     window.calls=[];
     window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','gestureStart','gestureMove','gestureEnd','edit','ready','resize','refreshClipboard','importClipboard'].map(name=>[name,(...args)=>calls.push([name,...args])]));
-    VoxFixIme.voiceReady=()=>true;VoxFixIme.handReady=()=>false;VoxFixIme.pinyinReady=()=>true;
+    VoxFixIme.voiceReady=()=>true;VoxFixIme.pinyinReady=()=>true;
     VoxFixIme.pinyinCandidates=raw=>JSON.stringify({preedit:raw,words:['你好','你好吗','你好很高兴认识你','你好很高兴认识你欢迎回来我们明天下午三点在咖啡店见面','你','呢',...Array.from({length:76},(_,i)=>String.fromCodePoint(0x4e00+i))]});
     VoxFixIme.pinyinChoose=(raw,word)=>{calls.push(['pinyinChoose',raw,word]);return JSON.stringify({committed:true,remaining:'haoma'});};
   });

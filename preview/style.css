@@ -32,31 +32,25 @@
 .keyboard.text-selecting{touch-action:none}
 .selection-count{font-size:15px;font-variant-numeric:tabular-nums;pointer-events:none}
 .selection-editor-backdrop{position:absolute;inset:0;z-index:5;background:#00000008}
-.selection-editor{position:absolute;right:14px;bottom:23px;width:min(264px,calc(100% - 28px));z-index:6;padding:8px;border-radius:22px 22px 14px 22px;background:var(--key-bg);box-shadow:0 8px 22px #0003;color:var(--key-color);touch-action:none}
+.selection-editor{position:absolute;right:14px;bottom:23px;width:min(288px,calc(100% - 28px));z-index:6;padding:8px;border-radius:22px 22px 14px 22px;background:var(--key-bg);box-shadow:0 8px 22px #0003;color:var(--key-color);touch-action:none}
 .selection-editor button{min-height:48px;background:transparent;border-radius:12px;font-size:13px}
-/* 页头只留「选中字数 + 全选」：面板靠点击框外收起，不再放「完成」。 */
-.selection-editor-header{height:48px;display:flex;align-items:center;gap:5px;margin-bottom:8px}
-.selection-editor-header .selection-count{flex:1;min-width:0;font-size:13px;padding-left:6px;color:var(--key-color);font-variant-numeric:tabular-nums}
-.selection-editor-header button{min-width:48px;padding:0 12px}
-.selection-editor-header .selection-all{color:var(--accent)}
-.selection-paragraphs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}
-.selection-paragraphs button{height:54px;background:var(--func-bg);border-radius:14px}
-/* 未锁定时没有起点可用：选段整体置灰，不靠颜色假装可选。 */
-.selection-paragraphs button:disabled{opacity:1;color:var(--muted);background:var(--func-bg)}
-.selection-paragraphs button[data-value="1"]:not(:disabled){background:var(--accent-soft);color:var(--accent)}
-.keyboard .selection-editor .selection-mini-track{position:relative;top:auto;flex:none;width:100%;height:54px;min-height:54px;margin:0 0 10px;border-radius:14px;background:var(--func-bg)}
-.selection-mini-track .cursor-hint,.selection-mini-track .cursor-contact,.selection-mini-track .cursor-focus{top:17px}
-.selection-mini-track .cursor-hint{width:36px;left:calc(50% - 18px);height:4px;opacity:.5;background:var(--muted)}
-/* 锁定态只靠克制的颜色变化表明：浅蓝底 + 蓝线蓝字，不新增按钮或说明文字。 */
-.keyboard .selection-editor .selection-mini-track.locked{background:var(--accent-soft)}
-.selection-mini-track.locked .cursor-hint{opacity:1;background:var(--accent)}
-.selection-mini-label{position:absolute;bottom:8px;font-size:11px;color:var(--muted);pointer-events:none}
-.selection-mini-track.locked .selection-mini-label{color:var(--accent)}
-.selection-mini-left,.selection-mini-right{position:absolute;top:17px;font-size:13px;color:var(--muted);pointer-events:none}
-.selection-mini-left{left:15px}.selection-mini-right{right:15px}
-.selection-editor-clipboard{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;padding-top:8px;border-top:1px solid var(--func-bg)}
-.selection-editor-clipboard .selection-copy{background:var(--func-bg)}
+/* 两栏共用大触控区；只有中心点表示锁定，不强调复制按钮。 */
+.selection-editor-header{height:32px;display:flex;align-items:center;padding-left:6px;margin-bottom:6px}
+.selection-count{font-size:13px;font-variant-numeric:tabular-nums}
+.selection-editor-body{display:grid;grid-template-columns:76px minmax(0,1fr);gap:8px}
+.selection-editor-clipboard{display:grid;grid-template-rows:repeat(4,48px);gap:4px}
+.selection-editor .selection-editor-clipboard button{background:var(--func-bg);color:var(--key-color)}
+.keyboard .selection-editor .selection-mini-track{position:relative;top:auto;display:grid;align-items:stretch;justify-content:stretch;grid-template-columns:repeat(3,minmax(48px,1fr));grid-template-rows:repeat(3,1fr);gap:4px;flex:none;width:100%;height:204px;min-height:0;margin:0;overflow:visible;background:transparent}
+.selection-mini-track button{min-width:48px;min-height:48px;background:var(--func-bg);font-size:23px;padding:0;touch-action:none}
+.selection-mini-track .selection-center{grid-column:2;grid-row:2}
+.selection-center span{display:block;margin:auto;width:8px;height:8px;border-radius:50%;background:var(--muted);pointer-events:none}
+.selection-mini-track.locked .selection-center span{background:var(--accent)}
 .selection-editor button.pressed{background:var(--accent-soft);color:var(--accent)}
+/* 呼出动效（概念③层叠卡片）的「键盘退后」：只压暗亮度、不碰 transform——面板开合不得改变任何按键矩形。
+   过渡写在常态上，面板收起时同一条曲线对称还原；语音幽灵/剪贴板预览/悬浮 popup 不参与退后。 */
+.keyboard>:not(.selection-editor):not(.selection-editor-backdrop):not(.voice-ghost):not(.clip-preview):not(.joy-guide):not(.popup){transition:filter .3s cubic-bezier(.22,1,.36,1)}
+.keyboard.kb-recede>:not(.selection-editor):not(.selection-editor-backdrop):not(.voice-ghost):not(.clip-preview):not(.joy-guide):not(.popup){filter:brightness(.94)}
+@media (prefers-reduced-motion:reduce){.keyboard>:not(.selection-editor):not(.selection-editor-backdrop):not(.voice-ghost):not(.clip-preview):not(.joy-guide):not(.popup){transition:none}}
 .gesture-note{font-size:12px;line-height:1.8;color:#647989;margin:0 0 22px}
 @media(prefers-contrast:more){.cursor-hint{opacity:.65}}
 .speech-status{font-size:12px;color:#587789;line-height:1.8;margin:0 0 10px}.enable-mic{border:1px solid #a5bacb;border-radius:6px;background:#edf3f8;padding:10px 16px;color:#346b96;font-size:12px}.demo-toggle{display:flex;align-items:center;gap:7px;font-size:12px;color:#7f8894;margin:15px 0}.demo-toggle input{accent-color:#657f95}
@@ -64,9 +58,8 @@
 .popup:not(.key-popup){left:15px;bottom:60px;min-width:175px}.popup:not(.key-popup) button{font-size:13px;padding:11px 9px}.popup:not(.key-popup) button+button{border-top:1px solid #8881}
 
 .snippet-dialog{border:1px solid #dce0e5;border-radius:12px;background:#fff;color:#313944;width:min(420px,90vw);padding:24px;box-shadow:0 20px 60px #0002}.snippet-dialog::backdrop{background:#1a24384d}.snippet-dialog h2{margin:0 0 20px;font-size:17px}.snippet-dialog textarea{width:100%;resize:vertical;border:1px solid #c9d2dc;border-radius:7px;padding:12px;margin-top:9px;font-size:15px;line-height:1.6}.dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}.dialog-actions button{border-radius:6px;padding:9px 20px;background:#edf0f4;font-size:13px}.dialog-actions button[type=submit]{background:#486a86;color:white}#snippet-error{font-size:12px;color:#a44740;min-height:16px}
-.handwriting-surface{position:absolute;top:96px;left:8px;right:8px;bottom:220px;border:1px solid #dfe4eb;border-radius:10px;background:#fafbfd;z-index:2;overflow:hidden}.handwriting-surface:before,.handwriting-surface:after{content:"";position:absolute;pointer-events:none;border-color:#dce3ed;border-style:dashed}.handwriting-surface:before{top:50%;width:100%;border-width:1px 0 0}.handwriting-surface:after{left:50%;height:100%;border-width:0 0 0 1px}.handwriting-surface canvas{width:100%;height:100%;display:block;touch-action:none;position:relative;z-index:1}.ink-guide{position:absolute;top:45%;width:100%;text-align:center;color:#98a5b2;line-height:2;font-size:18px;pointer-events:none}.ink-guide small{font-size:12px;color:#adb7c1}.handwriting-surface #ink-clear{position:absolute;right:9px;top:8px;z-index:3;background:#eff2f6;border-radius:6px;padding:7px 11px;font-size:12px;color:#718196}.hand-controls{height:46px;flex-shrink:0;margin:8px 0}.hand-controls .key{padding-top:0}.layout-grid{grid-template-columns:repeat(3,1fr)}
+.layout-grid{grid-template-columns:repeat(3,1fr)}
 .emoji-search-input{width:calc(100% - 16px);margin:8px;border:1px solid #d4dce6;border-radius:6px;padding:7px 9px;font-size:12px;background:var(--key-bg);color:var(--key-color)}
-.handwriting-surface:after{top:0}
 .clip-menu-backdrop{position:absolute;inset:0;z-index:8;background:#0003;display:flex;align-items:flex-end;padding:8px 8px 50px}.clip-menu-sheet{width:100%;max-height:100%;overflow:auto;background:var(--key-bg);border-radius:12px;box-shadow:0 6px 20px #0002;padding:5px 0;touch-action:pan-y}.clip-menu-sheet>button{display:block;width:100%;font-size:13px;padding:12px 16px;min-height:42px;text-align:left}.clip-menu-sheet>button:active{background:#9ab8d633}.clip-menu-title{font-size:11px;color:var(--muted);padding:8px 16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-bottom:1px solid #8881}.clip-menu-sheet .clip-menu-cancel{text-align:center;border-top:1px solid #8881;color:var(--muted)}.clear-learning{background:white;border:1px solid #dce0e5;border-radius:6px;padding:9px 14px;font-size:12px;color:#647282}
 .keyboard{touch-action:auto}.clip-list button,.symbol-grid button,.layout-grid button,.emoji-body button,.candidate-grid button,.number-strip button,.clip-menu-sheet button{touch-action:pan-y}
 .t9-grid{display:grid;grid-template-columns:126fr 156fr 156fr 156fr 126fr;grid-template-rows:repeat(4,minmax(0,1fr));column-gap:var(--key-gap);row-gap:8px;flex:1;min-height:0;padding:5px 0 8px}.t9-grid .key{min-width:0;position:relative;display:flex;align-items:center;justify-content:center;background:var(--key-bg);color:var(--key-color);border-radius:var(--key-radius);box-shadow:0 1px 0 var(--line);font-size:var(--key-font);padding:9px 0 0;overflow:hidden}.t9-grid .key.function{background:var(--func-bg);font-size:13px;padding:0}.t9-grid .key.space{padding:0;flex-direction:column}.t9-grid .t9-letter .hint{font-size:10px;top:3px;color:#abb2bc}.t9-grid .t9-letter>span:last-child{font-size:calc(var(--key-font) - 1px);white-space:nowrap}.t9-grid .t9-letter:first-of-type{font-size:16px}.t9-grid .key.pressed{background:var(--key-press,rgba(202,208,220,.451))}.t9-grid .key.function.pressed{background:var(--func-press,rgba(197,203,212,.796))}.t9-grid .key:disabled{opacity:.55;cursor:default}.t9-symbols{grid-column:1;grid-row:1 / span 3;display:flex;flex-direction:column;overflow:auto;min-height:0;border-radius:var(--key-radius);background:var(--func-bg);touch-action:pan-y;scrollbar-width:none}.t9-symbols button{flex-shrink:0;height:20%;min-height:0;font-size:16px;border-bottom:1px solid #bbc3ce66;margin:0 6px;touch-action:pan-y}.t9-symbols button:last-child{border-bottom:0}

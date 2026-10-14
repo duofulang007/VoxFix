@@ -18,13 +18,10 @@ try{
   await page.addInitScript(()=>{
     window.calls=[];window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','gestureStart','gestureLock','gestureMove','gestureEnd','haptic','edit','ready','resize','refreshClipboard','importClipboard'].map(name=>[name,(...args)=>window.calls.push([name,...args])]));
     window.VoxFixIme.voiceReady=()=>true;
-    window.VoxFixIme.handReady=()=>false;
-    if(!localStorage.getItem('voxfix-keyboard-v1'))localStorage.setItem('voxfix-keyboard-v1',JSON.stringify({layout:'fullhand',language:'zh'}));
     for(const name of ['commit','delete'])window.VoxFixIme[name]=(...args)=>{window.calls.push([name,...args]);setTimeout(()=>{window.voxfixClearComposition?.(true);if(window.voxfixStartInput)window.voxfixStartInput(1,true);else{window.voxfixReset?.();window.voxfixInputType?.(1);}},10);};
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
   await page.waitForFunction(()=>typeof window.voxfixReset==='function'&&document.querySelector('#pinyin-status').textContent.includes('已就绪'));
-  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('voxfix-keyboard-v1')).layout),'26','Disabled handwriting migrates to 26 keys');
   const key=action=>page.locator(`#keyboard [data-action="${action}"]`).first();
   await page.locator('#keyboard [data-action="letter"][data-value="N"]').click();
   await page.locator('#keyboard [data-action="letter"][data-value="I"]').click();
@@ -89,6 +86,11 @@ try{
   await page.evaluate(()=>window.voxfixStartInput(33,true));assert.equal(await page.locator('#keyboard [data-action="letter"]').first().getAttribute('data-value'),'q');
   await page.evaluate(()=>{window.voxfixReset();window.voxfixInputType(2);});assert(await page.locator('.number-body').isVisible());
   await page.evaluate(()=>{window.voxfixReset();window.voxfixInputType(33);});assert.equal(await page.locator('#keyboard [data-action="letter"]').first().getAttribute('data-value'),'q');
+  // 支付宝/银行数字密码框：每输入一个字符宿主都会带 flag 抖动并 restarting（inputType 数值在 18↔2 间变），
+  // 只要「键盘形态」仍是数字页，就不能重置成字母页再切回来——否则表现为「按一个数字弹一下」。
+  await page.evaluate(()=>{window.voxfixReset();window.voxfixStartInput(18,false);});assert(await page.locator('.number-body').isVisible());
+  for(const type of [2,18,18,2,18]){await page.evaluate(t=>window.voxfixStartInput(t,true),type);}
+  assert(await page.locator('.number-body').isVisible(),'Password-field flag jitter must not reset the number page');
   await page.evaluate(()=>window.voxfixReset());
   const box=await key('space').boundingBox(),x=box.x+box.width/2,y=box.y+box.height/2;
   const voiceTouch=await page.context().newCDPSession(page);
@@ -124,7 +126,7 @@ try{
   assert.equal(await page.locator('.controls').isVisible(),false);
   const keyboard=await page.locator('#keyboard').boundingBox();assert(keyboard.height===351&&keyboard.width===393);
   await key('layouts').click();
-  assert.equal(await page.locator('[data-action="layout"][data-value="fullhand"]').count(),0,'Disabled handwriting is not offered');
+  assert.equal(await page.locator('[data-action="layout"][data-value="fullhand"]').count(),0,'Handwriting layout is not offered');
   await page.locator('[data-action="layout"][data-value="26"]').click();
   const tapTouch=async(action,value,hold=80,outside=false)=>{
     const locator=value===undefined?key(action):page.locator(`#keyboard [data-action="${action}"][data-value="${value}"]`).first();

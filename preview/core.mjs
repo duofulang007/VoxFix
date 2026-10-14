@@ -31,9 +31,11 @@ export const joystick = Object.freeze({
   // 上下分开定半径：滑轨贴着键盘底，向下只剩几十像素。minDown 取 40，让「推到键盘底」
   // （约 32px）刚好落在最快档门槛上（32/40 = 0.8 ≥ 0.78）。
   minDown: 40,
+  maxRadius: 96,
 });
 export function joystickRadii(side,up,down,config=joystick){
-  return {a:Math.max(config.minSide,side),bUp:Math.max(config.minUp,up),bDown:Math.max(config.minDown,down)};
+  // 大键盘也只需推约75px进入持续档，不能把整张键盘高度当成上推行程。
+  return {a:Math.min(config.maxRadius,Math.max(config.minSide,side)),bUp:Math.min(config.maxRadius,Math.max(config.minUp,up)),bDown:Math.min(config.maxRadius,Math.max(config.minDown,down))};
 }
 export function joystickRho(dx,dy,{a,bUp,bDown},shape=joystick.shape){
   const b=dy<0?bUp:bDown;
@@ -168,3 +170,7 @@ export function rankLearned(words,records,key){
   const learned=[...scores].filter(([,hits])=>hits>=2).sort((a,b)=>b[1]-a[1]).map(([word])=>word);
   return [...new Set([...learned,...words])];
 }
+
+// 删除和摇杆共用按住加速曲线；持续方向计时，转向或松手重新起步。
+export function repeatDelay(step){return Math.max(35,110-Math.max(0,step)*8);}
+export function joystickHoldRate(elapsed){return Math.min(24,1000/repeatDelay(Math.floor(Math.max(0,elapsed)/110)));}

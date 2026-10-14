@@ -10,7 +10,6 @@ from pathlib import Path
 
 import numpy as np
 import sherpa_onnx as sherpa
-from handwriting import Handwriting
 from polish import Polisher
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -161,7 +160,6 @@ class Engine:
 
 
 engine = Engine()
-handwriting = Handwriting()
 polisher = Polisher()
 
 
@@ -189,8 +187,6 @@ class Handler(SimpleHTTPRequestHandler):
             self.reply(403, {'error': '仅允许本机访问'})
         elif self.path == '/api/voice/status':
             self.reply(200, {'ready': engine.ready, 'error': engine.error, 'offline': True, 'engine': 'Zipformer + Paraformer + CT-Transformer'})
-        elif self.path == '/api/handwriting/status':
-            self.reply(200, {'ready': handwriting.ready, 'error': handwriting.error})
         elif self.path == '/api/polish/status':
             self.reply(200, polisher.status())
         else:
@@ -211,12 +207,6 @@ class Handler(SimpleHTTPRequestHandler):
                 if not isinstance(payload, dict):
                     raise ValueError('润色请求格式无效')
                 self.reply(200, polisher.polish(payload.get('text')))
-                return
-            if self.path == '/api/handwriting':
-                payload = json.loads(body)
-                if not isinstance(payload, dict):
-                    raise ValueError('手写数据格式无效')
-                self.reply(200, {'candidates': handwriting.recognize(payload)})
                 return
             key = self.headers.get('X-Voice-Session', '')
             with engine.lock:
@@ -262,7 +252,6 @@ def expire_sessions():
 if __name__ == '__main__':
     server = ThreadingHTTPServer(('127.0.0.1', PORT), Handler)
     threading.Thread(target=engine.load, daemon=True).start()
-    threading.Thread(target=handwriting.load, daemon=True).start()
     threading.Thread(target=expire_sessions, daemon=True).start()
     print(f'VOICE_PAGE_READY http://127.0.0.1:{PORT}', flush=True)
     server.serve_forever()

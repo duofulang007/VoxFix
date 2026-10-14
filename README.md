@@ -63,12 +63,11 @@ node preview/native-ime.test.mjs      # 以及 ime-regressions / candidates / fi
 
 ## 电脑端原型（非当前主线）
 
-`preview/` + `voice/` 保留了一套完整的电脑网页试用版：真实录音、流式出字、本地整理，以及全屏手写。
+`preview/` + `voice/` 保留了一套完整的电脑网页试用版：真实录音、流式出字、本地整理。
 它曾是主要开发方式，现在只用于网页侧试验，**不代表手机原生能力**。
 
 - `voice/server.py`：本机语音服务，端口 `127.0.0.1:18743`，只监听本机。手机上的 `127.0.0.1` 访问不到它。
-- 模型准备：`.venv\Scripts\python.exe tools\setup_voice.py`（语音）、
-  `tools\setup_handwriting.py`（手写，桌面原型用）。
+- 模型准备：`.venv\Scripts\python.exe tools\setup_voice.py`（语音）。
 - 单文件试用页：`python tools/build_preview.py` 生成根目录 `键盘试用页.html`（生成物，不入库），
   双击即可打开，无需起服务。
 - 网页词库（非 librime 路径）：`tools\setup_lexicon.py` → `tools\build_pinyin.py`，
@@ -85,5 +84,5 @@ node preview/native-ime.test.mjs      # 以及 ime-regressions / candidates / fi
 
 - 语音不是讯飞引擎移植，全部在本机离线运行；录音只在内存处理，不保存录音或文字日志，不联网识别。
 - 拼音是 librime + 固定版本公开词库，词频排序和上下文预测不能等同于成熟商用引擎；不宣称与讯飞一致。
-- 手写、安卓端本地润色都已停用，相关代码只作为历史保留在 `docs/archive/` 与 `android/disabled-handwriting/`。
+- 手写（含电脑端原型手写）与安卓端本地润色都已移除，相关代码只作为历史保留在 `docs/archive/` 与 `android/disabled-handwriting/`。
 - 电脑端结果不能证明手机效果；延迟、内存、发热与耗电仍需真机实测。

@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>层叠卡片 · 方向盘精修 5 版</title>
+<style>
+  :root{
+    --ink:#1c1c1e; --sub:#6e6e73; --faint:#aeaeb2;
+    --page:#eef0f5; --card:#fff; --line:#e3e5ec;
+    --accent:#0a84ff;
+    --kb-bg:#d3d7e2; --key:#fff; --func:#c0c5d3;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  body{font-family:-apple-system,"SF Pro SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    background:var(--page);color:var(--ink);padding:48px 20px 90px}
+  .wrap{max-width:1060px;margin:0 auto}
+  h1{font-size:28px;letter-spacing:-.02em}
+  .lede{color:var(--sub);font-size:13.5px;line-height:1.8;margin-top:10px;max-width:820px}
+  .lede b{color:var(--ink)}
+  .principles{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+  .principles span{font-size:12px;color:var(--sub);background:#fff;border:1px solid var(--line);
+    border-radius:999px;padding:6px 13px}
+  .principles span b{color:var(--ink);font-weight:600}
+
+  .ver{background:var(--card);border:1px solid var(--line);border-radius:24px;
+    padding:26px 28px;margin-top:32px;box-shadow:0 2px 10px rgba(30,34,48,.05)}
+  .ver-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:12px}
+  .num{font-size:12px;font-weight:700;color:#fff;background:var(--ink);border-radius:8px;
+    padding:4px 9px;letter-spacing:.05em}
+  .ver h2{font-size:20px;letter-spacing:-.01em}
+  .src{font-size:12px;color:var(--sub);border:1px solid var(--line);border-radius:999px;padding:3px 10px}
+  .idea{color:var(--sub);font-size:13px;line-height:1.8;margin-top:10px;max-width:880px}
+  .idea b{color:var(--ink)}
+  .cols{display:grid;grid-template-columns:340px 1fr;gap:28px;margin-top:20px;align-items:start}
+  @media (max-width:860px){.cols{grid-template-columns:1fr}}
+
+  /* —— 面板内效果（层叠卡片里的样子） —— */
+  .phone{position:relative;width:100%;height:330px;background:#f7f8fb;
+    border:1px solid #dcdfe8;border-radius:24px;overflow:hidden;user-select:none;
+    box-shadow:inset 0 0 0 4px #fff,0 6px 18px rgba(30,34,48,.08)}
+  .textarea{padding:14px 18px;font-size:13px;line-height:2;color:#3a3a3c;height:110px}
+  .textarea .sel{background:#fdeec3;border-radius:3px;padding:1px 0}
+  .keyboard{position:absolute;left:0;right:0;bottom:0;height:200px;background:var(--kb-bg);
+    padding:8px 6px 10px;transform:scale(.965) translateY(4px);filter:brightness(.94)}
+  .kb-row{display:flex;gap:5px;margin-bottom:6px;padding:0 2px}
+  .kb-row i{flex:1;height:38px;background:var(--key);border-radius:7px;
+    box-shadow:0 1px 0 rgba(0,0,0,.12);display:block}
+  .kb-row i.f{background:var(--func);flex:.62}
+  .kb-footer{height:34px;display:flex;align-items:center;gap:8px;padding:0 8px}
+  .kb-footer .track{flex:1;height:24px;border-radius:12px;background:#00000010}
+  .kb-footer i{width:30px;height:30px;border-radius:50%;background:#00000012;display:block}
+  .panel{position:absolute;right:10px;bottom:14px;width:238px;z-index:6;border-radius:20px;padding:10px;
+    background:rgba(255,255,255,.78);backdrop-filter:blur(22px) saturate(180%);
+    box-shadow:0 12px 32px rgba(30,34,48,.14), inset 0 1px 0 rgba(255,255,255,.8)}
+  .panel .p-head{display:flex;justify-content:space-between;font-size:12px;color:var(--sub);padding:0 4px 8px}
+  .panel .p-head b{color:var(--ink)}
+  .panel .p-body{display:grid;grid-template-columns:60px 1fr;gap:8px}
+  .panel .p-clip{display:grid;grid-template-rows:repeat(4,1fr);gap:5px}
+  .panel .p-clip i{display:flex;align-items:center;justify-content:center;font-style:normal;
+    font-size:11px;color:#4a4a4e;border-radius:10px;background:rgba(255,255,255,.65);
+    box-shadow:inset 0 0 0 1px #e4e7ef}
+  .padbox{position:relative;height:168px;border-radius:14px}
+
+  /* —— 可交互大舞台 —— */
+  .stage-wrap{display:flex;flex-wrap:wrap;gap:22px;align-items:center}
+  .stage{position:relative;width:300px;height:250px;border-radius:20px;flex:none;
+    background:#f6f7fb;border:1px solid var(--line);overflow:hidden;touch-action:none;user-select:none}
+  .note{font-size:12.5px;color:var(--sub);line-height:1.85;max-width:420px}
+  .note b{color:var(--ink)}
+  .note .hig{display:block;margin-top:8px;font-size:12px;color:#8a8f9c;border-left:2px solid var(--line);padding-left:10px}
+  .readout{font-variant-numeric:tabular-nums;font-size:12px;color:var(--accent);
+    background:#0a84ff10;border-radius:8px;padding:5px 10px;display:inline-block;margin-top:8px;min-width:200px}
+  .replayline{margin-top:6px;font-size:11.5px;color:var(--faint)}
+
+  /* ======== V1 隐形触控板 ======== */
+  .v1 .padbox,.v1.stage{background:rgba(255,255,255,.45)}
+  .v1-caret{position:absolute;left:50%;top:50%;width:2px;height:22px;border-radius:1px;
+    background:var(--accent);opacity:0;transform:translate(-50%,-50%)}
+  .v1-chip{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    background:rgba(28,28,30,.88);color:#fff;font-size:11.5px;border-radius:9px;padding:5px 10px;
+    opacity:0;pointer-events:none;white-space:nowrap;backdrop-filter:blur(6px);
+    box-shadow:0 4px 14px rgba(0,0,0,.25);letter-spacing:.02em}
+  .v1-chip b{font-weight:600;margin-right:4px}
+  .v1-hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    color:var(--faint);font-size:11.5px;letter-spacing:.08em;transition:opacity .25s}
+  .stage.v1 .v1-hint{top:72%}
+  /* V1 正文联动区 */
+  .v1-doc{position:absolute;left:14px;right:14px;top:14px;font-size:13.5px;line-height:1.95;
+    color:#3a3a3c;background:#fff;border:1px solid var(--line);border-radius:12px;
+    padding:10px 13px;min-height:80px;pointer-events:none}
+  .v1-doc .cur{border-left:2px solid var(--accent);margin-left:1px;
+    animation:v1blink 1.06s steps(1) infinite}
+  @keyframes v1blink{50%{opacity:0}}
+  .v1-ripple{position:absolute;width:44px;height:44px;border-radius:50%;
+    background:#0a84ff22;pointer-events:none;transform:translate(-50%,-50%) scale(0)}
+  /* 迷你面板：键盘字母淡出 = 触控板模式 */
+  .keyboard.tp .kb-row i{background:#e9ecf3;box-shadow:none}
+  .keyboard.tp .kb-footer .track{background:#00000008}
+  .mini-caret{border-left:2px solid var(--accent);margin-left:1px;
+    animation:v1blink 1.06s steps(1) infinite}
+
+  /* ======== V2 发丝十字线 ======== */
+  .v2-line-h,.v2-line-v{position:absolute;background:#dde1ea;pointer-events:none}
+  .v2-line-h{left:0;right:0;top:50%;height:1px}
+  .v2-line-v{top:0;bottom:0;left:50%;width:1px}
+  .v2-draw{position:absolute;left:50%;top:50%;height:1.5px;background:var(--accent);
+    transform-origin:0 50%;width:0;pointer-events:none;border-radius:1px}
+  .v2-dot{position:absolute;left:50%;top:50%;width:11px;height:11px;border-radius:50%;
+    background:var(--accent);transform:translate(-50%,-50%);box-shadow:0 0 0 4px #0a84ff18;cursor:grab}
+  .v2-tick{position:absolute;width:4px;height:4px;border-radius:50%;background:var(--accent);
+    opacity:0;transform:translate(-50%,-50%)}
+
+  /* ======== V3 呼吸点（扇形微光） ======== */
+  .v3-glow{position:absolute;left:50%;top:50%;width:150px;height:150px;border-radius:50%;
+    transform:translate(-50%,-50%);opacity:0;pointer-events:none;
+    background:conic-gradient(from -30deg, transparent 0deg, #0a84ff22 30deg, #0a84ff22 60deg, transparent 90deg)}
+  .v3-dot{position:absolute;left:50%;top:50%;width:15px;height:15px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, #5eb2ff, var(--accent));
+    transform:translate(-50%,-50%);cursor:grab;box-shadow:0 1px 5px rgba(10,132,255,.4)}
+
+  /* ======== V4 刻度微光 ======== */
+  .v4-ring{position:absolute;left:50%;top:50%;width:112px;height:112px;border-radius:50%;
+    border:1px solid #e0e4ec;transform:translate(-50%,-50%)}
+  .v4-tick{position:absolute;left:50%;top:50%;width:3px;height:8px;border-radius:2px;
+    background:#cfd4df;transform:translate(-50%,-50%)}
+  .v4-tick.on{background:var(--accent)}
+  .v4-dot{position:absolute;left:50%;top:50%;width:13px;height:13px;border-radius:50%;
+    background:#fff;box-shadow:0 1px 5px rgba(30,34,48,.25), inset 0 0 0 1px #e2e5ee;
+    transform:translate(-50%,-50%);cursor:grab;z-index:2}
+  .v4-dot::after{content:"";position:absolute;left:50%;top:50%;width:5px;height:5px;border-radius:50%;
+    background:var(--accent);transform:translate(-50%,-50%)}
+
+  /* ======== V5 字随指动 ======== */
+  .v5-strip{position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%);
+    overflow:hidden;background:rgba(255,255,255,.6);box-shadow:inset 0 0 0 1px #e8eaf1;
+    display:flex;align-items:center;white-space:nowrap}
+  .v5-text{font-size:17px;color:#3a3a3c;padding-left:150px;will-change:transform}
+  .v5-text .cur{border-left:2px solid var(--accent);margin-left:1px}
+  .v5-caret{position:absolute;top:50%;width:14px;height:14px;color:var(--faint);opacity:0;
+    transform:translateY(-50%)}
+  .v5-caret.l{left:10px}.v5-caret.r{right:10px}
+  .v5-row{position:absolute;left:50%;transform:translateX(-50%);color:var(--faint);
+    font-size:10px;letter-spacing:.1em;opacity:.7}
+  .v5-row.up{top:14%}.v5-row.dn{bottom:14%}
+
+  .final{margin-top:40px;background:#101216;color:#e8eaf0;border-radius:24px;padding:28px 30px}
+  .final h2{font-size:19px;margin-bottom:10px;color:#fff}
+  .final p{font-size:13px;line-height:1.9;color:#b9bec9}
+  .final b{color:#fff}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>方向盘精修 · 5 版（层叠卡片基底）</h1>
+  <p class="lede">
+    基底沿用已选定的 <b>③ 层叠卡片</b>（键盘缩 96.5% 退后 + 毛玻璃 sheet）。这 5 版方向盘按苹果 HIG 的
+    <b>克制原则</b>重做：能没有的形状就不要，能 100ms 说完的反馈不用 300ms。<b>八方向能力全部保留</b>（上下左右＋四斜向），
+    所有版本共用同一套拖拽物理（1:1 跟手 → 橡皮筋 → 带速度回弹），差异只在<b>视觉层有多「少」</b>。
+  </p>
+  <div class="principles">
+    <span><b>Deference</b> 界面退后，内容在前</span>
+    <span><b>简洁精确</b> 反馈动画短而准，不抢戏</span>
+    <span><b>高频不动效</b> 每次交互都播的动画一律删</span>
+    <span><b>可取消</b> 任何时刻可打断反向</span>
+    <span><b>触感补位</b> 省掉的视觉反馈由 haptics 补齐</span>
+  </div>
+  <div id="mount"></div>
+
+  <section class="final">
+    <h2>怎么选</h2>
+    <p>
+      <b>V1 隐形触控板</b>是苹果的终极答案——iOS 空格键触控板就是这么做的：界面整个消失，只剩光标。
+      学习成本最低、视觉为零，但需要「长按后键盘字母淡出」的引导配合。<b>V5 字随指动</b>是它的内容强化版：
+      把「正在经过的文字」直接搬进来，方向键彻底失业。<b>V2 发丝十字线</b>是保留方向语义的最薄方案，
+      一根线就是全部。<b>V3 呼吸点</b>和 <b>V4 刻度微光</b>居中：一个只有一颗点，一个用刻度提供「段落感」。
+      工程上 V1/V5 改动最大（要接正文数据），V2/V3/V4 只换皮，可以先用 V2 落地、把 V1 当目标形态。
+    </p>
+  </section>
+</div>
+
+<script>
+/* ================= 弹簧内核 ================= */
+class Spring{
+  constructor(from,d,r,v){this.x=from;this.v=v||0;this.d=d;this.w=2*Math.PI/r;this.t=from;}
+  step(dt){const k=this.w*this.w,c=2*this.d*this.w;this.v+=(-k*(this.x-this.t)-c*this.v)*dt;this.x+=this.v*dt;}
+  settled(){return Math.abs(this.x-this.t)<0.0008&&Math.abs(this.v)<0.004;}
+}
+function runSprings(list,done){
+  let last=performance.now();
+  (function frame(now){
+    let dt=Math.min((now-last)/1000,.032);last=now;let alive=false;
+    for(const a of list){a.s.step(dt);a.apply(a.s.x,a.s.v);if(!a.s.settled())alive=true;}
+    if(alive)requestAnimationFrame(frame);
+    else{for(const a of list)a.apply(a.s.t,0);done&&done();}
+  })(last);
+}
+function rubberband(o,dim,k){k=k||.55;return(o*dim*k)/(dim+k*Math.abs(o));}
+
+/* ================= 5 版定义 ================= */
+const VERS=[
+{ id:'v1',name:'隐形触控板',src:'iOS 空格键触控板 · 视觉量为零',
+  idea:'按下之后<b>什么都不画</b>：整个区域就是触控板。拖动时<b>正文里的光标实时跟着走</b>（每 9px 一字、惯性甩动），指尖上方浮出一枚深色胶囊报告「↖ 左上 · 3 字 · 速度 2」（八方向全称量）；松手胶囊 150ms 淡出，光标留在正文里继续闪烁。方向、档位全部交给正文与触感反馈，屏幕上不留任何常驻控件。',
+  note:'<b>没有任何常驻图形，八方向一个不少。</b>在上面正文区下方按住拖动试试：光标在文字间穿行，胶囊随手指浮动；快甩有惯性。按下当帧有 ripple 反馈，确认感由震动补位。',
+  hig:'HIG：高频交互不做重复动效；反馈短而精确。视觉确认感交给 Taptic 段落震动补位。',
+  padHTML:`<div class="v1-hint">按住任意位置拖动</div><div class="v1-caret"></div><div class="v1-chip"></div>`,
+  stageExtra:`<div class="v1-doc"></div>`,
+  panelNote:'▲ 长按后键盘字母淡出、整块变触控板（iOS 空格键模式的示意态）',
+  panelScale:1 },
+
+{ id:'v2',name:'发丝十字线',src:'保留方向语义的最薄方案',
+  idea:'两根 1px 发丝十字线＋中心一颗 11px 蓝点，就是全部。拖动时从圆心<b>拉出一根 1.5px 的蓝线</b>连到指尖，线即方向、线长即速度；松手线像卷尺一样弹回。没有箭头、没有圆环、没有底纹。',
+  note:'<b>线即一切。</b>拖动中蓝线实时跟随，到达档位边界时线的末端出现一粒微刻度（4px 小点）提示升档。',
+  hig:'HIG·Deference：用最少的铬件（chrome）突出内容。一根线足以传达方向与量级。',
+  padHTML:`<div class="v2-line-h"></div><div class="v2-line-v"></div><div class="v2-draw"></div><div class="v2-tick"></div><div class="v2-dot"></div>`,
+  panelScale:.62 },
+
+{ id:'v3',name:'呼吸点',src:'只有一颗点',
+  idea:'常驻只有<b>一颗 15px 的渐变蓝点</b>。拖动时，点随手指偏移，同时在拖动方向张开一扇 60° 的<b>微光扇形</b>（透明度 12%，像光照过去的影子）——方向由「光」表达而非箭头。松手扇形随弹簧回中淡出。',
+  note:'<b>方向＝光的方向。</b>扇形角度连续跟随，不做四向离散吸附；只有越过档位时扇形透明度轻轻加深一档。',
+  hig:'克制点：无轮廓、无边框、无文字；反馈全部在 12% 透明度以内，余光不可见、正眼才可见。',
+  padHTML:`<div class="v3-glow"></div><div class="v3-dot"></div>`,
+  panelScale:.8 },
+
+{ id:'v4',name:'刻度微光',src:'Digital Crown 的段落感',
+  idea:'一个 112px 的细环，环上只有 <b>八粒 3×8px 刻度</b>（上下左右＋四个斜向，对应现有八方向）。拖动越过 18px 后，最近的轴向刻度点亮并轻微「呼吸」一下（scale 1→1.25→1，220ms），同时指尖在该轴 ±8° 死区内<b>吸附到轴</b>——像数码表冠的 detent。两条轴之间自由过渡，不丢任何方向。',
+  note:'<b>八向刻度、八向吸附，吸附只发生在轴附近 ±8°。</b>刻度点亮即确认，松手刻度 200ms 熄灭，环始终安静。',
+  hig:'HIG：与动作精确关联的简明动画，比显眼动画更有效。点亮一下就是全部确认。',
+  padHTML:`<div class="v4-ring"></div>${['up','upright','right','downright','down','downleft','left','upleft'].map(d=>`<div class="v4-tick" data-dir="${d}"></div>`).join('')}<div class="v4-dot"></div>`,
+  panelScale:.85 },
+
+{ id:'v5',name:'字随指动',src:'内容即界面 · 工程最重',
+  idea:'方向键彻底消失。面板里是一条<b>正在经过的文字带</b>：左右拖动，文字以 1:1 流速滚过中央光标竖线；上下拖动切换行，上下边缘才会浮出两个小 caret。点按左/右半区＝精调一字（120ms 微亮）。<b>UI 就是正文本身</b>。',
+  note:'<b>拖文字，不是拖控件。</b>演示里左右拖动试试：文字滚过中央蓝线；快甩有惯性；上下拖出现行 caret。',
+  hig:'HIG·Deference 的极致：控件退到零，内容成为唯一的界面。需要正文数据通道，工程量最大。',
+  padHTML:`<div class="v5-row up">上一行</div><div class="v5-strip"><div class="v5-text">…今天会议讨论了输入法交互方案，滑轨选词的手感还需要再打磨一版，下午同步结论…</div></div><div class="v5-caret l">‹</div><div class="v5-caret r">›</div><div class="v5-row dn">下一行</div>`,
+  panelScale:1 },
+];
+
+/* ================= 生成 DOM ================= */
+const mount=document.getElementById('mount');
+VERS.forEach((v,idx)=>{
+  const sec=document.createElement('section');
+  sec.className='ver';sec.id=v.id;
+  sec.innerHTML=`
+    <div class="ver-head"><span class="num">V${idx+1}</span><h2>${v.name}</h2><span class="src">${v.src}</span></div>
+    <p class="idea">${v.idea}</p>
+    <div class="cols">
+      <div>
+        <div class="phone">
+          <div class="textarea">今天会议讨论了输入法交互方案，<span class="sel">滑轨选词</span>${v.id==='v1'?'<i class="mini-caret"></i>':''}的手感还需要再打磨一版。</div>
+          <div class="keyboard${v.id==='v1'?' tp':''}">
+            <div class="kb-row">${'<i></i>'.repeat(10)}</div>
+            <div class="kb-row"><i class="f"></i>${'<i></i>'.repeat(9)}</div>
+            <div class="kb-row"><i class="f"></i>${'<i></i>'.repeat(7)}<i class="f"></i></div>
+            <div class="kb-footer"><i></i><div class="track"></div><i></i></div>
+          </div>
+          <div class="panel">
+            <div class="p-head"><b>已选 4 字</b><span>全选</span></div>
+            <div class="p-body">
+              <div class="p-clip"><i>复制</i><i>剪切</i><i>粘贴</i><i>选段</i></div>
+              <div class="padbox ${v.id}" data-mini="1" style="transform:scale(${v.panelScale});transform-origin:center">${v.padHTML}</div>
+            </div>
+          </div>
+        </div>
+        <div class="replayline">${v.panelNote||'▲ 在层叠卡片面板内的样子（等比缩小）'}</div>
+      </div>
+      <div class="stage-wrap">
+        <div class="stage ${v.id}" data-v="${v.id}">${v.stageExtra||''}${v.padHTML}</div>
+        <div class="note">${v.note}<span class="hig">${v.hig}</span><br>
+          <span class="readout">按住拖动试试</span></div>
+      </div>
+    </div>`;
+  mount.appendChild(sec);
+});
+
+/* ================= 交互实现（八方向，与现有编辑框方向盘一致） ================= */
+const DIRS={up:'↑ 上移',down:'↓ 下移',left:'← 左移',right:'→ 右移',
+  upleft:'↖ 左上',upright:'↗ 右上',downleft:'↙ 左下',downright:'↘ 右下'};
+const ANG={up:-Math.PI/2,upright:-Math.PI/4,right:0,downright:Math.PI/4,
+  down:Math.PI/2,downleft:Math.PI*3/4,left:Math.PI,upleft:-Math.PI*3/4};
+function dirOf(x,y){const a=Math.atan2(y,x);let best='right',bd=9;
+  for(const d in ANG){let diff=Math.abs(((a-ANG[d]+Math.PI*3)%(Math.PI*2))-Math.PI);if(diff<bd){bd=diff;best=d;}}
+  return best;}
+
+function makeDrag(stage,MAXR,onMove,onEnd){
+  let drag=null,hist=[];
+  stage.addEventListener('pointerdown',e=>{
+    e.preventDefault();stage.setPointerCapture(e.pointerId);
+    const r=stage.getBoundingClientRect();
+    drag={id:e.pointerId,sx:e.clientX,sy:e.clientY};
+    hist=[{x:e.clientX,y:e.clientY,t:performance.now()}];
+    onMove(0,0,0,true,0,0,e.clientX-r.left,e.clientY-r.top);
+  });
+  stage.addEventListener('pointermove',e=>{
+    if(!drag||e.pointerId!==drag.id)return;
+    const r=stage.getBoundingClientRect();
+    let dx=e.clientX-(r.left+r.width/2),dy=e.clientY-(r.top+r.height/2);
+    const dist=Math.hypot(dx,dy);
+    if(dist>MAXR){const s=(MAXR+rubberband(dist-MAXR,MAXR))/dist;dx*=s;dy*=s;}
+    hist.push({x:e.clientX,y:e.clientY,t:performance.now()});if(hist.length>6)hist.shift();
+    onMove(dx,dy,Math.hypot(dx,dy),false,
+      e.clientX-drag.sx,e.clientY-drag.sy,e.clientX-r.left,e.clientY-r.top);
+  });
+  const end=e=>{
+    if(!drag||e.pointerId!==drag.id)return;
+    const n=hist.length;let vx=0,vy=0;
+    if(n>1){const a=hist[0],b=hist[n-1],dt=Math.max((b.t-a.t)/1000,.016);vx=(b.x-a.x)/dt;vy=(b.y-a.y)/dt;}
+    drag=null;onEnd(vx,vy);
+  };
+  stage.addEventListener('pointerup',end);stage.addEventListener('pointercancel',end);
+}
+
+/* V4 刻度就位（舞台与迷你面板共用） */
+(function(){
+  const r56=56,rd=Math.round(56/Math.SQRT2);
+  const TP={up:[0,-r56],upright:[rd,-rd],right:[r56,0],downright:[rd,rd],
+    down:[0,r56],downleft:[-rd,rd],left:[-r56,0],upleft:[-rd,-rd]};
+  const ROT={up:0,upright:45,right:90,downright:135,down:0,downleft:45,left:90,upleft:135};
+  document.querySelectorAll('.v4-tick').forEach(t=>{
+    const[x,y]=TP[t.dataset.dir];const cardinal=t.dataset.dir.length<=4;
+    t.style.height=cardinal?'8px':'6px';
+    t.style.transform=`translate(calc(-50% + ${x}px), calc(-50% + ${y}px)) rotate(${ROT[t.dataset.dir]}deg)`;
+  });
+})();
+
+document.querySelectorAll('.stage').forEach(stage=>{
+  const v=stage.dataset.v;
+  const readout=stage.closest('.stage-wrap').querySelector('.readout');
+  const R=stage.getBoundingClientRect;
+  const say=t=>readout.textContent=t;
+
+  if(v==='v1'){
+    const hint=stage.querySelector('.v1-hint'),chip=stage.querySelector('.v1-chip');
+    const doc=stage.querySelector('.v1-doc');
+    const GLYPH={up:'↑',upright:'↗',right:'→',downright:'↘',down:'↓',downleft:'↙',left:'←',upleft:'↖'};
+    const raw='今天会议讨论了输入法交互方案，滑轨选词的手感还需要再打磨一版，下午同步结论。';
+    let pos=20, pos0=20;
+    const render=()=>{doc.innerHTML=raw.slice(0,pos)+'<span class="cur"></span>'+raw.slice(pos);};
+    render();
+    let pop=null;
+    makeDrag(stage,96,(dx,dy,dist,down,rx,ry,fx,fy)=>{
+      if(down){
+        hint.style.opacity=0; pos0=pos;
+        /* 按下当帧 ripple */
+        const rp=document.createElement('div');rp.className='v1-ripple';
+        rp.style.left=fx+'px';rp.style.top=fy+'px';stage.appendChild(rp);
+        const rs=new Spring(0,1,.3);rs.t=1;
+        runSprings([{s:rs,apply:x=>{rp.style.transform=`translate(-50%,-50%) scale(${x})`;rp.style.opacity=1-x*.9;}}],
+          ()=>rp.remove());
+        /* 胶囊弹簧弹出 */
+        chip.style.opacity=1;
+        pop=new Spring(.6,.55,.26);pop.t=1;
+        runSprings([{s:pop,apply:x=>{chip.style.scale=x;}}]);
+        say('触控板模式 · 光标跟随');
+        return;
+      }
+      /* 相对位移驱动正文光标：9px 一字（八方向：垂直=换行） */
+      const np=Math.max(0,Math.min(raw.length,pos0+Math.trunc(rx/9)));
+      if(np!==pos){pos=np;render();}
+      const spd=Math.hypot(rx,ry)<24?1:Math.hypot(rx,ry)<52?2:3;
+      const vert=Math.abs(ry)>Math.abs(rx)*1.2&&Math.abs(ry)>14;
+      const d=dirOf(rx,ry);
+      chip.innerHTML=vert
+        ? `<b>${ry<0?'↑':'↓'}</b>${ry<0?'上一行':'下一行'} · 速度 ${spd}`
+        : `<b>${GLYPH[d]}</b>${pos-pos0>=0?'+':''}${pos-pos0} 字 · 速度 ${spd}`;
+      chip.style.left=fx+'px';chip.style.top=(fy-40)+'px';
+      say(chip.textContent);
+    },(vx)=>{
+      /* 惯性：快甩多走几字 */
+      const extra=Math.round(vx/200);
+      if(extra){
+        const target=Math.max(0,Math.min(raw.length,pos+extra));
+        const s=new Spring(pos,.9,.35,vx/9);s.t=target;
+        runSprings([{s,apply:x=>{const np=Math.round(x);if(np!==pos){pos=np;render();}}}]);
+      }
+      chip.style.transition='opacity .15s';chip.style.opacity=0;
+      setTimeout(()=>{chip.style.transition='';chip.style.scale=1;hint.style.opacity=1;},160);
+      say(extra?`快甩 · 惯性 ${extra>0?'+':''}${extra} 字 · 落定`:'已落定 · 胶囊 150ms 淡出');
+    });
+  }
+
+  if(v==='v2'){
+    const dot=stage.querySelector('.v2-dot'),draw=stage.querySelector('.v2-draw'),tick=stage.querySelector('.v2-tick');
+    makeDrag(stage,96,(dx,dy,dist,down)=>{
+      const a=Math.atan2(dy,dx);
+      dot.style.transform=`translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+      draw.style.width=dist+'px';draw.style.transform=`rotate(${a}rad)`;
+      draw.style.opacity=dist>3?1:0;
+      /* 档位边界：末端微刻度 */
+      const nearDetent=[24,52,96].some(t=>Math.abs(dist-t)<3);
+      tick.style.opacity=nearDetent?1:0;
+      tick.style.left=`calc(50% + ${Math.cos(a)*dist}px)`;
+      tick.style.top=`calc(50% + ${Math.sin(a)*dist}px)`;
+      if(dist>4)say(`${DIRS[dirOf(dx,dy)]} · 线长 ${Math.round(dist)}px${nearDetent?' · 档位':''}`);
+    },(vx,vy)=>{
+      const sx=new Spring(0,.7,.3,vx),sy=new Spring(0,.7,.3,vy);
+      const cr=stage.getBoundingClientRect();
+      const x0=parseFloat(dot.style.transform.match(/(-?[\d.]+)px\)/)?.[1]||0);
+      /* 简化：从当前偏移弹回 */
+      const m=/calc\(-50% \+ (-?[\d.]+)px\), calc\(-50% \+ (-?[\d.]+)px\)/.exec(dot.style.transform);
+      let cx=m?+m[1]:0,cy=m?+m[2]:0;
+      const s1=new Spring(cx,.7,.3,vx),s2=new Spring(cy,.7,.3,vy);s1.t=0;s2.t=0;
+      runSprings([
+        {s:s1,apply:x=>{cx=x;}},
+        {s:s2,apply:y=>{cy=y;
+          const dist=Math.hypot(cx,cy),a=Math.atan2(cy,cx);
+          dot.style.transform=`translate(calc(-50% + ${cx}px), calc(-50% + ${cy}px))`;
+          draw.style.width=dist+'px';draw.style.transform=`rotate(${a}rad)`;draw.style.opacity=dist>3?1:0;
+          tick.style.opacity=0;
+        }}
+      ],()=>say('已回中'));
+      say('松手 · 带速度弹回');
+    });
+  }
+
+  if(v==='v3'){
+    const dot=stage.querySelector('.v3-dot'),glow=stage.querySelector('.v3-glow');
+    makeDrag(stage,96,(dx,dy,dist,down)=>{
+      const a=Math.atan2(dy,dx);
+      dot.style.transform=`translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) scale(${down?1.12:1})`;
+      glow.style.opacity=Math.min(dist/60,1)*1;
+      glow.style.transform=`translate(calc(-50% + ${dx*.4}px), calc(-50% + ${dy*.4}px)) rotate(${a+Math.PI/6}rad)`;
+      if(dist>4){const spd=dist<24?1:dist<52?2:3;
+        glow.style.filter=`brightness(${1+spd*.12})`;
+        say(`${DIRS[dirOf(dx,dy)]} · 速度 ${spd} · 扇形随向`);}
+    },(vx,vy)=>{
+      const m=/calc\(-50% \+ (-?[\d.]+)px\), calc\(-50% \+ (-?[\d.]+)px\)/.exec(dot.style.transform);
+      let cx=m?+m[1]:0,cy=m?+m[2]:0;
+      const s1=new Spring(cx,.68,.3,vx),s2=new Spring(cy,.68,.3,vy);s1.t=0;s2.t=0;
+      runSprings([
+        {s:s1,apply:x=>{cx=x;}},
+        {s:s2,apply:y=>{cy=y;
+          dot.style.transform=`translate(calc(-50% + ${cx}px), calc(-50% + ${cy}px))`;
+          glow.style.opacity=Math.min(Math.hypot(cx,cy)/60,1);
+          glow.style.transform=`translate(calc(-50% + ${cx*.4}px), calc(-50% + ${cy*.4}px)) rotate(${Math.atan2(cy,cx)+Math.PI/6}rad)`;
+        }}
+      ],()=>{glow.style.filter='';say('已回中');});
+      say('松手 · 光随形收');
+    });
+  }
+
+  if(v==='v4'){
+    const dot=stage.querySelector('.v4-dot'),ticks=[...stage.querySelectorAll('.v4-tick')];
+    let lit=null;
+    const pulse=el=>{const s=new Spring(1,.5,.22);s.t=1.25;
+      runSprings([{s,apply:x=>el.style.scale=x}],()=>{const s2=new Spring(1.25,.6,.2);s2.t=1;
+        runSprings([{s:s2,apply:x=>el.style.scale=x}]);});};
+    makeDrag(stage,96,(dx,dy,dist,down)=>{
+      let px=dx,py=dy,axis=null;
+      if(dist>18){
+        const d=dirOf(dx,dy),a=Math.atan2(dy,dx);
+        const diff=Math.abs(((a-ANG[d]+Math.PI*3)%(Math.PI*2))-Math.PI);
+        if(diff<0.14){ /* 该轴 ±8° 内吸附（八轴都有） */
+          axis=d;
+          if(d==='up'||d==='down'){px=0;py=dy;}
+          else if(d==='left'||d==='right'){px=dx;py=0;}
+          else{ /* 斜轴：投影到 y=±x 上 */
+            const sgn=(d==='upright'||d==='downleft')?-1:1;
+            const p=(dx+sgn*dy)/2;px=p;py=sgn*p;
+          }
+        }
+      }
+      dot.style.transform=`translate(calc(-50% + ${px}px), calc(-50% + ${py}px))`;
+      const el=axis?ticks.find(t=>t.dataset.dir===axis):null;
+      if(el!==lit){ticks.forEach(t=>{t.classList.remove('on');t.style.scale=1;});
+        if(el){el.classList.add('on');pulse(el);}lit=el;}
+      if(dist>4)say(axis?`已吸附 ${DIRS[axis]} · 刻度确认`:`自由移动 · ${Math.round(dist)}px`);
+    },(vx,vy)=>{
+      const m=/calc\(-50% \+ (-?[\d.]+)px\), calc\(-50% \+ (-?[\d.]+)px\)/.exec(dot.style.transform);
+      let cx=m?+m[1]:0,cy=m?+m[2]:0;
+      const s1=new Spring(cx,.7,.28,vx),s2=new Spring(cy,.7,.28,vy);s1.t=0;s2.t=0;
+      runSprings([{s:s1,apply:x=>{cx=x;}},
+        {s:s2,apply:y=>{cy=y;dot.style.transform=`translate(calc(-50% + ${cx}px), calc(-50% + ${cy}px))`;}}],
+        ()=>{ticks.forEach(t=>{t.classList.remove('on');t.style.scale=1;});lit=null;say('刻度 200ms 熄灭 · 已回中');});
+      say(lit?`落定在 ${DIRS[lit.dataset.dir]}`:'松手');
+    });
+  }
+
+  if(v==='v5'){
+    const text=stage.querySelector('.v5-text'),strip=stage.querySelector('.v5-strip');
+    const caretL=stage.querySelector('.v5-caret.l'),caretR=stage.querySelector('.v5-caret.r');
+    const rowUp=stage.querySelector('.v5-row.up'),rowDn=stage.querySelector('.v5-row.dn');
+    /* 构造：文本 + 中央光标 */
+    const raw='…今天会议讨论了输入法交互方案，滑轨选词的手感还需要再打磨一版，下午同步结论…';
+    let pos=14; /* 光标所在字索引 */
+    const render=()=>{text.innerHTML=raw.slice(0,pos)+'<span class="cur"></span>'+raw.slice(pos);
+      const w=text.scrollWidth, charW=w/raw.length;
+      text.style.transform=`translateX(${-pos*charW}px)`;};
+    render();
+    let acc=0,flashT=null;
+    makeDrag(stage,96,(dx,dy,dist,down)=>{
+      /* 水平：每 9px 走一字；垂直：显 caret */
+      acc+=0; /* pos 由累计位移驱动，下面用绝对量 */
+      const charStep=Math.trunc(dx/9);
+      const np=Math.max(0,Math.min(raw.length,14+charStep));
+      if(np!==pos){pos=np;render();}
+      caretL.style.opacity=dy<-20?1:0; caretR.style.opacity=dy<-20?1:0;
+      rowUp.style.opacity=dy<-20?1:.7; rowDn.style.opacity=dy>20?1:.7;
+      caretL.style.color=dy<-20?'var(--accent)':''; 
+      if(dy>20){rowDn.style.color='var(--accent)';}else if(dy<-20){rowUp.style.color='var(--accent)';}
+      else{rowUp.style.color='';rowDn.style.color='';}
+      if(dist>4){ /* 斜向＝字与行同时（八方向） */
+        const h=Math.abs(dx)>Math.abs(dy)*.5, vv=Math.abs(dy)>Math.abs(dx)*.5;
+        let msg='';
+        if(vv)msg+=dy<0?'↑ 上一行':'↓ 下一行';
+        if(h)msg+=(msg?' · ':'')+`光标 ${pos-14>0?'+':''}${pos-14} 字`;
+        say(msg);}
+    },(vx,vy)=>{
+      /* 惯性：按释放速度继续走几字 */
+      const extra=Math.round(vx/160);
+      if(extra){const target=Math.max(0,Math.min(raw.length,pos+extra));
+        const s=new Spring(pos,.9,.35,vx/9);s.t=target;
+        runSprings([{s,apply:x=>{const np=Math.round(x);if(np!==pos){pos=np;render();}}}],
+          ()=>say(`惯性 +${extra} 字 · 落定`));
+        say(`快甩 · 惯性 ${extra} 字…`);
+      }else say('落定');
+      caretL.style.opacity=0;caretR.style.opacity=0;
+      rowUp.style.opacity=.7;rowDn.style.opacity=.7;rowUp.style.color='';rowDn.style.color='';
+      acc=0;
+    });
+    /* 点击半区＝精调一字 */
+    let downX=0,downT=0;
+    stage.addEventListener('pointerdown',e=>{downX=e.clientX;downT=performance.now();});
+    stage.addEventListener('pointerup',e=>{
+      if(performance.now()-downT<200&&Math.abs(e.clientX-downX)<6){
+        const r=stage.getBoundingClientRect();
+        pos=Math.max(0,Math.min(raw.length,pos+(e.clientX<r.left+r.width/2?-1:1)));
+        render();
+        strip.style.background='rgba(10,132,255,.08)';
+        setTimeout(()=>strip.style.background='',120);
+        say(`点按精调 · 光标 ${pos-14>0?'+':''}${pos-14} 字`);
+      }
+    });
+  }
+});
+</script>
+</body>
+</html>

@@ -1,8 +1,7 @@
-import { defaults, keyboardGeometry, cursorFeedbackPosition, joystick, joystickLevel, joystickRadii, joystickRho, toolbarItems, settingsFrom, replaceRange, erase, moveCursor, voiceResult, validateSnippets, addSnippet, validateLearning, learnWord, rankLearned, snippetLimit, phraseItemLimit, phraseLengthLimit, phraseGroupLimit, flattenPhrases, migratePhraseGroups } from './core.mjs';
+import { repeatDelay, joystickHoldRate, defaults, keyboardGeometry, cursorFeedbackPosition, joystick, joystickLevel, joystickRadii, joystickRho, toolbarItems, settingsFrom, replaceRange, erase, moveCursor, voiceResult, validateSnippets, addSnippet, validateLearning, learnWord, rankLearned, snippetLimit, phraseItemLimit, phraseLengthLimit, phraseGroupLimit, flattenPhrases, migratePhraseGroups } from './core.mjs';
 import { LocalVoice, voiceStatus, enableMicrophone } from './voice.mjs';
 import { createVoiceOrb } from './voice-orb.mjs';
 import { loadPinyin, pinyinCandidates, nineCandidates, setPhraseOptions, phraseCandidates, phraseSearch, associationCandidates, pinyinConsumed, hasPinyinMatch, isSyllable } from './pinyin.mjs';
-import { InkPad } from './ink.mjs';
 import { loadEnglish,loadPersonalEnglish,englishCandidates,hasEnglishWord } from './english.mjs';
 
 const $ = id => document.getElementById(id);
@@ -27,8 +26,7 @@ try { const stored = localStorage.getItem('voxfix-layout-v1'); if (stored) {cons
 if(nativeIme&&!settings.toolbar.includes('menu'))settings.toolbar.unshift('menu');
 const state = { page: 'letters', returnPage:'letters', symbolReturn:'letters', language: 'zh', shift: 0, symbol: '常用', locked: false, night: false, clipTab: 'clipboard', clipLocked: false, popup: null, comp: null, voice: null, hidden: false, emojiTab: 'Emoji', emojiCategory: '常用', layout: '26', voiceTimer: null, cursorDrag: null, selectionActions: false, clipGroup: 0, clipManage: false, clipSelected: [], clipConfirm: null, clipCandidate: '', toolbarSort: false, clipGroupMenu: null };
 let clipTabTap=null;
-try{const saved=JSON.parse(localStorage.getItem('voxfix-keyboard-v1'));if(saved){if(['9','26','fullhand'].includes(saved.layout))state.layout=saved.layout;if(['zh','en'].includes(saved.language))state.language=saved.language;if(typeof saved.night==='boolean')state.night=saved.night;}}catch{}
-if(nativeIme&&!nativeIme.handReady()&&state.layout==='fullhand'){state.layout='26';saveKeyboard();}
+try{const saved=JSON.parse(localStorage.getItem('voxfix-keyboard-v1'));if(saved){if(['9','26'].includes(saved.layout))state.layout=saved.layout;if(['zh','en'].includes(saved.language))state.language=saved.language;if(typeof saved.night==='boolean')state.night=saved.night;}}catch{}
 function saveKeyboard(){const preference=fieldPreference||state;try{localStorage.setItem('voxfix-keyboard-v1',JSON.stringify({layout:preference.layout,language:preference.language,night:state.night}));}catch{}}
 let clips = ['有没有免费的', 'https://example.com/演示链接', 'obsidian'];
 // 常用语按官方结构分组存放：每个分组有自己的名称和条目。
@@ -50,7 +48,6 @@ function addPhraseItem(group,text){
 let snippetEdit=null,snippetUndo=null,groupUndo=null;
 let clipMenu=null,clipHold=null,clipSuppressUntil=0,learning=[];
 try{const saved=localStorage.getItem('voxfix-learning-v1');if(saved)learning=validateLearning(JSON.parse(saved));}catch{/* Keep invalid learning data untouched. */}
-let inkPad=null,inkWords=[],handReady=false,lastPinyin=state.layout==='9'?'9':'26';
 let emojiQuery='',emojiSearchOpen=false;
 let gesture = null, candidateSuppressUntil=0, toastTimer, speechReady = false, nativeComposition = false;
 // 底部滑轨每一格对应的像素：越小越"无极"（每滑一小段就动一个字），同时大于触摸抖动阈值。
@@ -73,18 +70,22 @@ function lockedNow(){
   if(lockedSelection&&lockedSelection.editor===editor&&lockedSelection.text===editor.value)return true;
   releaseSelectionLock();state.selectionActions=false;return false;
 }
-function resetDragDelta(g){g.steps=0;g.dragX=0;g.dragY=0;g.extraX=0;g.extraY=0;delete g.targetX;delete g.targetY;}
+function resetDragDelta(g){g.dragX=0;g.dragY=0;g.totalX=0;g.totalY=0;g.localX=0;g.localY=0;g.turnX=0;g.turnY=0;g.direction=null;}
+function markSelectionOrigin(){
+  selectionLocked=true;state.selectionActions=true;selectedCount=0;
+  if(nativeIme&&!localInput){nativeIme.gestureLock?.();return;}
+  const head=localSelection?.editor===editor&&localSelection.text===editor.value?localSelection.head:editor.selectionDirection==='backward'?editor.selectionStart:editor.selectionEnd;
+  lockedSelection={editor,text:editor.value,anchor:head};localSelection={editor,text:editor.value,anchor:head,head};
+  editor.setSelectionRange(head,head);
+}
 // 二维拖动要按字符索引落点，先量一遍每个字符的坐标。
 function primeSelectionGeometry(g,head){
-  g.origin=head;g.points=selectionPoints();
-  const base=g.points.find(p=>p.index===head)||g.points.at(-1),next=g.points.find(p=>p.y===base.y&&p.x>base.x);
-  g.charWidth=next?next.x-base.x:parseFloat(getComputedStyle(editor).fontSize)||16;
-  g.lineHeight=parseFloat(getComputedStyle(editor).lineHeight)||base.height||20;
+  g.points=selectionPoints();
 }
 // 锁定起点：把「当前光标」钉成固定起点（有选区时取活动的那一端）。
 function lockSelection(g){
   if(selectionLocked)return;
-  selectionLocked=true;resetDragDelta(g);g.selecting=true;g.selectionReady=false;
+  selectionLocked=true;resetDragDelta(g);g.selecting=true;
   state.cursorDrag.selecting=true;state.selectionActions=true;cursorFeedback.selecting=true;
   if(nativeIme&&!localInput){selectedCount=0;nativeIme.gestureEnd?.();nativeIme.gestureLock?.();nativeIme.gestureStart?.(true);return;}
   const start=editor.selectionStart,end=editor.selectionEnd;
@@ -96,7 +97,7 @@ function lockSelection(g){
 }
 // 已锁定：手势一开始就进入「调终点」模式，长按不再重标起点。
 function beginSelectionAdjust(g){
-  resetDragDelta(g);g.selecting=true;g.selectionReady=true;
+  resetDragDelta(g);g.selecting=true;
   state.cursorDrag.selecting=true;cursorFeedback.selecting=true;
   if(nativeIme&&!localInput){nativeIme.gestureStart?.(true);return;}
   const start=editor.selectionStart,end=editor.selectionEnd;
@@ -119,7 +120,7 @@ function unlockSelection(g){
   }
   releaseSelectionLock();
   // 同一次长按后续的拖动不再移动任何东西，抬手后滑轨恢复自由移动。
-  if(g){g.selecting=false;g.selectionReady=false;g.ceased=true;haltJoystick(g);}
+  if(g){g.selecting=false;g.ceased=true;haltJoystick(g);}
   if(state.cursorDrag)state.cursorDrag.selecting=false;
   cursorFeedback.selecting=false;
 }
@@ -135,21 +136,26 @@ function selectionPoints(){
   mirror.remove();return points;
 }
 function moveSelection(x,y){
-  const g=gesture;if(!g?.selecting)return;
+  const g=gesture;if(!g)return;
   const dx=x-(g.dragX||0),dy=y-(g.dragY||0);g.dragX=x;g.dragY=y;
   if(nativeIme&&!localInput){
     if(typeof nativeIme.gestureMove2D==='function')nativeIme.gestureMove2D(dx,dy);
-    else nativeIme.gestureMove?.(Math.trunc(x/cursorStep));
+    else {const steps=Math.trunc(x/cursorStep);if(steps!==g.fallbackSteps){g.fallbackSteps=steps;nativeIme.gestureMove?.(steps);}}
     return;
   }
-  if(!localSelection||localSelection.editor!==editor||localSelection.text!==editor.value)return;
-  const base=g.points.find(p=>p.index===g.origin)||g.points.at(-1);
-  g.targetX=(g.targetX??base.x)+dx/cursorStep*g.charWidth;
-  g.targetY=Math.max(g.points[0].y,Math.min(g.points.at(-1).y,(g.targetY??base.y)+dy/selectionRowStep*g.lineHeight));
-  const targetX=g.targetX,targetY=g.targetY;
-  const nearestY=g.points.reduce((best,p)=>Math.abs(p.y-targetY)<Math.abs(best-targetY)?p.y:best,base.y);
-  const point=g.points.filter(p=>Math.abs(p.y-nearestY)<1).reduce((best,p)=>Math.abs(p.x-targetX)<Math.abs(best.x-targetX)?p:best);
-  const row=g.points.filter(p=>Math.abs(p.y-nearestY)<1);g.targetX=Math.max(row[0].x,Math.min(row.at(-1).x,g.targetX));
+  if(g.selecting&&(!localSelection||localSelection.editor!==editor||localSelection.text!==editor.value))return;
+  g.localX=(g.localX||0)+dx;g.localY=(g.localY||0)+dy;
+  const columns=Math.trunc(g.localX/cursorStep),lines=Math.trunc(g.localY/selectionRowStep);
+  if(!columns&&!lines)return;
+  g.localX-=columns*cursorStep;g.localY-=lines*selectionRowStep;
+  const currentHead=g.selecting?localSelection.head:g.head;
+  const base=g.points.find(p=>p.index===currentHead)||g.points.at(-1),rows=[...new Set(g.points.map(p=>p.y))];
+  const targetRow=Math.max(0,Math.min(rows.length-1,rows.indexOf(base.y)+lines));
+  const row=g.points.filter(p=>p.y===rows[targetRow]);
+  const nearest=row.reduce((a,b)=>Math.abs(a.x-base.x)<=Math.abs(b.x-base.x)?a:b);
+  const index=moveCursor(editor.value,lines?nearest.index:currentHead,columns);
+  const point=g.points.find(p=>p.index===index)||g.points.at(-1);
+  if(!g.selecting){editor.setSelectionRange(point.index,point.index);g.head=point.index;return;}
   localSelection.head=point.index;
   const {anchor,head}=localSelection;editor.setSelectionRange(Math.min(anchor,head),Math.max(anchor,head),head<anchor?'backward':'forward');
   const height=editor.clientHeight;editor.scrollTop=Math.max(0,Math.min(editor.scrollTop,point.y-12));if(point.y>editor.scrollTop+height-12)editor.scrollTop=point.y-height+24;
@@ -159,69 +165,100 @@ function syncSelectionFeedback(){
   const count=keyboard.querySelector('.selection-count');if(count)count.textContent=selectedCount<0?'已选文字':`已选 ${selectedCount} 字`;
   for(const button of keyboard.querySelectorAll('.selection-editor [data-action="copy-text"],.selection-editor [data-action="cut-text"]'))button.disabled=selectedCount===0;
 }
-function moveCursorGesture(g){
-  const steps=Math.trunc((g.lastX-g.x)/cursorStep)+g.joy.steps;
-  if(steps===g.steps)return;
-  g.steps=steps;
-  if(nativeIme&&!localInput){nativeIme.gestureMove?.(steps);return;}
-  const position=moveCursor(editor.value,editor.selectionEnd,steps-(g.cursorSteps||0));g.cursorSteps=steps;
-  localSelection=null;editor.setSelectionRange(position,position);
-  keyboard.querySelector('.cursor-zone')?.setAttribute('aria-valuenow',position);
-}
-// 摇杆速率档：手指停在远处不动、光标也要继续走，所以按帧推进而不是按位移。
-// 必须攒小数 —— 8 字/秒 ÷ 60fps = 0.13 步/帧，直接取整永远是 0，光标会一动不动。
-// dt 夹到 50ms：WebView 切后台回来时 rAF 会跳一大帧，不夹会瞬间冲出去几十个字。
-// 摇杆速率档：手指停在远处不动、光标/选区也要继续走，所以按帧推进而不是按位移。
-// 必须攒小数 —— 8 字/秒 ÷ 60fps = 0.13 步/帧，直接取整永远是 0，光标会一动不动。
-// dt 夹到 50ms：WebView 切后台回来时 rAF 会跳一大帧，不夹会瞬间冲出去几十个字。
-// 移动光标是一维（方向只取 dx 符号）；框选是二维，按单位方向在两个轴上同时推进。
+// 持续移动沿最近确认的八方向输出，上下按行限速。
 function jogCursor(g){
   if(g.joy.raf)return;
   const frame=ts=>{
     g.joy.raf=0;
     if(gesture!==g||!g.joy.rate)return;
+    g.joy.started??=ts;g.joy.rate=joystickHoldRate(ts-g.joy.started);
     const dt=Math.min(.05,(ts-(g.joy.ts||ts))/1000);g.joy.ts=ts;
-    if(g.selecting){
-      const length=Math.hypot(g.joy.dx,g.joy.dy)||1;
-      g.extraX+=g.joy.dx/length*g.joy.rate*cursorStep*dt;
-      g.extraY+=g.joy.dy/length*g.joy.rate*selectionRowStep*dt;
-      moveSelection(g.lastX-g.x+g.extraX,g.lastY-g.y+g.extraY);
-    }else{
-      g.joy.acc+=dt*g.joy.rate;
-      const whole=Math.trunc(g.joy.acc);
-      if(whole){g.joy.acc-=whole;g.joy.steps+=whole;moveCursorGesture(g);}
-    }
+    const [sx,sy]=g.direction||[0,0];
+    g.totalX=(g.totalX||0)+sx*g.joy.rate*cursorStep*dt;
+    g.totalY=(g.totalY||0)+sy*Math.min(4,g.joy.rate/6)*selectionRowStep*dt;
+    moveSelection(g.totalX,g.totalY);
     g.joy.raf=requestAnimationFrame(frame);
   };
   g.joy.raf=requestAnimationFrame(frame);
 }
-// 框选：算一次「离长按激活点多远」→ 档位 → 速率，再交给 rAF。就位完成时也必须调一次——
-// 「垂直向上拖」的那步 pointermove 会走 lifting 分支提前 return，不在这里启动就永远不会持续扩展。
+const directions=[[-1,-1,'↖','上一行开头'],[0,-1,'↑','上一行'],[1,-1,'↗','上一行末尾'],[-1,0,'←','左移一个字'],[1,0,'→','右移一个字'],[-1,1,'↙','下一行开头'],[0,1,'↓','下一行'],[1,1,'↘','下一行末尾']];
+function dragDirection(g,dx,dy){
+  if(!dx&&!dy)return g.direction||[0,0];
+  const angle=Math.atan2(dy,dx),old=g.direction;
+  if(old&&Math.abs(Math.atan2(Math.sin(angle-Math.atan2(old[1],old[0])),Math.cos(angle-Math.atan2(old[1],old[0]))))<Math.PI/6)return old;
+  const snapped=Math.round(angle/(Math.PI/4))*Math.PI/4;
+  return [Math.round(Math.cos(snapped)),Math.round(Math.sin(snapped))];
+}
+function dragSelection(g,dx,dy){
+  // 主轨只有 footer 那么高，纵向行程短、又夹在工具栏与字母键之间，极易被误判成横向而"跨段"跳行；
+  // 上下跨行/跨段只在编辑框的八方向盘里做，主轨一律丢弃纵向分量，只输出左右。
+  if(!g.mini)dy=0;
+  const pad=padDirection(g,g.lastX,g.lastY);
+  let direction=pad?.some(Boolean)?pad:dragDirection(g,dx,dy);
+  if(!g.padCenter&&g.direction&&(direction[0]!==g.direction[0]||direction[1]!==g.direction[1])){
+    g.turnX=(g.turnX||0)+dx;g.turnY=(g.turnY||0)+dy;
+    direction=Math.hypot(g.turnX,g.turnY)<8?g.direction:dragDirection(g,g.turnX,g.turnY);
+  }else {g.turnX=0;g.turnY=0;}
+  if(g.direction&&(direction[0]!==g.direction[0]||direction[1]!==g.direction[1])){
+    // 清旧轴余量，保留推距；真实转向后仍可持续推移，轻微手抖不换向。
+    g.localX=0;g.localY=0;g.turnX=0;g.turnY=0;g.joy.started=null;
+    if(!direction[0])g.totalX=g.dragX||0;
+    if(!direction[1])g.totalY=g.dragY||0;
+    if(nativeIme&&!localInput)nativeIme.gestureClearSteps?.();
+    else if(g.points){const head=g.selecting?localSelection.head:g.head;primeSelectionGeometry(g,head);g.totalX=0;g.totalY=0;g.dragX=0;g.dragY=0;}
+  }
+  g.direction=direction;
+  if(g.blockedDirection){
+    if(direction[0]===g.blockedDirection[0]&&direction[1]===g.blockedDirection[1]){joystickSync(g,g.lastX,g.lastY);return;}
+    g.blockedDirection=null;
+  }
+  g.totalX=(g.totalX||0)+(direction[0]?dx:0);
+  g.totalY=(g.totalY||0)+(direction[1]?dy:0);
+  moveSelection(g.totalX,g.totalY);joystickSync(g,g.lastX,g.lastY);
+}
+function padDirection(g,x,y){
+  const c=g.padCenter;if(!c)return null;
+  return [x<c.left?-1:x>c.right?1:0,y<c.top?-1:y>c.bottom?1:0];
+}
+function selectionStep(sx,sy){
+  const locked=lockedNow();
+  if(nativeIme&&!localInput){nativeIme.selectionStep?.(sx,sy,locked);return;}
+  const start=editor.selectionStart,end=editor.selectionEnd;
+  const head=locked&&localSelection?localSelection.head:editor.selectionDirection==='backward'?start:end;
+  let next=head;
+  if(!sy)next=moveCursor(editor.value,head,sx);
+  else{
+    const points=selectionPoints(),base=points.find(p=>p.index===head)||points.at(-1);
+    const rows=[...new Set(points.map(p=>p.y))],row=rows.indexOf(base.y),targetRow=row+sy;
+    if(targetRow<0||targetRow>=rows.length)return;
+    const targets=points.filter(p=>p.y===rows[targetRow]);
+    next=sx<0?targets[0].index:sx>0?targets.at(-1).index:targets.reduce((a,b)=>Math.abs(a.x-base.x)<=Math.abs(b.x-base.x)?a:b).index;
+  }
+  if(locked){localSelection={editor,text:editor.value,anchor:lockedSelection.anchor,head:next};editor.setSelectionRange(Math.min(localSelection.anchor,next),Math.max(localSelection.anchor,next),next<localSelection.anchor?'backward':'forward');}
+  else editor.setSelectionRange(next,next);
+  selectedCount=characterCount(editor.value.slice(editor.selectionStart,editor.selectionEnd));syncSelectionFeedback();
+}
+// 推距决定是否续移，最近的八方向决定往哪移；回到按下点停止续移。
 function joystickSync(g,x,y){
   const joy=g.joy;
   joy.dx=x-joy.originX;joy.dy=y-joy.originY;
-  joy.level=joystickLevel(joystickRho(joy.dx,joy.dy,joy),joy.level);
-  const rate=joystick.rates[joy.level];
-  if(rate!==joy.rate){joy.rate=rate;joy.ts=0;}
+  const pad=padDirection(g,x,y),center=pad?!pad.some(Boolean):Math.hypot(x-g.x,y-g.y)<cursorStep;
+  if(center)g.blockedDirection=null;
+  joy.level=pad?(center?0:1):joystickLevel(joystickRho(joy.dx,joy.dy,joy),joy.level);
+  const rate=center||g.blockedDirection?0:joystick.rates[joy.level];
+  if(Boolean(rate)!==Boolean(joy.rate)){joy.rate=rate?joystickHoldRate(0):0;joy.ts=0;joy.started=null;}
   jogCursor(g);
 }
-// 摇杆原点 = 长按激活点，此后不再变（理由见 selectionReady 里的说明）。
+// 长按锁定时标定推距；转向只清旧轴余量，保留按下点以持续推移。
 function rejoy(g,x,y){
   const kb=keyboard.getBoundingClientRect();
-  g.joy={...g.joy,...joystickRadii(Math.min(x-kb.left,kb.right-x),y-kb.top,kb.bottom-y),originX:x,originY:y,dx:0,dy:0,level:0,rate:0,acc:0,steps:0,ts:0};
+  g.joy={...g.joy,...joystickRadii(Math.min(x-kb.left,kb.right-x),y-kb.top,kb.bottom-y),originX:x,originY:y,dx:0,dy:0,level:0,rate:0,ts:0};
 }
 // 停掉正在跑的摇杆速率（原生的「选区被阻止」和重置钩子都要用）。
 function haltJoystick(g=gesture){
   if(!g?.joy)return;
-  g.joy.rate=0;g.joy.level=0;
+  g.joy.rate=0;g.joy.level=0;g.joy.started=null;
   if(g.joy.raf){cancelAnimationFrame(g.joy.raf);g.joy.raf=0;}
-}
-function selectionReady(g,x=g.lastX,y=g.lastY){
-  if(gesture!==g)return;
-  // 不重设摇杆原点：原点固定为「长按激活点」。若跟着手指走，就位后停住时 ρ 立刻回 0，
-  // 选区又变回「不动就不扩展」——那正是这套摇杆要解决的问题。
-  clearTimeout(g.liftTimer);g.selectionReady=true;g.x=x;g.y=y;g.dragX=0;g.dragY=0;g.extraX=0;g.extraY=0;joystickSync(g,x,y);
-  syncSelectionFeedback();
 }
 // 表情长按连发、候选词长按、工具栏长按排序共用的按住计时状态。
 let itemHold = null, toolbarHold = null, toolbarDrag = null, groupHold = null;
@@ -288,7 +325,7 @@ function sheet(title, rows) {
 function footer() {
   const total=nativeIme&&!localInput?nativeCursor.total:editor.value.length,cursor=nativeIme&&!localInput?nativeCursor.position:editor.selectionEnd;
   const drag=state.cursorDrag,locked=lockedNow(),zoneClass='cursor-zone'+(drag?drag.selecting?' selecting':' dragging':'')+(locked?' locked':'');
-  const label=locked?'起点锁定，拖动调整终点，长按解除锁定':'底部中间空白可拖动光标，长按后拖动框选文字';
+  const label=locked?'起点锁定，左右拖动调整终点，长按解除锁定':'底部中间空白可左右拖动光标、点按两侧精调一个字，长按后拖动框选文字';
   return `<div class="keyboard-footer">${settings.footerSwitcher ? button('底部输入法菜单', 'switcher', '', '', icon('keyboard')) : '<span class="empty"></span>'}<div class="${zoneClass}" data-action="cursor-gesture" role="slider" tabindex="0" aria-label="${label}" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${cursor}"><span class="cursor-hint"></span><span class="cursor-focus"></span><span class="cursor-contact"></span></div>${settings.footerClipboard ? button('底部剪贴板', 'clipboard', '', '', icon('copy')) : '<span class="empty"></span>'}</div>${joyGuide()}`;
 }
 function selectionEditor(){
@@ -296,9 +333,22 @@ function selectionEditor(){
   // 面板只由外部点击关闭，页头不再放「完成」：左边选中字数、右边「全选」，中间不留空位。
   const locked=lockedNow(),mode=locked?'起点锁定 · 拖动调整终点':'移动光标 · 长按锁定起点';
   const zero=selectedCount===0?' disabled':'';
-  return `<div class="selection-editor-backdrop" data-action="selection-close"></div><section class="selection-editor" aria-label="选字编辑框"><div class="selection-editor-header"><span class="selection-count">${selectedCount<0?'选字':`已选 ${selectedCount} 字`}</span>${button('全选','select-all','','selection-all','全选')}</div><div class="selection-paragraphs">${button('向上选段','selection-paragraph','-1','','↑ 向上选段',locked?'':' disabled')}${button('向下选段','selection-paragraph','1','','↓ 向下选段',locked?'':' disabled')}</div><div class="cursor-zone selection-mini-track${locked?' locked':''}" data-action="cursor-gesture" data-track="mini" role="slider" tabindex="0" aria-label="${esc(mode)}"><span class="cursor-hint"></span><span class="cursor-focus"></span><span class="cursor-contact"></span><span class="selection-mini-label">${esc(mode)}</span><span class="selection-mini-left">←</span><span class="selection-mini-right">→</span></div><div class="selection-editor-clipboard">${button('剪切','cut-text','','',`剪切`,zero)}${button('复制','copy-text','','selection-copy','复制',zero)}${button('粘贴',nativeIme&&!localInput?'paste-text':'paste-last','','','粘贴')}</div></section>`;
+  const pad=directions.map(([x,y,arrow,label])=>`<button class="selection-direction" data-action="cursor-gesture" data-track="mini" data-direction="${x},${y}" aria-label="${label}" style="grid-column:${x+2};grid-row:${y+2}">${arrow}</button>`).join('');
+  return `<div class="selection-editor-backdrop" data-action="selection-close"></div><section class="selection-editor" aria-label="选字编辑框"><div class="selection-editor-header"><span class="selection-count">${selectedCount<0?'选字':`已选 ${selectedCount} 字`}</span></div><div class="selection-editor-body"><div class="selection-editor-clipboard">${button('全选','select-all','','selection-all','全选')}${button('复制','copy-text','','selection-copy','复制',zero)}${button('剪切','cut-text','','','剪切',zero)}${button('粘贴',nativeIme&&!localInput?'paste-text':'paste-last','','','粘贴')}</div><div class="cursor-zone selection-mini-track${locked?' locked':''}" data-action="cursor-gesture" data-track="mini" role="group" aria-label="${esc(mode)}">${pad}<button class="selection-center" data-action="cursor-gesture" data-track="mini" aria-label="长按锁定或解除起点"><span></span></button></div></div></section>`;
 }
 function feedbackZone(){return keyboard.querySelector(cursorFeedback.mini?'.selection-mini-track':'.keyboard-footer .cursor-zone');}
+// 编辑框呼出动效（概念③「层叠卡片」，只动 opacity/transform，不改布局与几何）：
+// A=键盘已开：sheet 从键盘上沿升起（56px，damping≈1.0 无过冲的克制弹簧），键盘内容同帧轻微压暗「退后」；
+// B=键盘从收起态回来：键盘先升（9%），编辑框错峰 70ms 从更低处更快追上（超车），落定后同样退后。
+// prefers-reduced-motion 与自动化环境（navigator.webdriver）下直接落定，回归断言不受动画影响。
+function playEditorEntrance(mode){
+  const editor=keyboard.querySelector('.selection-editor');if(!editor)return;
+  if(matchMedia('(prefers-reduced-motion: reduce)').matches||navigator.webdriver)return;
+  if(mode==='B')keyboard.animate([{transform:'translateY(9%)',opacity:.55},{transform:'none',opacity:1}],{duration:380,easing:'cubic-bezier(.22,1,.36,1)'});
+  editor.style.transformOrigin='50% 100%';
+  editor.animate([{opacity:0,transform:`translateY(${mode==='B'?112:56}px) scale(.94)`},{opacity:1,transform:'none'}],{duration:mode==='B'?320:340,delay:mode==='B'?70:0,easing:'cubic-bezier(.22,1,.36,1)',fill:'backwards'});
+  keyboard.querySelector('.selection-editor-backdrop')?.animate([{opacity:0},{opacity:1}],{duration:260,fill:'backwards'});
+}
 // 摇杆辅助线：门槛环画出「推到这里才开始加速」，原点标出「长按激活的中心」，
 // 连线给出当前推力方向。没有它根本看不出该往哪拖、拖多远。
 function joyGuide() {
@@ -333,9 +383,16 @@ function setHintOpacity(zone,value){
 function syncCursorFeedback() {
   syncJoyGuide();
   const zone=feedbackZone();if(!zone||!cursorFeedback.visible)return;
+  if(gesture?.padCenter){
+    const c=gesture.padCenter,dx=gesture.lastX-(c.left+c.right)/2,dy=gesture.lastY-(c.top+c.bottom)/2;
+    const scale=Math.min(1,Math.max(0,Math.min(c.width,c.height)/2-8)/Math.max(1,Math.hypot(dx,dy)));
+    zone.querySelector('.selection-center span').style.transform=`translate(${dx*scale}px,${dy*scale}px)`;
+    return;
+  }
   const bounds=zone.getBoundingClientRect(),x=cursorFeedbackPosition(bounds.width,cursorFeedback.clientX-bounds.left);
   zone.classList.toggle('selecting',cursorFeedback.selecting);zone.classList.toggle('dragging',!cursorFeedback.selecting);
   const line=zone.querySelector('.cursor-contact'),focus=zone.querySelector('.cursor-focus');
+  if(!line||!focus)return;
   line.style.transform=`translateX(${x-18}px) scaleX(${cursorFeedback.selecting?1.12:1})`;focus.style.transform=`translateX(${x-33}px)`;
   line.style.opacity='.88';focus.style.opacity='.7';setHintOpacity(zone,0);
 }
@@ -623,7 +680,7 @@ function openEmojiSearch(){
   const cancel=document.createElement('button');cancel.textContent='返回';cancel.onclick=()=>{closeLocalEditor();state.page='emoji';render();};
   localInput=input;editor=input;localPanel.replaceChildren(input,done,cancel);localPanel.hidden=false;state.page='letters';render();input.focus();
 }
-const layouts = [['9','9键拼音','拼'],['26','26键拼音','拼'],['en26','26键英文','EN'],['fullhand','全屏手写','手']].filter(([id])=>id!=='fullhand'||!nativeIme||nativeIme.handReady());
+const layouts = [['9','9键拼音','拼'],['26','26键拼音','拼'],['en26','26键英文','EN']];
 function layoutPanel() {
   return `<div class="panel-title"><span>键盘选择</span>${button('返回键盘','return','','',icon('back'))}</div><div class="layout-grid">${layouts.map(([id,label,glyph])=>button(label,'layout',id,(id==='en26'?state.layout==='26'&&state.language==='en':id==='26'?state.layout==='26'&&state.language==='zh':state.layout===id)?'selected':'',`<span class="layout-icon">${glyph}</span><span>${label}</span>`)).join('')}</div>${footer()}`;
 }
@@ -643,7 +700,6 @@ function emojiPanel() {
 const menuGlyphs={symbols:'符',numbers:'123',edit:'编',custom:'设'};
 function menuPanel() { return `<div class="panel-title"><span>${nativeIme?'功能菜单':'功能菜单 · 未展开页面的补充入口'}</span>${button('返回键盘','return','','',icon('back'))}</div><div class="menu-grid">${[...toolbarItems.filter(([id])=>!['menu','hide'].includes(id)),['symbols','符号'],['numbers','数字'],['edit','编辑文字'],['custom','键盘设置']].map(([id,label])=>button(label,id,'','',`<span class="menu-glyph">${menuGlyphs[id]||icon(id)}</span><span>${label}</span>`)).join('')}</div>${footer()}`; }
 function editPanel() { return `<div class="panel-title"><span>${nativeIme?'编辑文字':'编辑文字 · 补充试用'}</span>${button('返回键盘','return','','',icon('back'))}</div><div class="menu-grid">${[['select-all','全选'],['copy-text','复制'],['cut-text','剪切'],['paste-last','粘贴'],['cursor-left','左移'],['cursor-right','右移'],['delete','删除'],['enter',localInput?'换行':enterLabel]].map(([id,label])=>button(label,id,'',id==='delete'?'key':'',icon(id==='delete'?'delete':'copy')+`<span>${label}</span>`)).join('')}</div>${footer()}`; }
-function handPanel(){return `${inkWords.length?`<div class="candidate-bar">${candidateStrip(inkWords,'ink-candidate')}</div>`:toolbar()}<div class="hand-controls key-row">${func('符','symbols')}${func('123','numbers')}${spaceKey()}${func('拼','last-pinyin')}${func('删除','delete','delete')}${enterKey()}</div>${footer()}`;}
 const VOICE_PHASES=['loading','listening','paused','cancel','recognizing'];
 const VOICE_TITLES={loading:'正在开启麦克风',listening:'倾听中',paused:'已暂停',cancel:'松手取消',recognizing:'识别中'};
 const VOICE_HINTS={loading:'稍等片刻',listening:'松手输入 · 上滑取消',paused:'点继续，接着说',cancel:'下滑继续说',recognizing:'轻点取消'};
@@ -741,13 +797,16 @@ function popup() {
 }
 function pageLabel() {
   if(state.voice) return `${state.voice.long?'长语音':'长按空格语音'} · ${state.voice.phase==='loading'?'开启麦克风':state.voice.phase==='paused'?'已暂停':state.voice.phase==='recognizing'?'识别中':state.voice.phase==='cancel'?'上滑取消':'倾听中'}${state.voice.demo?'（演示）':''}`;
-  return {letters:state.layout==='fullhand'?'全屏手写':state.layout==='9'?'9键中文':state.language==='zh'?'26键中文':'26键英文',candidates:'全部候选',numbers:'数字键盘',symbols:`${state.symbol}符号`,clipboard:state.clipTab==='clipboard'?'剪贴板':'常用语',layouts:'键盘选择',emoji:'表情',menu:'功能菜单 · 补充试用',edit:'编辑文字 · 补充试用'}[state.page] || '键盘';
+  return {letters:state.layout==='9'?'9键中文':state.language==='zh'?'26键中文':'26键英文',candidates:'全部候选',numbers:'数字键盘',symbols:`${state.symbol}符号`,clipboard:state.clipTab==='clipboard'?'剪贴板':'常用语',layouts:'键盘选择',emoji:'表情',menu:'功能菜单 · 补充试用',edit:'编辑文字 · 补充试用'}[state.page] || '键盘';
 }
 const referenceMap = {letters:'keyboard-001.jpg',en:'keyboard-014.jpg',numbers:'keyboard-022.jpg','常用':'keyboard-026.jpg','中文':'keyboard-028.jpg','英文':'keyboard-027.jpg','网址':'keyboard-029.jpg',clipboard:'clipboard.jpg',phrases:'phrases.jpg',layouts:'keyboard-042.jpg',emoji:'keyboard-050.jpg',switcher:'keyboard-055.jpg',voice:'voice.jpg',cancel:'voice-cancel.jpg',recognizing:'voice-recognizing.jpg'};
 function render() {
   for(const node of keyboard.querySelectorAll('[data-scroll-key]'))scrollPositions.set(node.dataset.scrollKey,node.scrollTop);
   const previousCandidates=keyboard.querySelector('.candidate-visible');
   const candidateScroll=previousCandidates?.scrollLeft||0;
+  // 呼出动效前置采样：「键盘是否刚从收起态回来」「上一帧有没有编辑框」（innerHTML 重建前抓，别放后面）。
+  const wasHidden=keyboard.hidden;
+  const hadEditor=!!keyboard.querySelector(':scope > .selection-editor');
   // 语音期间不把可见编辑框置为只读：只读的 textarea/input 不再绘制插入光标（实测确认）。
   // 输入守卫已由 keydown / pointerdown 分支（state.voice 直接返回）负责。
   $('send').disabled=Boolean(state.voice);
@@ -758,16 +817,13 @@ function render() {
   $('finish-voice').disabled=!state.voice?.long||!['listening','paused'].includes(state.voice.phase);
   $('cancel-voice').disabled=!state.voice;
   $('polish-text').disabled=!polishReady||polishBusy||Boolean(state.voice);
-  const handVisible=state.layout==='fullhand' && state.page==='letters' && !state.voice && !state.hidden;
-  $('handwriting-surface').hidden=!handVisible;
   keyboard.className=`keyboard${state.night?' night':''}${localInput?' local-edit':''}`;
   const localHeight=localInput?(localInput===$('snippet-content')?Math.min(180,550-settings.height):44):0;
   localPanel?.classList.toggle('snippet-edit',localInput===$('snippet-content'));
   $('phone').style.setProperty('--local-editor-height',localHeight+'px');
   for(const [key,value] of Object.entries({'--keyboard-height':(settings.height+localHeight)+'px','--key-font':settings.fontSize+'px','--key-gap':settings.gap+'px','--key-radius':settings.radius+'px','--kb-bg':settings.background})) keyboard.style.setProperty(key,value);
-  if(handVisible&&!nativeIme)keyboard.style.setProperty('--keyboard-height','155px');
   keyboard.hidden=state.hidden; $('reopen').hidden=!state.hidden;
-  const pages={letters:()=>state.layout==='fullhand'?handPanel():state.layout==='9'?nine():letters(),candidates:candidatePanel,numbers,symbols:symbolPanel,clipboard,layouts:layoutPanel,emoji:emojiPanel,menu:menuPanel,edit:editPanel};
+  const pages={letters:()=>state.layout==='9'?nine():letters(),candidates:candidatePanel,numbers,symbols:symbolPanel,clipboard,layouts:layoutPanel,emoji:emojiPanel,menu:menuPanel,edit:editPanel};
   // 退场幽灵要在重绘后活下来（它只活 260ms），否则一次多余的 render 就会把动画吞掉。
   const voiceGhost=keyboard.querySelector(':scope > .voice-ghost');
   if(state.voice&&keyboard.querySelector(':scope > .voice-panel'))paintVoice();
@@ -777,6 +833,11 @@ function render() {
     if(state.voice)voiceRenderer=createVoiceOrb(keyboard.querySelector('.voice-texture'));
     if(voiceGhost)keyboard.append(voiceGhost);
   }
+  // 编辑框呼出动效挂点：面板新出现才播（面板在场期间的普通重绘不重播）；退后态由 .kb-recede 表达，
+  // 收起时同一过渡对称还原。只切 filter/transform/opacity，键位几何与面板开合无关的断言仍然成立。
+  const editorVisible=!!keyboard.querySelector(':scope > .selection-editor');
+  keyboard.classList.toggle('kb-recede',editorVisible);
+  if(editorVisible&&!hadEditor)playEditorEntrance(wasHidden&&!state.hidden?'B':'A');
   if(gesture?.target.classList.contains('key')){
     const held=[...keyboard.querySelectorAll('.key')].find(key=>key.dataset.action===gesture.action&&key.dataset.value===(gesture.value||''));
     if(held){held.classList.add('pressed');gesture.target=held;}
@@ -798,9 +859,8 @@ function render() {
   if(nativeIme)nativeIme.clipHint?.(clipPreview?clipCandidateLabel():'');
   if(nativeIme)nativeIme.resize(Math.ceil(settings.height+localHeight));
   syncCursorFeedback();
-  if(handVisible){$('handwriting-surface').style.bottom=nativeIme?'108px':($('phone').getBoundingClientRect().bottom-hostEditor.closest('.composer').getBoundingClientRect().top+5)+'px';if(nativeIme)$('handwriting-surface').style.top=(localHeight+44)+'px';$('ink-guide').hidden=Boolean(inkPad?.hasInk);inkPad?.draw();}
   nightShade.hidden=!state.night||state.hidden;
-  nightShade.style.height=($('phone').getBoundingClientRect().bottom-(handVisible?$('handwriting-surface'):keyboard).getBoundingClientRect().top)+'px';
+  nightShade.style.height=($('phone').getBoundingClientRect().bottom-keyboard.getBoundingClientRect().top)+'px';
   nativeSettings?.classList.toggle('night',state.night);
   document.querySelectorAll('#quick-pages button').forEach(b=>b.setAttribute('aria-pressed', b.dataset.value===state.page));
   let ref=state.voice?(state.voice.phase==='cancel'?'cancel':state.voice.phase==='recognizing'?'recognizing':'voice'):state.popup==='switcher'?'switcher':state.page==='symbols'?state.symbol:state.page==='clipboard'?state.clipTab:state.page==='letters'&&state.language==='en'?'en':state.page;
@@ -845,7 +905,6 @@ function deleteText() {
   // 先记录删除前候选栏是否可见：清空文本后必须把联想/英文候选一起刷掉，否则会留下“文字删完了候选还在”。
   const hadCandidateBar=Boolean(englishPrefix)||(state.language==='zh'&&associatedWords.length>0)||state.page==='candidates';
   context='';associatedWords=[];
-  if(state.layout==='fullhand' && inkPad?.hasInk){inkPad.clear();render();return;}
   if(nativeIme&&!localInput&&!state.comp){
     // 连删期间不再每个 tick 重建整键盘：只有候选栏内容确实会变化时才刷新。
     nativeIme.delete();englishPrefix=englishPrefix.slice(0,-1);
@@ -920,19 +979,9 @@ function activate(action,value='') {
   // 关闭面板只收起面板：正文、光标、选区与起点锁定都按原样保留。
   if(action==='selection-close'){state.selectionActions=false;render();return;}
   // 除「保留现有选区」的几个操作外，其它按键都会改正文 —— 旧起点随之失效，锁定一并清掉。
-  if(!['select-all','copy-text','cut-text','paste-text','paste-last','selection-paragraph'].includes(action))clearSelectionLock();
+  if(!['select-all','copy-text','cut-text','paste-text','paste-last','selection-step'].includes(action))clearSelectionLock();
   else if(['cut-text','paste-text','paste-last'].includes(action))clearSelectionLock();
-  if(action==='selection-paragraph'){
-    if(!lockedNow())return;   // 未锁定时禁用选段：不允许暗中造出一个起点
-    if(nativeIme&&!localInput){nativeIme.selectionParagraph?.(Number(value));return;}
-    const start=editor.selectionStart,end=editor.selectionEnd;
-    if(!localSelection||localSelection.text!==editor.value)localSelection={editor,text:editor.value,anchor:lockedSelection?.editor===editor&&lockedSelection.text===editor.value?lockedSelection.anchor:start,head:end};
-    const head=localSelection.head;
-    if(Number(value)>0){const from=editor.value[head]==='\n'?head+1:head;localSelection.head=editor.value.indexOf('\n',from);if(localSelection.head<0)localSelection.head=editor.value.length;}
-    else localSelection.head=editor.value.lastIndexOf('\n',Math.max(-1,head-2))+1;
-    editor.setSelectionRange(Math.min(localSelection.anchor,localSelection.head),Math.max(localSelection.anchor,localSelection.head),localSelection.head<localSelection.anchor?'backward':'forward');
-    selectedCount=characterCount(editor.value.slice(editor.selectionStart,editor.selectionEnd));render();return;
-  }
+  if(action==='selection-step'){selectionStep(...value.split(',').map(Number));return;}
   if(hasNativePinyin&&!fullPinyinLoaded&&action==='layout'&&value==='9')loadFullPinyin().catch(()=>feedback('拼音词库未能加载。'));
   if(nativeIme){
     if(action==='hide'){nativeIme.hide();return;}
@@ -940,9 +989,8 @@ function activate(action,value='') {
     if(action==='clipboard')nativeIme.refreshClipboard();
     if(action==='system-paste'){clipMenu=null;render();nativeIme.importClipboard();return;}
     if(action==='enter'&&!localInput){englishPrefix='';if(state.comp)commit(state.comp.raw);else nativeIme.enter();render();return;}
-    if(['language','twentysix','layout','last-pinyin'].includes(action)&&state.comp)commit(state.comp.raw);
+    if(['language','twentysix','layout'].includes(action)&&state.comp)commit(state.comp.raw);
     if(!localInput&&['select-all','copy-text','cut-text','paste-text','cursor-left','cursor-right'].includes(action)){if(state.comp)commit(state.comp.raw);nativeIme.edit(action);render();return;}
-    if(action==='layout'&&value==='fullhand')handReady=nativeIme.handReady();
   }
   switch(action) {
     case 'english-candidate': nativeIme.completeEnglish(englishPrefix,value);englishPrefix='';break;
@@ -975,8 +1023,6 @@ function activate(action,value='') {
     case 'nine': inputLetter(value);break;
     case 'nine-split': if(state.comp&&!state.comp.raw.endsWith("'"))inputLetter("'");break;
     case 'clear-pinyin': if(state.comp)commit('');break;
-    case 'ink-candidate': insert(value);inkPad.clear();break;
-    case 'last-pinyin': state.layout=lastPinyin;state.language='zh';state.page='letters';inkPad.clear();break;
     case 'twentysix': state.layout='26';state.comp=null;state.page='letters';break;
     case 'letters': state.page='letters'; break;
     case 'numbers': case 'symbols': case 'layouts': case 'emoji': case 'menu': case 'edit': showPage(action); return;
@@ -1043,7 +1089,7 @@ function activate(action,value='') {
     case 'clear-snippets': {clipMenu=null;state.clipConfirm={action:'clear-snippets',title:state.clipTab==='clipboard'?'确定清空剪贴板的所有内容？':'确定清空这个分组的常用语？'};break;}
     case 'undo-snippet': clipMenu=null;undoSnippetDelete();break;
     case 'system-paste': clipMenu=null;render();if(!navigator.clipboard?.readText){openSnippet();toast('请粘贴系统剪贴板内容。');return;}navigator.clipboard.readText().then(text=>{if(!text.trim())throw Error('系统剪贴板没有文字');clips=addSnippet(clips,text);snippetUndo=null;saveSnippets();render();}).catch(()=>{openSnippet();toast('可在这里粘贴系统剪贴板内容。');});return;
-    case 'layout': if(['9','26','en26','fullhand'].includes(value)){if(value==='fullhand'&&!handReady){toast('手写模型还未就绪，请稍后再试。');return;}if(state.layout!=='fullhand')lastPinyin=state.layout;state.layout=value==='en26'?'26':value;state.language=value==='en26'?'en':'zh';state.comp=null;state.page='letters';inkPad.clear();}break;
+    case 'layout': if(['9','26','en26'].includes(value)){state.layout=value==='en26'?'26':value;state.language=value==='en26'?'en':'zh';state.comp=null;state.page='letters';}break;
     case 'emoji-tab': state.emojiTab=value; break;
     case 'emoji-category': state.emojiCategory=value;emojiQuery=''; break;
     case 'emoji-search': if(nativeIme){openEmojiSearch();return;}state.emojiTab='Emoji';emojiSearchOpen=!emojiSearchOpen;if(!emojiSearchOpen)emojiQuery='';render();if(emojiSearchOpen)keyboard.querySelector('.emoji-search-input').focus();return;
@@ -1056,8 +1102,8 @@ function activate(action,value='') {
     case 'cursor-left': case 'cursor-right': { state.comp=null; const segments=[...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(editor.value)].map(s=>s.index); segments.push(editor.value.length); const pos=action==='cursor-left'?segments.filter(p=>p<editor.selectionStart).at(-1)??0:segments.find(p=>p>editor.selectionEnd)??editor.value.length; editor.setSelectionRange(pos,pos); break; }
     default: return;
   }
-  if(['language','twentysix','layout','last-pinyin'].includes(action))fieldPreference=null;
-  if(['language','twentysix','layout','last-pinyin','night'].includes(action))saveKeyboard();
+  if(['language','twentysix','layout'].includes(action))fieldPreference=null;
+  if(['language','twentysix','layout','night'].includes(action))saveKeyboard();
   render();
 }
 
@@ -1077,30 +1123,36 @@ keyboard.addEventListener('pointerdown',e=>{
   }
   const target=e.target.closest('[data-action]'); if(!target) return;
   if(target.dataset.action==='cursor-gesture' && !state.voice) {
+    if(state.selectionActions&&!target.closest('.selection-editor'))return;
+    if(target.dataset.track==='mini'&&!target.dataset.direction&&!target.classList.contains('selection-center'))return;
     e.preventDefault(); keyboard.setPointerCapture(e.pointerId);
     // 滑轨上开始移动前先收尾未提交的拼音组合，和原来长按进入时的处理一致。
     if(nativeIme&&state.comp)commit(state.comp.raw);
     englishPrefix='';state.comp=null;state.popup=null;
     // 摇杆半径在按下这一瞬间定死：原点始终是触控点，贴边按下时靠收缩半径保住向外行程，
     // 否则在滑轨最左端按下会向左永远推不到高档、向右推一半就饱和。
-    const zoneRect=target.getBoundingClientRect(),kbRect=keyboard.getBoundingClientRect();
+    const zoneRect=(target.closest('.selection-mini-track')||target).getBoundingClientRect(),kbRect=keyboard.getBoundingClientRect();
     const side=Math.min(e.clientX-zoneRect.left,zoneRect.right-e.clientX);
-    const g={id:e.pointerId,action:'cursor-gesture',x:e.clientX,y:e.clientY,lastX:e.clientX,lastY:e.clientY,long:false,selecting:false,steps:0,moved:false,selectionMoved:false,extraX:0,extraY:0,target,joy:{...joystickRadii(side,e.clientY-kbRect.top,kbRect.bottom-e.clientY),originX:e.clientX,originY:e.clientY,level:0,rate:0,acc:0,steps:0,raf:0,ts:0}};
+    const g={id:e.pointerId,action:'cursor-gesture',x:e.clientX,y:e.clientY,lastX:e.clientX,lastY:e.clientY,long:false,selecting:false,moved:false,selectionMoved:false,target,joy:{...joystickRadii(side,e.clientY-kbRect.top,kbRect.bottom-e.clientY),originX:e.clientX,originY:e.clientY,level:0,rate:0,raf:0,ts:0}};
     gesture=g;
     state.cursorDrag={origin:nativeIme&&!localInput?nativeCursor.position:editor.selectionEnd,selecting:false};
     g.mini=target.dataset.track==='mini';
+    g.tapDirection=target.dataset.direction;
+    if(g.mini&&!g.tapDirection)g.padCenter=target.closest('.selection-mini-track').querySelector('.selection-center').getBoundingClientRect();
+    // 主轨只保留左右：短按落在中线哪一侧，就往那一侧精调一个字（与编辑框箭头同一套 selectionStep）。
+    if(!g.mini)g.tapSide=e.clientX<(zoneRect.left+zoneRect.right)/2?-1:1;
     // 两条滑轨只有尺寸和位置不同：行为完全由「当前是否已锁定」决定。
     const locked=lockedNow();
     cursorFeedback={clientX:e.clientX,visible:true,selecting:locked,mini:g.mini};
     if(nativeIme&&!localInput){nativeIme.cursorPosition?.();nativeIme.gestureStart?.(locked);}
-    else editor.focus({preventScroll:true});
+    else {editor.focus({preventScroll:true});g.head=editor.selectionDirection==='backward'?editor.selectionStart:editor.selectionEnd;primeSelectionGeometry(g,g.head);}
     if(locked){
       // 已锁定：拖动只调整终点；面板被收起过就顺手再呼出，状态与收起前一致。
       state.selectionActions=true;
       beginSelectionAdjust(g);
     }
     // 未锁定：手指一碰滑轨就进入移动模式（不再要求先长按），按住不动约 350ms 才标定起点。
-    g.timer=setTimeout(()=>{
+    if(!g.tapDirection)g.timer=setTimeout(()=>{
       if(gesture!==g||g.moved)return;
       g.long=true;g.x=g.lastX;g.y=g.lastY;
       if(selectionLocked)unlockSelection(g);
@@ -1123,11 +1175,11 @@ keyboard.addEventListener('pointerdown',e=>{
   const g={id:e.pointerId,action:target.dataset.action,value:target.dataset.value,y:e.clientY,long:false,cancel:false,hint:target.querySelector('.hint')?.textContent,target}; gesture=g;
   clearKeyPress();
   target.classList.add('pressed');
-  if(g.action==='delete'){g.immediate=true;g.inkErase=state.layout==='fullhand'&&inkPad?.hasInk;deleteText();}
+  if(g.action==='delete'){g.immediate=true;deleteText();}
   g.timer=setTimeout(()=>{
     if(gesture!==g) return;
     if(g.action==='space') { g.long=true; startVoice(); }
-    else if(g.action==='delete') { g.long=true;if(!g.inkErase)scheduleRepeat(g,0); }
+    else if(g.action==='delete') { g.long=true;scheduleRepeat(g,0); }
     else if(g.action==='emoji') { g.long=true;g.repeatTimer=setTimeout(()=>emitEmojiLongPress(g),320); }
     else if(g.action==='letter') { g.long=true;g.choice=0; state.popup={type:'key',x:Math.max(5,Math.min(kbRect.width-145,rect.left-kbRect.left-35)),y:Math.max(0,rect.top-kbRect.top-52),options:[...new Set([g.hint,g.value.toUpperCase(),g.value.toLowerCase()].filter(Boolean))]}; render(); }
     else if(g.action==='nine'||g.action==='nine-split'){g.long=true;insert(g.value);render();}
@@ -1153,30 +1205,21 @@ keyboard.addEventListener('pointermove',e=>{
     cursorFeedback.clientX=e.clientX;syncCursorFeedback();
     // 解除锁定的那一次长按到此为止：后续拖动不再移动任何东西，抬手后恢复自由移动。
     if(gesture.ceased)return;
-    if(gesture.mini&&!gesture.long&&Math.hypot(delta,e.clientY-gesture.y)>=cursorStep){gesture.moved=true;clearTimeout(gesture.timer);}
+    if(gesture.tapDirection){if(Math.hypot(delta,e.clientY-gesture.y)>=8)gesture.moved=true;return;}
+    if(gesture.mini&&!gesture.moved){
+      if(Math.hypot(delta,e.clientY-gesture.y)<8)return;
+      gesture.moved=true;clearTimeout(gesture.timer);
+    }
     if(!gesture.selecting&&!gesture.moved&&Math.hypot(delta,e.clientY-gesture.y)>=cursorStep){gesture.moved=true;clearTimeout(gesture.timer);}
     if(gesture.selecting){
-      if(!gesture.selectionReady){
-        if(gesture.lifting){
-          if(e.clientY>previousY+2||Math.abs(e.clientX-gesture.liftX)>=cursorStep)selectionReady(gesture,previousX,previousY);
-          else {clearTimeout(gesture.liftTimer);gesture.liftTimer=setTimeout(()=>selectionReady(gesture),180);syncSelectionFeedback();return;}
-        }else if(e.clientY-gesture.y<-5&&Math.abs(delta)<cursorStep){
-          gesture.lifting=true;gesture.liftX=e.clientX;gesture.liftTimer=setTimeout(()=>selectionReady(gesture),180);syncSelectionFeedback();return;
-        }else gesture.selectionReady=true;
-      }
       const dx=e.clientX-gesture.x,dy=e.clientY-gesture.y;
       if(!gesture.selectionMoved&&Math.hypot(dx,dy)<5)return;
-      gesture.selectionMoved=true;gesture.steps=Math.trunc(dx/cursorStep);
-      // 框选与移动光标共用同一套三档：ρ 决定快慢、方向取单位向量，360° 都能推。
-      moveSelection(dx+gesture.extraX,dy+gesture.extraY);syncSelectionFeedback();joystickSync(gesture,e.clientX,e.clientY);return;
+      gesture.selectionMoved=true;clearTimeout(gesture.timer);
+      // 点按与拖动分开，转向后只输出新八方向。
+      dragSelection(gesture,e.clientX-previousX,e.clientY-previousY);syncSelectionFeedback();return;
     }
-    // 360° 全向：ρ 用二维位移算（斜推一样能进高速档），但方向只取水平分量 ——
-    // 文本光标本来只能左右走，垂直推力只用来「更快」，不用来决定往哪走。
-    const joy=gesture.joy,dx=e.clientX-joy.originX,dy=e.clientY-joy.originY;
-    joy.level=joystickLevel(joystickRho(dx,dy,joy),joy.level);
-    const rate=dx===0?0:Math.sign(dx)*joystick.rates[joy.level];
-    if(rate!==joy.rate){joy.rate=rate;joy.ts=0;}
-    moveCursorGesture(gesture);jogCursor(gesture);
+    // 未锁定时同样支持八方向移动光标。
+    dragSelection(gesture,e.clientX-previousX,e.clientY-previousY);
     return;
   }
   // 上滑取消：改成"跟手"——只改类名与 CSS 变量，走 render 会把动画打断。
@@ -1184,19 +1227,18 @@ keyboard.addEventListener('pointermove',e=>{
 });
 // 长按连删：对齐官方手感 —— 按住后先删一个，随后连续删除并逐渐加快。
 // 首个间隔约 110ms，每个 tick 缩短 8ms，最快 35ms 封底。
-function deleteRepeatDelay(step){return Math.max(35,110-step*8);}
 function scheduleRepeat(g,step){
   g.repeatTimer=setTimeout(()=>{
     if(gesture!==g)return;
     deleteText();
     scheduleRepeat(g,step+1);
-  },deleteRepeatDelay(step));
+  },repeatDelay(step));
 }
 function endGesture(e,cancelled=false) {
   const g=gesture; if(!g || g.id!==e.pointerId) return;
-  gesture=null; clearTimeout(g.timer);clearTimeout(g.liftTimer); clearTimeout(g.repeatTimer); clearKeyPress();
+  gesture=null; clearTimeout(g.timer); clearTimeout(g.repeatTimer); clearKeyPress();
   if(g.joy?.raf){cancelAnimationFrame(g.joy.raf);g.joy.raf=0;g.joy.rate=0;}
-  consumedClick={id:g.id,until:Date.now()+500};
+  consumedClick={id:g.id,target:g.target,action:g.action,x:e.clientX,y:e.clientY,until:Date.now()+500};
   if(keyboard.hasPointerCapture(e.pointerId)) keyboard.releasePointerCapture(e.pointerId);
   if(g.action==='candidate-scroll') {
     if(itemHold?.fired)return;
@@ -1207,6 +1249,10 @@ function endGesture(e,cancelled=false) {
   if(g.action==='cursor-gesture') {
     if(nativeIme&&!localInput)nativeIme.gestureEnd?.();
     state.cursorDrag=null;
+    if(!cancelled&&g.tapDirection&&!g.moved&&!g.selectionMoved&&!g.long)selectionStep(...g.tapDirection.split(',').map(Number));
+    // 主轨短按＝精调一个字：点中线左侧左移、右侧右移，免得为了挪一格还得拖一小段。
+    if(!cancelled&&g.tapSide&&!g.moved&&!g.selectionMoved&&!g.long)selectionStep(g.tapSide,0);
+    if(!cancelled&&g.padCenter&&!g.moved&&!g.selectionMoved&&!g.long)markSelectionOrigin();
     // 不改 state.selectionActions：面板只由「点击编辑框外」或改正文收起来。
     render();fadeCursorFeedback();return;
   }
@@ -1232,8 +1278,10 @@ keyboard.addEventListener('lostpointercapture',e=>{if(gesture?.action==='cursor-
 document.addEventListener('visibilitychange',()=>{if(document.hidden)clearKeyPress();});
 keyboard.addEventListener('click',e=>{
   const pointerClick=e.detail!==0||Boolean(e.pointerType);
-  if(pointerClick&&consumedClick&&Date.now()<consumedClick.until&&(e.pointerId===undefined||e.pointerId===consumedClick.id)){consumedClick=null;e.preventDefault();return;}
+  if(pointerClick&&consumedClick&&Date.now()<consumedClick.until&&(e.pointerId===undefined||e.pointerId===consumedClick.id)&&(consumedClick.action!=='cursor-gesture'||!consumedClick.target||e.target===keyboard||e.target===consumedClick.target||consumedClick.target.contains(e.target)||Math.hypot(e.clientX-consumedClick.x,e.clientY-consumedClick.y)<2)){consumedClick=null;e.preventDefault();return;}
   const target=e.target.closest('[data-action]'); if(!target) return;
+  if(target.tagName==='BUTTON'&&target.disabled)return;
+  if(target.dataset.direction){if(!pointerClick)selectionStep(...target.dataset.direction.split(',').map(Number));return;}
   if(target.closest('.candidate-visible') && pointerClick && (e.pointerType==='mouse'||Date.now()<candidateSuppressUntil))return;
   if(target.dataset.action==='paste'&&Date.now()<clipSuppressUntil)return;
   if(state.toolbarSort&&!['toolbar-sort-done','toolbar-custom-remove'].includes(target.dataset.action)){e.preventDefault();return;}
@@ -1352,6 +1400,7 @@ keyboard.addEventListener('pointerdown',e=>{ if(e.target.closest('button') && !e
 let editorHold=null;
 document.addEventListener('pointerdown',e=>{
   if(e.target!==editor||nativeIme&&!localInput||e.button!==0)return;
+  if(selectionLocked||state.selectionActions){clearSelectionLock();render();}
   clearTimeout(editorHold?.timer);const hold={id:e.pointerId,x:e.clientX,y:e.clientY};editorHold=hold;
   hold.timer=setTimeout(()=>{if(editorHold!==hold)return;const head=editor.selectionDirection==='backward'?editor.selectionStart:editor.selectionEnd;selectionLocked=true;lockedSelection={editor,text:editor.value,anchor:head};localSelection={editor,text:editor.value,anchor:head,head};editor.setSelectionRange(head,head);selectedCount=0;state.selectionActions=true;render();},cursorHoldDelay);
 });
@@ -1391,7 +1440,7 @@ $('clear-input').onclick=()=>{ if(state.voice) cancelVoice();state.comp=null;app
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 const quick=[['letters','全键盘'],['numbers','数字'],['symbols','符号'],['clipboard','剪贴板'],['layouts','键盘选择'],['emoji','表情']];
 $('quick-pages').innerHTML=quick.map(([id,label])=>button(label,'quick',id)).join('');
-$('quick-pages').onclick=e=>{const b=e.target.closest('button');if(b){if(b.dataset.value==='letters'){state.layout='26';state.language='zh';inkPad.clear();}showPage(b.dataset.value);}};
+$('quick-pages').onclick=e=>{const b=e.target.closest('button');if(b){if(b.dataset.value==='letters'){state.layout='26';state.language='zh';}showPage(b.dataset.value);}};
 $('compare-toggle').onclick=()=>{ const show=$('comparison').hidden; $('comparison').hidden=!show;$('compare-toggle').setAttribute('aria-pressed',show); };
 function syncControls() {
   $('feature-toggles').innerHTML=toolbarItems.map(([id,label])=>`<label><input type="checkbox" data-feature="${id}" ${settings.toolbar.includes(id)?'checked':''}>${label}</label>`).join('')+[['footerSwitcher','底部输入法菜单'],['footerClipboard','底部剪贴板']].map(([id,label])=>`<label><input type="checkbox" data-setting="${id}" ${settings[id]?'checked':''}>${label}</label>`).join('');
@@ -1461,10 +1510,6 @@ $('snippet-form').onsubmit=e=>{
   }catch(error){$('snippet-error').textContent=error.message;}
 };
 window.addEventListener('storage',e=>{if(e.key==='voxfix-learning-v1'){try{learning=e.newValue?validateLearning(JSON.parse(e.newValue)):[];updateLearningStatus();if(state.comp)render();}catch{}return;}if(e.key!=='voxfix-snippets-v1'||!e.newValue)return;try{const saved=JSON.parse(e.newValue);clips=validateSnippets(saved.clips);phraseGroups=migratePhraseGroups(saved.phrases);snippetUndo=null;state.clipGroup=Math.min(state.clipGroup,phraseGroups.length-1);updatePhraseOptions();if(state.page==='clipboard')render();}catch{/* Invalid cross-tab data is ignored. */}});
-inkPad=new InkPad($('ink-canvas'),words=>{inkWords=words;render();},message=>toast(message));
-$('ink-clear').onclick=()=>{inkPad.clear();render();};
-async function updateHandStatus(){if(nativeIme){handReady=nativeIme.handReady();return;}try{const response=await fetch('/api/handwriting/status');const data=await response.json();handReady=Boolean(data.ready);}catch{handReady=false;}if(location.protocol!=='file:')setTimeout(updateHandStatus,handReady?15000:5000);}
-updateHandStatus();
 syncControls();render();
 loadPinyin(hasNativePinyin).then(()=>{updatePhraseOptions();if(state.comp)render();$('pinyin-status').textContent='全拼、简拼和混输已就绪：wzdl 找“我知道了”、mtj 找“明天见”。';}).catch(()=>$('pinyin-status').textContent='拼音词库未能加载，请刷新页面或重新生成词库。');
 loadEnglish().then(async()=>{if(hasNativePinyin)await loadPersonalEnglish();if(englishPrefix||state.comp)render();}).catch(()=>{});
@@ -1524,17 +1569,27 @@ if(nativeIme){
   globalThis.voxfixPinyinReady=(failed=false)=>{if(failed)loadFullPinyin().catch(()=>feedback('拼音词库未能加载。'));else if(state.comp)render();};
   globalThis.voxfixCursor=(position,total)=>{nativeCursor={position,total};const zone=keyboard.querySelector('.cursor-zone');if(zone){zone.setAttribute('aria-valuemax',total);zone.setAttribute('aria-valuenow',position);}};
   globalThis.voxfixSelection=(start,end,count=-1)=>{if(localInput)return;selectedCount=start===end?0:count;syncSelectionFeedback();if((start<0||end<0)&&(state.selectionActions||selectionLocked)){clearSelectionLock();render();}};
+  globalThis.voxfixSelectionReleased=()=>{
+    if(localInput)return;
+    if(gesture?.action==='cursor-gesture')dropGesture();else nativeIme.gestureEnd?.();
+    clearSelectionLock();state.cursorDrag=null;cursorFeedback.visible=false;render();
+  };
   // 宿主自己长按选中的文字：那里本来就有固定起点，按「已锁定」处理。
   globalThis.voxfixSelectionOrigin=()=>{if(localInput||state.voice||gesture)return;selectionLocked=true;state.selectionActions=true;render();};
   globalThis.voxfixSelectionUnavailable=()=>toast('当前输入框暂不提供段落文本，请使用滑轨框选。');
-  globalThis.voxfixSelectionBlocked=()=>{if(gesture?.selecting)haltJoystick(gesture);};
-  globalThis.voxfixReset=()=>{if(gesture)haltJoystick(gesture);releaseSelectionLock();state.selectionActions=false;state.cursorDrag=null;cursorFeedback.visible=false;closeLocalEditor(true);stopVoiceLoop();englishPrefix='';context='';associatedWords=[];clearTimeout(gesture?.timer);clearTimeout(gesture?.liftTimer);clearTimeout(gesture?.repeatTimer);gesture=null;itemHold=null;state.voice=null;state.comp=null;state.popup=null;state.locked=false;state.hidden=false;state.page='letters';state.clipManage=false;state.clipSelected=[];state.clipConfirm=null;state.clipCandidate='';state.toolbarSort=false;state.clipGroupMenu=null;inkPad?.clear();applyText({text:'',cursor:0});render();};
+  globalThis.voxfixSelectionBlocked=()=>{if(gesture?.selecting){gesture.blockedDirection=gesture.direction?.slice();haltJoystick(gesture);}};
+  globalThis.voxfixReset=()=>{if(gesture)haltJoystick(gesture);releaseSelectionLock();state.selectionActions=false;state.cursorDrag=null;cursorFeedback.visible=false;closeLocalEditor(true);stopVoiceLoop();englishPrefix='';context='';associatedWords=[];clearTimeout(gesture?.timer);clearTimeout(gesture?.repeatTimer);gesture=null;itemHold=null;state.voice=null;state.comp=null;state.popup=null;state.locked=false;state.hidden=false;state.page='letters';state.clipManage=false;state.clipSelected=[];state.clipConfirm=null;state.clipCandidate='';state.toolbarSort=false;state.clipGroupMenu=null;applyText({text:'',cursor:0});render();};
   globalThis.voxfixClearComposition=(keepEnglish=false)=>{if(localInput||keepEnglish)return;const changed=Boolean(englishPrefix||state.comp||associatedWords.length||state.page==='candidates');englishPrefix='';context='';associatedWords=[];state.comp=null;if(state.page==='candidates')state.page='letters';applyText({text:'',cursor:0});if(changed)render();};
+  // 从 inputType 推导「键盘形态」：数字/电话 → 数字页；文本密码/邮箱/网址等 → 英文；其余 → 中文字母。
+  // 用于「同一编辑器重启时只有形态真变才重置」——支付宝/银行密码框每输入一个字符都会带 flag 位
+  // 抖动重启一次，若按原始 inputType 数值判等，会把数字页 reset 成字母页再切回来，表现为「按一个数字弹一下」。
+  const inputForm=type=>{const kind=type&15,variation=type&4080;if(kind===2||kind===3)return 'numbers';if(kind===1&&[16,32,128,144,224].includes(variation))return 'en';return 'letters';};
+  const isPrivateField=type=>{const kind=type&15,variation=type&4080;return kind===1&&[128,144,224].includes(variation)||kind===2&&variation===16;};
   globalThis.voxfixInputType=type=>{
     // 换了输入框，原来那份起点已经不指向同一个地方，锁定安全清理。
     clearSelectionLock();
     const kind=type&15,variation=type&4080;
-    privateField=kind===1&&[128,144,224].includes(variation)||kind===2&&variation===16;
+    privateField=isPrivateField(type);
     if(kind===2||kind===3)state.page='numbers';
     else if(kind===1&&[16,32,128,144,224].includes(variation)){fieldPreference??={language:state.language,layout:state.layout};state.language='en';state.layout='26';}
     else if(fieldPreference!==null){Object.assign(state,fieldPreference);fieldPreference=null;}
@@ -1542,7 +1597,7 @@ if(nativeIme){
   };
   let inputType=null;
   globalThis.voxfixRedraw=()=>render();
-  globalThis.voxfixStartInput=(type,restarting,options=0)=>{const previous=enterLabel;enterLabel=options&0x40000000?'换行':({2:'前往',3:'搜索',4:'发送',5:'下一项',6:'完成',7:'上一项'}[options&255]||'换行');if(!restarting){globalThis.voxfixReset();globalThis.voxfixInputType(type);}else if(inputType!==null&&inputType!==type){globalThis.voxfixClearComposition();englishPrefix='';state.page='letters';globalThis.voxfixInputType(type);}else if(previous!==enterLabel)render();inputType=type;};
+  globalThis.voxfixStartInput=(type,restarting,options=0)=>{const previous=enterLabel;enterLabel=options&0x40000000?'换行':({2:'前往',3:'搜索',4:'发送',5:'下一项',6:'完成',7:'上一项'}[options&255]||'换行');if(!restarting){globalThis.voxfixReset();globalThis.voxfixInputType(type);}else if(inputType!==null&&inputForm(inputType)!==inputForm(type)){globalThis.voxfixClearComposition();englishPrefix='';state.page='letters';globalThis.voxfixInputType(type);}else{privateField=isPrivateField(type);if(previous!==enterLabel)render();}inputType=type;};
   globalThis.voxfixVoiceDone=message=>{exitVoice();if(message)toast(message);};
   globalThis.voxfixVoiceText=text=>{const session=state.voice;if(!session?.local||session.local!==editor)return;session.text=text;if(session.phase!=='cancel')applyText(voiceResult(session.snapshot,text));};
   globalThis.voxfixVoiceLevel=level=>setVoiceLevel(level/12);

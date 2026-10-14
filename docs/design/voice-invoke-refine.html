@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>语音呼出与关闭 · 打磨效果图</title>
+<style>
+  :root{
+    --ink:#1c1c1e; --sub:#6e6e73; --faint:#aeaeb2;
+    --page:#eef0f5; --card:#fff; --line:#e3e5ec;
+    --accent:#0a84ff; --danger:#d43c48; --warn:#c98a1c;
+    --kb-bg:#d3d7e2; --key:#fff; --func:#c0c5d3;
+    --orb-a:#3c70e8; --orb-b:#739cf2; --orb-c:#bbcafa;
+    --orb-red-a:#c94e59; --orb-red-b:#dd929e; --orb-red-c:#e8bac9;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  body{font-family:-apple-system,"SF Pro SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    background:var(--page);color:var(--ink);padding:48px 20px 90px}
+  .wrap{max-width:1060px;margin:0 auto}
+  h1{font-size:28px;letter-spacing:-.02em}
+  .lede{color:var(--sub);font-size:13.5px;line-height:1.8;margin-top:10px;max-width:880px}
+  .lede b{color:var(--ink)}
+  .lede code,.notes code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+    background:#f1f3f8;border-radius:4px;padding:1px 5px}
+  .principles{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+  .principles span{font-size:12px;color:var(--sub);background:#fff;border:1px solid var(--line);
+    border-radius:999px;padding:6px 13px}
+  .principles span b{color:var(--ink);font-weight:600}
+
+  .ver{background:var(--card);border:1px solid var(--line);border-radius:24px;
+    padding:26px 28px;margin-top:32px;box-shadow:0 2px 10px rgba(30,34,48,.05)}
+  .ver-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:12px}
+  .num{font-size:12px;font-weight:700;color:#fff;background:var(--ink);border-radius:8px;
+    padding:4px 9px;letter-spacing:.05em}
+  .ver h2{font-size:20px;letter-spacing:-.01em}
+  .src{font-size:12px;color:var(--sub);border:1px solid var(--line);border-radius:999px;padding:3px 10px}
+  .idea{color:var(--sub);font-size:13px;line-height:1.8;margin-top:10px;max-width:900px}
+  .idea b,.notes b{color:var(--ink)}
+  .cols{display:grid;grid-template-columns:340px 1fr;gap:28px;margin-top:20px;align-items:start}
+  @media (max-width:860px){.cols{grid-template-columns:1fr}}
+  .notes{font-size:12.5px;color:var(--sub);line-height:1.9}
+  .notes li{margin:7px 0 7px 18px}
+  .notes .tag{display:inline-block;font-size:11px;color:var(--accent);border:1px solid #bcd8ff;
+    border-radius:6px;padding:0 6px;margin-right:5px;background:#f2f8ff}
+  .notes .tag.keep{color:#3b8a5a;border-color:#bfe3cd;background:#f2fbf5}
+  .notes .tag.fix{color:var(--warn);border-color:#f0d9a8;background:#fdf8ec}
+
+  /* —— 手机框 —— */
+  .phone{position:relative;width:100%;height:330px;background:#f7f8fb;
+    border:1px solid #dcdfe8;border-radius:24px;overflow:hidden;user-select:none;
+    box-shadow:inset 0 0 0 4px #fff,0 6px 18px rgba(30,34,48,.08)}
+  .textarea{padding:14px 18px;font-size:13px;line-height:2;color:#3a3a3c}
+  .textarea .caret{display:inline-block;width:2px;height:15px;background:var(--accent);
+    vertical-align:-2px;animation:blink 1.06s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .keyboard{position:absolute;left:0;right:0;bottom:0;height:206px;background:var(--kb-bg);
+    padding:8px 6px 10px;display:flex;flex-direction:column}
+  .kb-row{display:flex;gap:5px;margin-bottom:6px;padding:0 2px}
+  .kb-row i{flex:1;height:38px;background:var(--key);border-radius:7px;
+    box-shadow:0 1px 0 rgba(0,0,0,.12);display:block}
+  .kb-row i.f{background:var(--func);flex:.62}
+  .kb-space{position:relative;flex:1;height:38px;background:var(--key);border-radius:7px;
+    box-shadow:0 1px 0 rgba(0,0,0,.12);display:flex;align-items:center;justify-content:center;gap:6px;
+    color:#8a93a3;font-size:12px}
+  .kb-space svg.mic{width:15px;height:15px;stroke:#8a93a3;fill:none;stroke-width:1.8;stroke-linecap:round}
+  .kb-space.holding{background:#eef1f7;color:#5c6675}
+  .ring{position:absolute;width:42px;height:42px;left:50%;top:50%;
+    transform:translate(-50%,-50%) rotate(-90deg)}
+  .ring circle{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;
+    stroke-dasharray:116;stroke-dashoffset:116;animation:ring 1.1s linear infinite}
+  @keyframes ring{to{stroke-dashoffset:0}}
+  .kb-footer{height:34px;display:flex;align-items:center;gap:8px;padding:0 8px;margin-top:auto}
+  .kb-footer .track{flex:1;height:24px;border-radius:12px;background:#00000010}
+  .kb-footer i{width:30px;height:30px;border-radius:50%;background:#00000012;display:block}
+
+  /* —— 语音面板 —— */
+  .vpanel{position:absolute;left:0;right:0;bottom:0;height:206px;background:var(--key-bg);
+    display:flex;flex-direction:column;align-items:center;padding:12px 10px 10px;
+    transform-origin:50% 100%;border-radius:8px;overflow:hidden}
+  .vpanel.growing{animation:vgrow 1.5s cubic-bezier(.23,1,.32,1) infinite alternate}
+  @keyframes vgrow{from{transform:scaleY(.2);opacity:.25}to{transform:scaleY(1);opacity:1}}
+  .vpanel.shrinking{animation:vshrink 1.5s cubic-bezier(.4,0,.6,1) infinite alternate}
+  @keyframes vshrink{from{transform:scaleY(1);opacity:1}to{transform:scaleY(.24);opacity:.35}}
+  .vp-title{flex-shrink:0;height:18px;line-height:18px;font-size:12px;color:#69717e}
+  .vp-title .dots::after{content:'…';animation:dots 1.6s steps(4) infinite}
+  @keyframes dots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'…'}}
+  .vp-title.alarm{color:var(--danger)}
+  .vp-title.hush{color:var(--warn)}
+  .vp-stage{flex:1;min-height:0;width:100%;display:grid;place-items:center;position:relative}
+  /* 色球：与 style.css 的 .voice-orb 同款渐变，附浮云漂移 */
+  .orb{--lvl:.35;position:relative;width:132px;height:132px;border-radius:50%;overflow:hidden;
+    background:radial-gradient(ellipse at 88% 68%,#edf2ff 0%,#dce5fc 24%,transparent 62%),
+      linear-gradient(155deg,var(--orb-a) 24%,var(--orb-b) 53%,var(--orb-c) 90%);
+    transform:scale(calc(.9 + var(--lvl) * .22));
+    transition:transform .12s ease-out}
+  .orb::before{content:'';position:absolute;inset:-24%;
+    background:radial-gradient(ellipse at 28% 38%,rgba(255,255,255,.5) 0%,rgba(255,255,255,0) 46%),
+               radial-gradient(ellipse at 74% 74%,rgba(255,255,255,.3) 0%,rgba(255,255,255,0) 44%);
+    animation:drift 9s ease-in-out infinite alternate}
+  @keyframes drift{from{transform:translate3d(-6%,-4%,0) scale(1)}to{transform:translate3d(7%,6%,0) scale(1.12)}}
+  .orb.red{background:radial-gradient(ellipse at 88% 68%,#fae7e9 0%,#eebdc6 24%,transparent 62%),
+      linear-gradient(155deg,var(--orb-red-a) 24%,var(--orb-red-b) 53%,var(--orb-red-c) 90%)}
+  .orb.red.small{background:linear-gradient(155deg,#c04a55 30%,#d4737f 62%,#e3a3b0 92%)}
+  .orb.small{width:60px;height:60px}
+  .orb.pulse{animation:breathe 3.2s ease-in-out infinite}
+  @keyframes breathe{0%,100%{filter:brightness(.98)}50%{filter:brightness(1.07)}}
+  /* 静音提示：外圈虚线缓慢呼吸 */
+  .hushring{position:absolute;width:130px;height:130px;border-radius:50%;
+    border:1.5px dashed rgba(201,138,28,.55);animation:breathe 2.4s ease-in-out infinite}
+  /* 取消刻度环：球外一圈，越界即闭合。尺寸压在 stage 高度内，不压标题与提示 */
+  .dial{position:absolute;width:138px;height:138px;border-radius:50%;
+    background:conic-gradient(from -90deg,var(--danger) calc(var(--t)*360deg),rgba(212,60,72,.14) 0);
+    -webkit-mask:radial-gradient(circle,transparent 62px,#000 63px);
+    mask:radial-gradient(circle,transparent 62px,#000 63px)}
+  .uturn{width:32px;height:32px;stroke:#fff;fill:none;stroke-width:3.4;
+    stroke-linecap:round;stroke-linejoin:round;position:absolute;
+    filter:drop-shadow(0 1px 1px rgba(120,20,32,.35))}
+  /* 收束点：松手后球缩成小点 */
+  .collapse{width:22px;height:22px;border-radius:50%;
+    background:linear-gradient(155deg,var(--orb-a),var(--orb-b));
+    animation:collapse 1.3s cubic-bezier(.23,1,.32,1) infinite alternate}
+  @keyframes collapse{from{transform:scale(1);opacity:.7}to{transform:scale(.62);opacity:1}}
+  .vp-echo{flex-shrink:0;width:100%;text-align:center;font-size:12px;color:#3a3a3c;
+    height:17px;line-height:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 6px}
+  .vp-hint{flex-shrink:0;height:18px;line-height:18px;font-size:11px;color:#818995}
+  .vp-hint.hush{color:var(--warn)}
+  .vp-hint.alarm{color:var(--danger)}
+  .vp-cancel{flex-shrink:0;min-width:96px;height:34px;font-size:12.5px;color:#3a3f4b;
+    border:none;border-radius:999px;background:#fff;box-shadow:0 1px 3px rgba(30,34,48,.10)}
+
+  .strip3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}
+  @media (max-width:860px){.strip3{grid-template-columns:1fr}}
+  .frame{background:#f7f8fb;border:1px solid #dcdfe8;border-radius:20px;height:250px;
+    position:relative;overflow:hidden;box-shadow:inset 0 0 0 3px #fff}
+  .frame .keyboard{height:170px}
+  .frame .kb-row i,.frame .kb-space{height:30px}
+  .frame .vpanel{height:170px;padding:8px}
+  .frame .cap{position:absolute;top:8px;left:10px;font-size:11px;color:var(--sub);
+    background:#ffffffd9;border:1px solid var(--line);border-radius:999px;padding:2px 9px;z-index:5}
+  .frame .orb{width:78px;height:78px}
+  .frame .orb.small{width:52px;height:52px}
+  .frame .hushring{width:96px;height:96px}
+  .frame .dial{width:104px;height:104px;-webkit-mask:radial-gradient(circle,transparent 41px,#000 42px);
+    mask:radial-gradient(circle,transparent 41px,#000 42px)}
+  .frame .uturn{width:30px;height:30px}
+  .frame .vp-echo{font-size:10.5px}
+  .frame .vp-hint,.frame .vp-title{font-size:10.5px}
+
+  .cmp{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:18px}
+  @media (max-width:860px){.cmp{grid-template-columns:1fr}}
+  .strip2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:18px}
+  @media (max-width:860px){.strip2{grid-template-columns:1fr}}
+  table.map{width:100%;border-collapse:collapse;margin-top:14px;font-size:12.5px}
+  table.map th,table.map td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);
+    vertical-align:top;line-height:1.7}
+  table.map th{color:var(--faint);font-weight:600;font-size:11.5px;letter-spacing:.04em}
+  table.map td:first-child{color:var(--sub);white-space:nowrap}
+  table.map b{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>语音呼出与关闭 · 打磨效果图</h1>
+  <p class="lede">沿用现有设计，不动骨架：<b>长按空格呼出 → 整片键盘换成语音面板（大色球随音量流动）→ 上滑 55px 取消 → 松手输入 / 长语音点结束</b>。
+    这一版只解决这套交互里「呼出没预告、面板长得太硬、球看不出在听、取消没有临界点、收尾像蒸发」的问题，共 <b>7 处</b>；
+    全部落在 <code>app.mjs</code> 的 <code>spaceKey / startVoice / voiceFrame / syncVoiceDrag / exitVoice</code> 与 <code>style.css</code> 语音段内，不引依赖、不换视觉语言。</p>
+  <div class="principles">
+    <span>呼出 <b>有时间预告</b>，不是突然变脸</span>
+    <span>面板 <b>从空格长出来</b></span>
+    <span>色球 <b>听得见</b>：动态 + 静音提示</span>
+    <span>取消 <b>刻度环闭合</b>，不整球刷红</span>
+    <span>识别中 <b>收束成点</b></span>
+    <span>关闭 <b>沿原路收回</b></span>
+  </div>
+
+  <!-- 01 呼出 -->
+  <section class="ver">
+    <div class="ver-head"><span class="num">01</span><h2>呼出：长按先走一圈预告，面板从空格长出来</h2><span class="src">打磨点 1 · 2</span></div>
+    <p class="idea">现在是「按住空格 → 面板立刻替换键盘 + <code>scale(.96)→1</code> 200ms」，手指还没确认界面就换了；松开又立刻退回，呼出与关闭都缺一个"起手/收手"的过程。
+      改为三拍：① 按住后 <b>mic 图标外圈走 320ms 环形进度</b>，键帽同时轻微下沉（<code>.holding</code>），未走满松手＝普通空格，不误触；
+      ② 走满后面板 <b>以空格键为原点向上展开</b>——<code>transform-origin:50% 100%</code> 是现成的，只把进场从"整体缩放淡入"换成"高度展开"；
+      ③ 色球在生长末段从 0.2 倍放大到位，音量接管。</p>
+    <div class="strip3">
+      <div class="frame"><span class="cap">① 按住 320ms 预告</span>
+        <div class="keyboard">
+          <div class="kb-row"><i class="f"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="f"></i></div>
+          <div class="kb-row"><i class="f"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="f"></i></div>
+          <div class="kb-row"><i class="f"></i>
+            <div class="kb-space holding"><svg class="mic" viewBox="0 0 24 24"><path d="M4 9v6m4-10v14m4-17v20m4-17v14m4-10v6"/></svg>空格
+              <svg class="ring" viewBox="0 0 42 42"><circle cx="21" cy="21" r="18.5"/></svg>
+            </div><i class="f"></i></div>
+          <div class="kb-footer"><i></i><div class="track"></div><i></i></div>
+        </div>
+      </div>
+      <div class="frame"><span class="cap">② 满环 · 向上展开</span>
+        <div class="vpanel growing">
+          <span class="vp-title">倾听中</span>
+          <div class="vp-stage"><div class="orb" style="--lvl:.5"></div></div>
+          <span class="vp-hint">松手输入 · 上滑取消</span>
+        </div>
+      </div>
+      <div class="frame"><span class="cap">③ 定型 · 球放大到位</span>
+        <div class="vpanel">
+          <span class="vp-title dots">倾听中</span>
+          <div class="vp-stage"><div class="orb pulse" style="--lvl:.6"></div></div>
+          <span class="vp-hint">松手输入 · 上滑取消</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 倾听中 -->
+  <section class="ver">
+    <div class="ver-head"><span class="num">02</span><h2>倾听中：让色球真的看起来"在听"</h2><span class="src">打磨点 3 · 4</span></div>
+    <div class="cols">
+      <div class="phone">
+        <div class="textarea">今天我们来看一下语音输入的<span class="caret"></span></div>
+        <div class="vpanel">
+          <span class="vp-title dots">倾听中</span>
+          <div class="vp-stage"><div class="orb pulse" style="--lvl:.62"></div></div>
+          <span class="vp-echo">今天我们来看一下语音输入的</span>
+          <span class="vp-hint">松手输入 · 上滑取消</span>
+        </div>
+      </div>
+      <ul class="notes">
+        <li><span class="tag fix">调参</span><b>放大音量动态范围</b>：现在是 <code>size = rest + level * .10</code>，正常说话几乎看不出球在动，只有大声才明显。改为 <code>rest + level * .22</code>，保留快攻慢放的 <code>.055 / .18</code> 时间常数；同时把球内浮云流速的音量系数从 1.5 提到 2.2（<code>voiceFlow += dt * (listening ? .38 + level * 1.5 : .22)</code> 这一行），小音量也能看到云在加速。</li>
+        <li><span class="tag">新增</span><b>静音提示</b>：连续 2.5s 音量近零时，标题转琥珀色「没有听到声音」，提示行给「靠近一点，或检查麦克风是否被占用」，球外浮出一圈缓慢呼吸的虚线环（<code>.hushring</code>）。现在这种情况用户只会看到一颗没反应的球，无从自查。</li>
+        <li><span class="tag">新增</span><b>面板内实时转写回显行</b>（球与提示之间，超出省略）：数据就是现在送进 <code>applyText</code> 的那份 chunk 文本，只多渲染一处。中途就能确认识别对不对，错了立即上滑取消，不必等松手后再撤。</li>
+        <li><span class="tag keep">保留</span>球的渐变与 <code>voice-orb.mjs</code> 的 <code>time/level/cancel/quiet</code> 四个 uniform、上滑跟手位移、底部布局都不动。</li>
+      </ul>
+    </div>
+    <div class="strip2">
+      <div class="frame" style="height:220px"><span class="cap">静音 2.5s · 琥珀提示</span>
+        <div class="vpanel">
+          <span class="vp-title hush">没有听到声音</span>
+          <div class="vp-stage"><div class="hushring"></div><div class="orb" style="--lvl:.16"></div></div>
+          <span class="vp-hint hush">靠近一点，或检查麦克风是否被占用</span>
+        </div>
+      </div>
+      <div class="frame" style="height:220px"><span class="cap">识别中有内容 · 回显行</span>
+        <div class="vpanel">
+          <span class="vp-title dots">倾听中</span>
+          <div class="vp-stage"><div class="orb pulse" style="--lvl:.72"></div></div>
+          <span class="vp-echo">语音输入的效果到底怎么样</span>
+          <span class="vp-hint">松手输入 · 上滑取消</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 03 取消 -->
+  <section class="ver">
+    <div class="ver-head"><span class="num">03</span><h2>上滑取消：刻度环闭合，而不是整球刷红</h2><span class="src">打磨点 5</span></div>
+    <div class="cols">
+      <div class="phone">
+        <div class="textarea">今天我们来看一下<span class="caret"></span></div>
+        <div class="vpanel">
+          <span class="vp-title alarm">松开手指，取消输入</span>
+          <div class="vp-stage">
+            <div class="dial" style="--t:.86"></div>
+            <div class="orb red small" style="--lvl:.3"></div>
+            <svg class="uturn" viewBox="0 0 24 24"><path d="M8 17h8a4.5 4.5 0 0 0 0-9H7"/><path d="M10 5 7 8l3 3"/></svg>
+          </div>
+          <span class="vp-hint">下滑继续说</span>
+        </div>
+      </div>
+      <ul class="notes">
+        <li><span class="tag fix">改反馈</span>现在上滑时整个球随 <code>cancel</code> uniform 渐渐变红，越靠近阈值只是"更红一点"，<b>没有临界瞬间</b>，用户只能靠松手后的结果反推。改为 <b>球外一圈红色刻度环</b>：上滑距离映射 <code>--t</code>，到 <code>VOICE_ARM = 55px</code> 时环恰好闭合，同一帧球缩到 0.55 倍并转红、中心浮出回转箭头——越线是"一下"的事，不是渐变。</li>
+        <li><span class="tag keep">保留</span>55px 阈值、跟手位移、下滑退回倾听的逻辑与代码结构；只把「整体变色」换成「环进度 + 越界二态」。</li>
+        <li><span class="tag keep">保留</span>文案仍是自己的「松手取消 / 下滑继续说」体系。</li>
+        <li><span class="tag">注意</span>刻度环走 DOM + <code>conic-gradient</code>，不额外占 WebGL；<code>voice-orb.mjs</code> 的 <code>cancel</code> 参数保留用于球内轻微降饱和，避免真机上色球与红环都全红打架。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 04 关闭 -->
+  <section class="ver">
+    <div class="ver-head"><span class="num">04</span><h2>识别中与关闭：球收成一粒点，面板沿原路收回键盘</h2><span class="src">打磨点 6 · 7</span></div>
+    <div class="cols">
+      <div class="phone">
+        <div class="textarea">今天我们来看一下语音输入的<span class="caret"></span></div>
+        <div class="vpanel shrinking">
+          <span class="vp-title alarm">识别中</span>
+          <div class="vp-stage"><div class="collapse"></div></div>
+          <span class="vp-echo" style="color:#69717e">这段文字将在上屏前可撤销</span>
+          <button class="vp-cancel">取消识别</button>
+        </div>
+      </div>
+      <ul class="notes">
+        <li><span class="tag fix">补阶段</span>松手进入「识别中」时，让色球 <b>收束成一个小圆点</b>做呼吸，替代现在"大球原样不动、只换文字"。球由大变小的过程本身就是"说完了、正在等结果"的信号，同时回显行显示待上屏那段文字。</li>
+        <li><span class="tag fix">改收尾</span><code>exitVoice()</code> 现在是给面板做 ghost 并播放 <code>voiceFade</code>（缩小 + 淡出），面板像凭空蒸发。改为 <b>沿原路收回</b>：高度向下压回键盘高度、色球同步缩回空格键位置，键盘键位在收回过程中一起淡入，<b>220ms、与呼出同一缓动反向播放</b>。呼出与关闭成为一对对称动作，用户能明确知道"它回到空格里了"。</li>
+        <li><span class="tag">新增</span><b>识别中常显「取消识别」</b>：白色圆角胶囊 + 轻投影置于面板底部。现在那颗 88px 按钮与面板底色接近、几乎看不见，误识别时抓不到。</li>
+        <li><span class="tag keep">保留</span>长语音模式下「暂停 / 结束」的按钮位置不改，识别中态只是把它替换为「取消识别」。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 05 对照 -->
+  <section class="ver">
+    <div class="ver-head"><span class="num">05</span><h2>逐条对照</h2></div>
+    <table class="map">
+      <tr><th>环节</th><th>现状</th><th>打磨后</th></tr>
+      <tr><td>呼出预告</td><td>长按立即切换，无阈值提示，误触即整屏变化</td><td><b>320ms 环形进度</b>，未满＝普通空格；键帽下沉反馈</td></tr>
+      <tr><td>面板进场</td><td><code>voiceGrow</code>：整体缩放淡入</td><td><b>以空格为原点向上展开</b>，色球末段放大到位</td></tr>
+      <tr><td>音量反馈</td><td>缩放振幅 0.10，正常说话看不出动</td><td>振幅 <b>0.22</b> ＋ 浮云流速系数 1.5 → 2.2</td></tr>
+      <tr><td>没听到声音</td><td>无提示，用户对着不动的球说</td><td>2.5s 静音 → 琥珀标题「没有听到声音」＋ 虚线呼吸环</td></tr>
+      <tr><td>中途确认</td><td>只能看编辑框里滚动的正文</td><td>面板内 <b>实时转写回显行</b></td></tr>
+      <tr><td>取消反馈</td><td>球体整体渐红，无临界点</td><td><b>刻度环闭合</b>＝越界二态，球缩 0.55 倍＋回转箭头</td></tr>
+      <tr><td>识别中</td><td>大球不动只换文字；取消按钮不显眼</td><td>球<b>收束为圆点</b>呼吸，取消识别按钮常显</td></tr>
+      <tr><td>关闭</td><td><code>voiceFade</code>：缩小淡出，凭空消失</td><td><b>沿原路收回键盘</b>，与呼出对称（220ms）</td></tr>
+    </table>
+  </section>
+
+  <!-- 06 落地 -->
+  <section class="ver">
+    <div class="ver-head"><span class="num">06</span><h2>落地位置</h2></div>
+    <ul class="notes">
+      <li><span class="tag">app.mjs</span><code>spaceKey()</code> 加 <code>.holding</code> 与环形进度（新增 <code>spaceHold</code> 计时，320ms 阈值，与现有短按判定共用一次计时）；<code>startVoice()</code> 保持 <code>voicePanelFresh</code> 语义，由生长动画接管；<code>voiceFrame()</code> 调 <code>size</code> 系数与 <code>voiceFlow</code> 系数、加静音计时；<code>syncVoiceDrag()</code> 输出 <code>--t</code> 给刻度环；<code>exitVoice()</code> 的 ghost 改播「收回」关键帧。</li>
+      <li><span class="tag">style.css</span>新增 <code>.voice-dial</code>、<code>.voice-echo</code>、<code>.voice-hush-ring</code>、<code>.voice-orb.collapsed</code>；把 <code>@keyframes voiceGrow / voiceFade</code> 换成 <code>voiceUnfold / voiceFold</code>（高度展开 / 收合），缓动统一用现成的 <code>--voice-ease</code>。</li>
+      <li><span class="tag">voice-orb.mjs</span>不改结构，<code>cancel / quiet</code> uniform 继续供球内微调，刻度环走 DOM 不占 WebGL。</li>
+      <li><span class="tag">回归</span>需同步更新 <code>voice.test.mjs</code>、<code>voice-orb.test.mjs</code>、<code>interaction-transitions.test.mjs</code>、<code>workflow.test.mjs</code>（文案与 DOM 断言）；真机复验长按 320ms 阈值手感（K60 触控采样）与收回动画掉帧。</li>
+    </ul>
+  </section>
+</div>
+
+<script>
+// 让球体亮度/尺寸轻微抖动，模拟真实音量，避免静态效果图看不到动态
+const orbs = [...document.querySelectorAll('.orb')];
+setInterval(() => {
+  for (const o of orbs) {
+    const base = parseFloat(getComputedStyle(o).getPropertyValue('--lvl')) || .4;
+    const lvl = Math.max(.12, Math.min(1, base + (Math.random() - .45) * .26));
+    o.style.setProperty('--lvl', lvl.toFixed(2));
+  }
+}, 180);
+// 刻度环演示：0.15 → 1 推进，闭合后停顿再退回
+const dial = document.querySelector('.dial');
+if (dial) {
+  let t = .15, dir = 1;
+  setInterval(() => {
+    if (dir === 0) return;
+    t += dir * .045;
+    if (t >= 1) {
+      t = 1; dir = 0;
+      setTimeout(() => { dir = -1; }, 950);
+    } else if (t <= .15) { t = .15; dir = 1; }
+    dial.style.setProperty('--t', t.toFixed(2));
+    dial.closest('.vpanel').querySelector('.vp-title').classList.toggle('alarm', t >= 1);
+  }, 85);
+}
+</script>
+</body>
+</html>

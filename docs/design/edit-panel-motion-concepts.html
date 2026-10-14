@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>编辑框呼出动效 · 5 套概念</title>
+<style>
+  :root{
+    --ink:#1c1c1e; --sub:#6e6e73; --faint:#aeaeb2;
+    --page:#eef0f5; --card:#ffffff; --line:#e3e5ec;
+    --kb-bg:#d3d7e2; --key:#ffffff; --func:#c0c5d3;
+    --accent:#0a84ff; --amber:#ffbb12;
+    --shadow:0 12px 32px rgba(30,34,48,.14);
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:-apple-system,"SF Pro SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    background:var(--page); color:var(--ink); padding:48px 20px 96px;
+  }
+  .wrap{max-width:1160px;margin:0 auto}
+  h1{font-size:30px;letter-spacing:-.02em;line-height:1.2}
+  .lede{color:var(--sub);font-size:14px;margin-top:10px;max-width:760px;line-height:1.7}
+  .toc{display:flex;flex-wrap:wrap;gap:8px;margin:22px 0 8px}
+  .toc a{
+    font-size:13px;color:var(--ink);text-decoration:none;background:var(--card);
+    border:1px solid var(--line);border-radius:999px;padding:7px 14px;
+  }
+  .toc a:hover{border-color:var(--accent);color:var(--accent)}
+
+  .concept{
+    background:var(--card);border:1px solid var(--line);border-radius:24px;
+    padding:28px;margin-top:36px;box-shadow:0 2px 10px rgba(30,34,48,.05);
+  }
+  .concept-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:12px}
+  .num{
+    font-size:12px;font-weight:700;color:#fff;background:var(--ink);
+    border-radius:8px;padding:4px 9px;letter-spacing:.06em;
+  }
+  .concept h2{font-size:21px;letter-spacing:-.01em}
+  .tag{font-size:12px;color:var(--sub);border:1px solid var(--line);border-radius:999px;padding:3px 10px}
+  .idea{color:var(--sub);font-size:13.5px;line-height:1.75;margin-top:12px;max-width:900px}
+  .idea b{color:var(--ink)}
+  .spec{
+    display:flex;flex-wrap:wrap;gap:18px;margin-top:14px;padding:12px 16px;
+    background:#f6f7fa;border-radius:14px;font-size:12px;color:var(--sub);
+  }
+  .spec b{display:block;color:var(--ink);font-size:13px;margin-bottom:2px;font-variant-numeric:tabular-nums}
+
+  .scenes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:28px;margin-top:22px}
+  .scene-label{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+  .scene-label h3{font-size:13px;color:var(--sub);font-weight:600}
+  .replay{
+    font:inherit;font-size:12px;color:var(--accent);background:none;border:1px solid #0a84ff44;
+    border-radius:999px;padding:5px 14px;cursor:pointer;
+  }
+  .replay:active{transform:scale(.96)}
+
+  /* ---------- 手机框 ---------- */
+  .phone{
+    position:relative;width:100%;max-width:340px;height:460px;margin:0 auto;
+    background:#f7f8fb;border:1px solid #dcdfe8;border-radius:28px;overflow:hidden;
+    box-shadow:inset 0 0 0 4px #fff, 0 6px 18px rgba(30,34,48,.08);
+    user-select:none;
+  }
+  .statusbar{height:26px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--faint)}
+  .textarea{padding:6px 18px;font-size:14px;line-height:2.05;color:#3a3a3c;height:190px;position:relative}
+  .textarea .sel{
+    background:#fdeec3;border-radius:3px;padding:1px 0;position:relative;
+  }
+  .touchdot{
+    position:absolute;width:14px;height:14px;border-radius:50%;
+    background:rgba(10,132,255,.35);border:2px solid var(--accent);
+    transform:translate(-50%,-50%) scale(0);pointer-events:none;z-index:9;
+  }
+  .scrim{position:absolute;inset:0;background:#000;opacity:0;pointer-events:none;z-index:4}
+
+  .keyboard{
+    position:absolute;left:0;right:0;bottom:0;height:236px;background:var(--kb-bg);
+    padding:8px 6px 10px;z-index:5;transform:translateY(0);
+  }
+  .kb-toolbar{height:34px;display:flex;gap:6px;align-items:center;padding:0 4px;margin-bottom:6px}
+  .kb-toolbar i{width:26px;height:26px;border-radius:50%;background:#00000014;display:block}
+  .kb-toolbar span{flex:1;height:22px;border-radius:11px;background:#0000000d}
+  .kb-row{display:flex;gap:5px;margin-bottom:6px;padding:0 2px}
+  .kb-row i{
+    flex:1;height:42px;background:var(--key);border-radius:7px;
+    box-shadow:0 1px 0 rgba(0,0,0,.12);display:block;
+  }
+  .kb-row i.f{background:var(--func);flex:.62}
+  .kb-footer{height:40px;display:flex;align-items:center;gap:8px;padding:0 8px}
+  .kb-footer .track{
+    flex:1;height:26px;border-radius:13px;background:#00000010;position:relative;
+  }
+  .kb-footer .track::after{
+    content:"";position:absolute;left:50%;top:50%;width:8px;height:8px;border-radius:50%;
+    background:#00000026;transform:translate(-50%,-50%);
+  }
+  .kb-footer i{width:34px;height:34px;border-radius:50%;background:#00000012;display:block}
+
+  /* ---------- 编辑框面板（通用骨架，皮肤按概念变化） ---------- */
+  .panel{
+    position:absolute;right:12px;bottom:20px;width:236px;z-index:6;
+    border-radius:20px;padding:10px;touch-action:none;
+    opacity:0;pointer-events:none;
+  }
+  .panel .p-head{
+    display:flex;align-items:center;justify-content:space-between;
+    font-size:12px;color:var(--sub);padding:0 4px 8px;
+  }
+  .panel .p-head b{color:var(--ink);font-weight:600}
+  .panel .p-body{display:grid;grid-template-columns:64px 1fr;gap:8px}
+  .panel .p-clip{display:grid;grid-template-rows:repeat(4,1fr);gap:5px}
+  .panel .p-clip i{
+    display:flex;align-items:center;justify-content:center;font-style:normal;
+    font-size:11px;color:#4a4a4e;border-radius:10px;
+  }
+  .panel .p-pad{position:relative;height:172px;border-radius:16px}
+
+  /* ======== 概念 1：气泡生长（花瓣方向盘） ======== */
+  .skin-1 .panel{background:#fff;box-shadow:var(--shadow)}
+  .skin-1 .p-clip i{background:#f0f2f7}
+  .skin-1 .p-pad{background:#f4f6fa}
+  .petal{
+    position:absolute;width:44px;height:44px;border-radius:50%;
+    background:#fff;box-shadow:0 1px 4px rgba(30,34,48,.14);
+    display:flex;align-items:center;justify-content:center;color:#8a8f9c;
+    transition:background .12s,color .12s;
+  }
+  .petal svg{width:18px;height:18px}
+  .petal.on{background:var(--accent);color:#fff}
+  .puck{
+    position:absolute;left:50%;top:50%;width:46px;height:46px;border-radius:50%;
+    background:#fff;box-shadow:0 2px 8px rgba(30,34,48,.22), inset 0 0 0 1px #e7e9f0;
+    transform:translate(-50%,-50%);z-index:2;cursor:grab;
+  }
+  .puck::after{
+    content:"";position:absolute;left:50%;top:50%;width:12px;height:12px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, #6cb6ff, var(--accent));
+    transform:translate(-50%,-50%);
+  }
+
+  /* ======== 概念 2：液态岛（弹性胶囊） ======== */
+  .skin-2 .panel{background:rgba(20,22,28,.92);backdrop-filter:blur(18px);box-shadow:var(--shadow)}
+  .skin-2 .p-head{color:#9a9ea8}.skin-2 .p-head b{color:#fff}
+  .skin-2 .p-clip i{background:#ffffff1a;color:#d7d9df}
+  .skin-2 .p-pad{background:#ffffff0f}
+  .island{
+    position:absolute;left:50%;top:50%;width:58px;height:58px;border-radius:29px;
+    background:linear-gradient(135deg,#3a3f4c,#23262f);
+    box-shadow:0 4px 14px rgba(0,0,0,.4), inset 0 0 0 1px #ffffff22;
+    transform:translate(-50%,-50%);z-index:2;cursor:grab;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .island::after{
+    content:"";width:14px;height:14px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, #ffd66e, var(--amber));
+  }
+  .skin-2 .dir{
+    position:absolute;font-size:10px;color:#8f939f;letter-spacing:.05em;
+  }
+
+  /* ======== 概念 3：层叠卡片（罗盘环） ======== */
+  .skin-3 .panel{
+    background:rgba(255,255,255,.78);backdrop-filter:blur(22px) saturate(180%);
+    box-shadow:var(--shadow), inset 0 1px 0 rgba(255,255,255,.8);
+  }
+  .skin-3 .p-clip i{background:rgba(255,255,255,.65);box-shadow:inset 0 0 0 1px #e4e7ef}
+  .skin-3 .p-pad{background:rgba(244,246,250,.6);box-shadow:inset 0 0 0 1px #e8eaf1}
+  .ring{
+    position:absolute;left:50%;top:50%;width:120px;height:120px;border-radius:50%;
+    border:1.5px solid #d8dce6;transform:translate(-50%,-50%);
+  }
+  .notch{
+    position:absolute;left:50%;top:50%;width:3px;height:9px;border-radius:2px;
+    background:#c6cbd8;transform-origin:50% 0;
+  }
+  .notch.major{background:#8f95a5;height:12px;width:3.5px}
+  .notch.on{background:var(--accent)}
+
+  /* ======== 概念 4：磁吸花瓣 ======== */
+  .skin-4 .panel{background:#fff;box-shadow:var(--shadow)}
+  .skin-4 .p-clip i{background:#f0f2f7}
+  .skin-4 .p-pad{background:transparent}
+  .blade{
+    position:absolute;left:50%;top:50%;width:40px;height:56px;border-radius:20px;
+    background:#fff;box-shadow:0 2px 8px rgba(30,34,48,.13);
+    transform-origin:50% 86px;display:flex;align-items:flex-start;justify-content:center;
+    padding-top:9px;color:#9aa0ad;transition:background .12s,color .12s;
+  }
+  .blade svg{width:15px;height:15px}
+  .blade.on{background:var(--ink);color:#fff}
+
+  /* ======== 概念 5：景深玻璃 ======== */
+  .skin-5 .panel{
+    background:rgba(250,251,253,.62);backdrop-filter:blur(26px) saturate(160%);
+    box-shadow:0 10px 30px rgba(30,34,48,.12), inset 0 0 0 1px rgba(255,255,255,.7);
+  }
+  .skin-5 .p-clip i{background:rgba(255,255,255,.5);box-shadow:inset 0 0 0 1px #e6e9f0}
+  .skin-5 .p-pad{background:rgba(255,255,255,.4);box-shadow:inset 0 0 0 1px #eceef4}
+  .glass-arrow{
+    position:absolute;width:38px;height:38px;border-radius:12px;
+    background:rgba(255,255,255,.85);box-shadow:0 1px 3px rgba(30,34,48,.12);
+    display:flex;align-items:center;justify-content:center;color:#7d8392;
+    transition:background .12s,color .12s,transform .12s;
+  }
+  .glass-arrow svg{width:16px;height:16px}
+  .glass-arrow.on{background:var(--accent);color:#fff}
+
+  /* 交互演示区 */
+  .demo{
+    margin-top:24px;border-top:1px dashed var(--line);padding-top:18px;
+    display:flex;flex-wrap:wrap;gap:24px;align-items:center;
+  }
+  .demo .stage{
+    position:relative;width:230px;height:230px;border-radius:22px;flex:none;
+    background:#f6f7fb;border:1px solid var(--line);overflow:hidden;touch-action:none;
+  }
+  .demo .note{font-size:12.5px;color:var(--sub);line-height:1.8;max-width:460px}
+  .demo .note b{color:var(--ink)}
+  .readout{
+    font-variant-numeric:tabular-nums;font-size:12px;color:var(--accent);
+    background:#0a84ff10;border-radius:8px;padding:6px 10px;display:inline-block;margin-top:8px;min-width:190px;
+  }
+
+  .final{
+    margin-top:44px;background:#101216;color:#e8eaf0;border-radius:24px;padding:30px 32px;
+  }
+  .final h2{font-size:20px;margin-bottom:12px;color:#fff}
+  .final p{font-size:13.5px;line-height:1.9;color:#b9bec9}
+  .final b{color:#fff}
+  .final .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-top:18px}
+  .final .cell{background:#ffffff0d;border:1px solid #ffffff14;border-radius:14px;padding:14px;font-size:12.5px;line-height:1.7}
+  .final .cell b{display:block;font-size:13.5px;margin-bottom:5px;color:#fff}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>编辑框呼出 / 切换动效 · 5 套概念</h1>
+  <p class="lede">
+    每套概念都给出两种呼出场景的可播放演示：<b>场景 A</b>＝键盘已展开，从滑轨长按呼出编辑框（编辑框在键盘<b>之上</b>）；
+    <b>场景 B</b>＝键盘未展开，长按选中文字触发「键盘＋编辑框」同屏共现（键盘在<b>下层</b>滑入、编辑框从<b>上层</b>触点浮现，两者错峰衔接）。
+    下方还有可真实拖拽的方向盘重设计（解决「中间点太单调、没有拖动感」）。
+    所有运动由弹簧物理驱动（damping / response 苹果参数），可中途打断、速度连续。
+  </p>
+  <nav class="toc">
+    <a href="#c1">① 气泡生长</a><a href="#c2">② 液态岛</a><a href="#c3">③ 层叠卡片</a>
+    <a href="#c4">④ 磁吸花瓣</a><a href="#c5">⑤ 景深玻璃</a><a href="#final">选型建议</a>
+  </nav>
+
+  <!-- 概念卡片由 JS 生成 -->
+  <div id="mount"></div>
+
+  <section class="final" id="final">
+    <h2>选型建议</h2>
+    <p>
+      五套里 <b>① 气泡生长</b> 与 <b>③ 层叠卡片</b> 最贴苹果《Designing Fluid Interfaces》的正统做法：
+      前者「从触点生长、transform-origin 锚定手指」空间关系最清晰，改造成本最低（只动 panel 的出现/消失）；
+      后者「键盘下沉退后 + 毛玻璃 sheet 上浮」把两类场景的层次差异表达得最干净，且与现有白卡片视觉衔接自然。
+      <b>② 液态岛</b> 最惊艳但实现最重（要做形变插值），适合作为远期目标。
+      <b>④ 磁吸花瓣</b> 的方向盘是五套里「拖感」最强的，花瓣可以单独拆出来嫁接到其他概念上。
+      <b>⑤ 景深玻璃</b> 适合想让键盘整体转向 iOS 材质风格时再采用。
+    </p>
+    <div class="grid">
+      <div class="cell"><b>推荐组合 A（稳妥）</b>① 的呼出动效 ＋ ④ 的花瓣方向盘：触点生长解决「瞬间出现」，花瓣磁吸解决「没有拖动感」，改动集中在两处。</div>
+      <div class="cell"><b>推荐组合 B（质感优先）</b>③ 的层叠下沉 ＋ 罗盘环：层次语义最完整，键盘「退后」一下的动作是苹果味的核心。</div>
+      <div class="cell"><b>共同底子（无论选哪套）</b>弹簧参数 damping 1.0 / response 0.32–0.4；带甩动惯性时 damping 0.8；按压反馈在 pointer-down 当帧给出；场景 B 一律错峰 60–90ms。</div>
+    </div>
+  </section>
+</div>
+
+<script>
+/* ================= 弹簧内核 ================= */
+class Spring{
+  constructor(from, damping, response, velocity){
+    this.x = from; this.v = velocity || 0;
+    this.d = damping; this.w = 2*Math.PI/response; this.t = from;
+  }
+  step(dt){
+    const k=this.w*this.w, c=2*this.d*this.w;
+    this.v += (-k*(this.x-this.t) - c*this.v)*dt;
+    this.x += this.v*dt;
+  }
+  settled(){ return Math.abs(this.x-this.t)<0.0008 && Math.abs(this.v)<0.004; }
+}
+function runSprings(list, done){
+  let last = performance.now();
+  function frame(now){
+    let dt = Math.min((now-last)/1000, .032); last = now;
+    let alive = false;
+    for(const a of list){ a.s.step(dt); a.apply(a.s.x, a.s.v); if(!a.s.settled()) alive = true; }
+    if(alive) requestAnimationFrame(frame);
+    else { for(const a of list) a.apply(a.s.t, 0); done && done(); }
+  }
+  requestAnimationFrame(frame);
+}
+const easeOut = t => 1-Math.pow(1-t,3);
+
+/* ================= 场景 DOM 生成 ================= */
+const ARROW = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
+const ARROWS = {
+  up:ARROW('M12 19V5 M5 12l7-7 7 7'), down:ARROW('M12 5v14 M19 12l-7 7-7-7'),
+  left:ARROW('M19 12H5 M12 19l-7-7 7-7'), right:ARROW('M5 12h14 M12 5l7 7-7 7')
+};
+
+const CONCEPTS = [
+  {
+    id:1, cls:'skin-1', name:'气泡生长', tag:'Popover 锚点生长 · 改造成本最低',
+    idea:'编辑框<b>从长按的触点长出来</b>（transform-origin 钉在手指处），弹簧带一点过冲（damping .78），像 iOS 长按弹出的上下文菜单。场景 A 从滑轨上方生长；场景 B 从正文选区生长、键盘错峰 80ms 升起，两者「同源不同层」。方向盘改为<b>四向圆瓣＋渐变芯水滴</b>。',
+    d:0.78, r:0.36, stagger:80,
+    padHTML(){ return ['up','left','right','down'].map((d,i)=>{
+      const pos=[['50%','8%','-50%','0'],['8%','50%','0','-50%'],['82%','50%','0','-50%'],['50%','82%','-50%','0']][i];
+      return `<div class="petal" data-dir="${d}" style="left:${pos[0]};top:${pos[1]};transform:translate(${pos[2]},${pos[3]})">${ARROWS[d]}</div>`;
+    }).join('') + '<div class="puck"></div>'; }
+  },
+  {
+    id:2, cls:'skin-2', name:'液态岛', tag:'Dynamic Island 式形变 · 最惊艳',
+    idea:'触点先凝成一颗<b>深色胶囊</b>，再像灵动岛一样<b>拉伸形变</b>成完整编辑框（宽高圆角连续插值，不是缩放）。场景 A 胶囊从滑轨中点浮起展开；场景 B 胶囊从选区滴落、边落下边展开，与升起的键盘在途中「汇合」。深色面板＋琥珀芯，与浅色键盘形成材质对比。',
+    d:0.85, r:0.42, stagger:90,
+    padHTML(){ return '<div class="dir" style="left:50%;top:6%;transform:translateX(-50%)">上移</div>'
+      + '<div class="dir" style="left:50%;bottom:6%;transform:translateX(-50%)">下移</div>'
+      + '<div class="dir" style="left:6%;top:50%;transform:translateY(-50%)">左移</div>'
+      + '<div class="dir" style="right:6%;top:50%;transform:translateY(-50%)">右移</div>'
+      + '<div class="island"></div>'; }
+  },
+  {
+    id:3, cls:'skin-3', name:'层叠卡片', tag:'iOS Sheet 下沉退后 · 层次语义最完整',
+    idea:'呼出时<b>键盘整体缩到 96.5% 并压暗</b>（像 iOS 模态把父级推远），毛玻璃 sheet 从键盘上沿升起盖上。场景 A：键盘退后 → sheet 升；场景 B：键盘与 sheet 同向升起但 sheet 更快「超车」，落定瞬间键盘退后，层次一目了然。方向盘为<b>罗盘刻度环</b>，拖动时最近刻度点亮吸附。',
+    d:1.0, r:0.34, stagger:70,
+    padHTML(){ let n=''; for(let i=0;i<12;i++){ const major=i%3===0;
+      n+=`<div class="notch${major?' major':''}" data-dir="${major?['up','right','down','left'][i/3]:''}" style="transform:translate(-50%,-50%) rotate(${i*30}deg) translateY(-56px)"></div>`; }
+      return '<div class="ring"></div>'+n+'<div class="puck"></div>'; }
+  },
+  {
+    id:4, cls:'skin-4', name:'磁吸花瓣', tag:'拖感最强 · 花瓣可拆用',
+    idea:'长按瞬间<b>八瓣在指尖逐片旋开</b>（每片错 25ms、带旋转过冲），中心水滴被手指<b>磁吸拖拽</b>——拖向哪瓣哪瓣点亮变黑，松手带速度回弹。编辑框本体从右缘沿弹簧滑入。场景 B 中花瓣先在选区原位绽放（方向控制即时可用），面板随后追上来合拢。',
+    d:0.7, r:0.3, stagger:85,
+    padHTML(){ const dirs=['up','right','down','left']; let s='';
+      dirs.forEach((d,i)=>{ s+=`<div class="blade" data-dir="${d}" style="transform:translate(-50%,-86px) rotate(${i*90}deg)"><span style="display:flex;transform:rotate(${-i*90}deg)">${ARROWS[d]}</span></div>`; });
+      return s+'<div class="puck"></div>'; }
+  },
+  {
+    id:5, cls:'skin-5', name:'景深玻璃', tag:'材质浮现 · 焦点转移',
+    idea:'不做位移，做<b>景深</b>：编辑框以 blur(18px)+scale(.92) 的「未对焦」状态浮现，0.3s 内对焦清晰；同时正文微微失焦变暗、键盘饱和度降低——注意力像相机镜头一样转移。场景 B 里整个下层（键盘）先入景深外，面板对焦完成后下层再回清。适合未来整体转 iOS 材质风。',
+    d:1.0, r:0.3, stagger:70,
+    padHTML(){ const pos={up:['50%','6%'],left:['6%','50%'],right:['94%','50%'],down:['50%','94%']};
+      return Object.keys(pos).map(d=>`<div class="glass-arrow" data-dir="${d}" style="left:${pos[d][0]};top:${pos[d][1]};transform:translate(-50%,-50%)">${ARROWS[d]}</div>`).join('')
+      + '<div class="puck"></div>'; }
+  }
+];
+
+function phoneHTML(c, mode){
+  return `<div class="scene-label"><h3>${mode==='A'?'场景 A · 键盘已开 → 呼出编辑框':'场景 B · 长按选字 → 键盘+编辑框共现'}</h3>
+    <button class="replay">▶ 重播</button></div>
+  <div class="phone ${c.cls}" data-concept="${c.id}" data-mode="${mode}">
+    <div class="statusbar">9:41 · VoxFix 概念演示</div>
+    <div class="textarea">今天会议讨论了输入法交互方案，<span class="sel">滑轨选词</span>的手感还需要再打磨一版，下午同步结论。</div>
+    <div class="touchdot"></div>
+    <div class="scrim"></div>
+    <div class="keyboard">
+      <div class="kb-toolbar"><i></i><span></span><i></i><i></i></div>
+      <div class="kb-row">${'<i></i>'.repeat(10)}</div>
+      <div class="kb-row"><i class="f"></i>${'<i></i>'.repeat(9)}</div>
+      <div class="kb-row"><i class="f"></i>${'<i></i>'.repeat(7)}<i class="f"></i></div>
+      <div class="kb-footer"><i></i><div class="track"></div><i></i></div>
+    </div>
+    <div class="panel">
+      <div class="p-head"><b>已选 4 字</b><span>全选</span></div>
+      <div class="p-body">
+        <div class="p-clip"><i>复制</i><i>剪切</i><i>粘贴</i><i>选段</i></div>
+        <div class="p-pad">${c.padHTML()}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function demoHTML(c){
+  return `<div class="demo">
+    <div class="stage ${c.cls}"><div class="p-pad" style="position:absolute;inset:14px;height:auto">${c.padHTML()}</div></div>
+    <div class="note"><b>方向盘重设计 · 可拖拽</b><br>${c.demoNote}<br>
+      <span class="readout">按住中心点拖动试试</span></div>
+  </div>`;
+}
+CONCEPTS[0].demoNote='四向圆瓣独立成键，中心是<b>渐变蓝芯水滴</b>：拖动时水滴跟随手指（橡皮筋阻尼），靠近某瓣时该瓣染蓝吸附，松手带速度回弹。';
+CONCEPTS[1].demoNote='深色胶囊即方向盘本体：拖动时胶囊<b>朝方向拉伸变长</b>，琥珀芯偏移，像捏一颗有粘性的软糖；松手形变回弹。';
+CONCEPTS[2].demoNote='罗盘刻度环：水滴在环内拖动，越过 30° 刻度有<b>段落式吸附</b>（点亮最近主刻度），回中时沿弧线归位。';
+CONCEPTS[3].demoNote='八瓣逐片旋开（演示里直接拖动）：拖动方向的花瓣<b>整片变黑</b>，磁吸阈值 18px，手感最接近 iOS 的「段落吸合」。';
+CONCEPTS[4].demoNote='极简玻璃箭头簇：无实体方向盘，中心水滴拖到哪个象限，对应玻璃箭头<b>浮起染色</b>，最干净但需要震动反馈补足确认感。';
+
+const mount = document.getElementById('mount');
+for(const c of CONCEPTS){
+  const sec = document.createElement('section');
+  sec.className='concept'; sec.id='c'+c.id;
+  sec.innerHTML = `
+    <div class="concept-head"><span class="num">概念 ${['①','②','③','④','⑤'][c.id-1]}</span><h2>${c.name}</h2><span class="tag">${c.tag}</span></div>
+    <p class="idea">${c.idea}</p>
+    <div class="spec">
+      <div><b>${c.d}</b>damping（&lt;1 带过冲）</div>
+      <div><b>${c.r}s</b>response</div>
+      <div><b>${c.stagger}ms</b>场景 B 错峰</div>
+      <div><b>pointer-down</b>当帧反馈 · 可中断</div>
+    </div>
+    <div class="scenes"><div>${phoneHTML(c,'A')}</div><div>${phoneHTML(c,'B')}</div></div>
+    ${demoHTML(c)}`;
+  mount.appendChild(sec);
+}
+
+/* ================= 场景动画 ================= */
+function resetPhone(ph){
+  const panel=ph.querySelector('.panel'), kb=ph.querySelector('.keyboard'),
+        scrim=ph.querySelector('.scrim'), dot=ph.querySelector('.touchdot'),
+        ta=ph.querySelector('.textarea');
+  panel.style.cssText='opacity:0;pointer-events:none;';
+  kb.style.cssText=''; scrim.style.opacity=0; dot.style.transform='translate(-50%,-50%) scale(0)';
+  ta.style.filter=''; ta.style.opacity='';
+  if(ph.dataset.mode==='B') kb.style.transform='translateY(102%)';
+}
+
+function playConcept(c, ph){
+  resetPhone(ph);
+  const mode=ph.dataset.mode;
+  const panel=ph.querySelector('.panel'), kb=ph.querySelector('.keyboard'),
+        scrim=ph.querySelector('.scrim'), dot=ph.querySelector('.touchdot'),
+        ta=ph.querySelector('.textarea');
+  const phR=ph.getBoundingClientRect();
+
+  /* 触点：A=滑轨中点；B=选区中心 */
+  let ox,oy;
+  if(mode==='A'){ const tr=ph.querySelector('.kb-footer .track').getBoundingClientRect();
+    ox=tr.left+tr.width/2-phR.left; oy=tr.top-phR.top;
+  } else { const sr=ph.querySelector('.sel').getBoundingClientRect();
+    ox=sr.left+sr.width/2-phR.left; oy=sr.top+sr.height/2-phR.top;
+  }
+  dot.style.left=ox+'px'; dot.style.top=oy+'px';
+
+  /* 触点按压圈 */
+  const dotS=new Spring(0,1,.18); dotS.t=1;
+  runSprings([{s:dotS,apply:x=>{dot.style.transform=`translate(-50%,-50%) scale(${x})`;}}]);
+
+  const D=c.d, R=c.r, STG=c.stagger;
+
+  const kbIn = ()=>{ /* 场景B键盘先升起 */
+    const s=new Spring(102,1,.4); s.t=0;
+    runSprings([{s,apply:x=>{kb.style.transform=`translateY(${x}%)`;}}]);
+  };
+  const kbBack = ()=>{ /* 键盘退后（面板展示期间保持退后，重播时复位） */
+    const s=new Spring(0,1,.34); s.t=1;
+    runSprings([{s,apply:x=>{
+      kb.style.transform=`scale(${1-.035*x}) translateY(${4*x}px)`;
+      kb.style.filter=`brightness(${1-.06*x})`;
+    }}]);
+  };
+
+  const showCommon = (originX,originY)=>{
+    panel.style.transformOrigin=`${originX}% ${originY}%`;
+  };
+
+  if(c.id===1){ /* 气泡生长：scale+fade，origin 锚触点 */
+    const pr=panel.getBoundingClientRect();
+    setTimeout(()=>{
+      if(mode==='B') kbIn();
+      setTimeout(()=>{
+        panel.style.opacity=1; panel.style.pointerEvents='auto';
+        const pR=panel.getBoundingClientRect();
+        showCommon(((ox-(pR.left-phR.left))/pR.width*100).toFixed(1), ((oy-(pR.top-phR.top))/pR.height*100).toFixed(1));
+        const s=new Spring(0,D,R); s.t=1;
+        runSprings([{s,apply:x=>{
+          const sc=.25+.75*x;
+          panel.style.transform=`scale(${sc}) translateY(${(1-x)*14}px)`;
+          panel.style.opacity=Math.min(1,x*2.2);
+        }}]);
+        if(mode==='A') kbBack(); else setTimeout(kbBack,120);
+        const sc=new Spring(0,1,.5); sc.t=1;
+        runSprings([{s:sc,apply:x=>scrim.style.opacity=(.05*x)}]);
+      }, mode==='B'?STG:260);
+    }, mode==='B'?120:200);
+  }
+
+  if(c.id===2){ /* 液态岛：胶囊形变成面板 */
+    setTimeout(()=>{
+      if(mode==='B') kbIn();
+      setTimeout(()=>{
+        panel.style.opacity=1; panel.style.pointerEvents='auto';
+        const pR=panel.getBoundingClientRect();
+        /* 改为左锚点，形变时宽度向右生长 */
+        panel.style.right='auto'; panel.style.left=(pR.left-phR.left)+'px';
+        /* 起点：触点处 64x64 胶囊 */
+        const dx=ox-(pR.left-phR.left)-32, dy=oy-(pR.top-phR.top)-32;
+        const s=new Spring(0,D,R); s.t=1;
+        runSprings([{s,apply:x=>{
+          const w=64+(pR.width-64)*x, h=64+(pR.height-64)*x;
+          const br=32-(32-20)*x;
+          panel.style.width=w+'px'; panel.style.height=h+'px';
+          panel.style.borderRadius=br+'px';
+          panel.style.transform=`translate(${dx*(1-x)}px,${dy*(1-x)}px)`;
+          panel.style.opacity=Math.min(1,.25+x);
+          panel.style.overflow='hidden';
+        }}, ], ()=>{ panel.style.width=''; panel.style.height=''; panel.style.overflow=''; panel.style.left=''; panel.style.right=''; });
+        const sc=new Spring(0,1,.5); sc.t=1;
+        runSprings([{s:sc,apply:x=>scrim.style.opacity=(.28*x)}]);
+      }, mode==='B'?STG:240);
+    }, mode==='B'?120:180);
+  }
+
+  if(c.id===3){ /* 层叠卡片：sheet 升起 + 键盘退后 */
+    setTimeout(()=>{
+      if(mode==='B') kbIn();
+      setTimeout(()=>{
+        panel.style.opacity=1; panel.style.pointerEvents='auto';
+        panel.style.transformOrigin='50% 100%';
+        const from=mode==='B'?150:60; /* B 从更下方超车 */
+        const s=new Spring(0,D,R+.04); s.t=1;
+        runSprings([{s,apply:x=>{
+          panel.style.transform=`translateY(${from*(1-x)}px) scale(${.94+.06*x})`;
+          panel.style.opacity=Math.min(1,x*1.8);
+        }}]);
+        const sc=new Spring(0,1,.5); sc.t=1;
+        runSprings([{s:sc,apply:x=>scrim.style.opacity=(.04*x)}]);
+        setTimeout(kbBack, mode==='B'?160:60);
+      }, mode==='B'?STG:260);
+    }, mode==='B'?100:200);
+  }
+
+  if(c.id===4){ /* 磁吸花瓣：花瓣先旋开，面板从右滑入 */
+    setTimeout(()=>{
+      if(mode==='B') kbIn();
+      setTimeout(()=>{
+        panel.style.opacity=1; panel.style.pointerEvents='auto';
+        /* 面板从右缘滑入 */
+        const s=new Spring(0,D,R); s.t=1;
+        runSprings([{s,apply:x=>{
+          panel.style.transform=`translateX(${90*(1-x)}px) scale(${.9+.1*x})`;
+          panel.style.opacity=Math.min(1,x*2);
+        }}]);
+        /* 花瓣逐片旋开 */
+        panel.querySelectorAll('.blade').forEach((b,i)=>{
+          b.style.transition='none';
+          b.style.opacity=0;
+          const bs=new Spring(0,.62,.3); bs.t=1;
+          setTimeout(()=>{
+            b.style.opacity=1;
+            runSprings([{s:bs,apply:x=>{
+              b.style.transform=`translate(-50%,-86px) rotate(${i*90+(-40)*(1-x)}deg) scale(${.5+.5*x})`;
+            }}]);
+          }, 120+i*25);
+        });
+        if(mode==='A') kbBack(); else setTimeout(kbBack,140);
+        const sc=new Spring(0,1,.5); sc.t=1;
+        runSprings([{s:sc,apply:x=>scrim.style.opacity=(.04*x)}]);
+      }, mode==='B'?STG:240);
+    }, mode==='B'?120:180);
+  }
+
+  if(c.id===5){ /* 景深玻璃：对焦浮现 */
+    setTimeout(()=>{
+      if(mode==='B') kbIn();
+      setTimeout(()=>{
+        panel.style.opacity=1; panel.style.pointerEvents='auto';
+        const s=new Spring(0,D,R); s.t=1;
+        runSprings([{s,apply:x=>{
+          panel.style.transform=`scale(${.92+.08*x})`;
+          panel.style.filter=`blur(${18*(1-x)}px)`;
+          panel.style.opacity=x;
+        }}],()=>{panel.style.filter='';});
+        /* 正文失焦、键盘降饱和 → 再回清 */
+        const f=new Spring(0,1,.4); f.t=1;
+        runSprings([{s:f,apply:x=>{
+          ta.style.filter=`blur(${1.6*x}px)`; ta.style.opacity=1-.25*x;
+          kb.style.filter=`saturate(${1-.35*x}) brightness(${1-.03*x})`;
+        }}]);
+        setTimeout(()=>{ const f2=new Spring(1,1,.4); f2.t=0;
+          runSprings([{s:f2,apply:x=>{
+            ta.style.filter=`blur(${1.6*x}px)`; ta.style.opacity=1-.25*x;
+            kb.style.filter=`saturate(${1-.35*x})`;
+          }}],()=>{ta.style.filter='';ta.style.opacity='';kb.style.filter='';});
+        },1500);
+      }, mode==='B'?STG:260);
+    }, mode==='B'?100:200);
+  }
+}
+
+document.querySelectorAll('.phone').forEach(ph=>{
+  const c=CONCEPTS.find(x=>x.id==ph.dataset.concept);
+  const play=()=>playConcept(c,ph);
+  ph.parentElement.querySelector('.replay').addEventListener('click',play);
+  /* 进入视口自动播一次 */
+  new IntersectionObserver((es,ob)=>{ es.forEach(e=>{ if(e.isIntersecting){ setTimeout(play,250); ob.disconnect(); } }); },{threshold:.45}).observe(ph);
+});
+
+/* ================= 可拖拽方向盘 ================= */
+function rubberband(o, dim, k){ k=k||.55; return (o*dim*k)/(dim+k*Math.abs(o)); }
+
+document.querySelectorAll('.demo .stage').forEach(stage=>{
+  const pad=stage.querySelector('.p-pad');
+  const knob=pad.querySelector('.puck, .island');
+  const readout=stage.closest('.demo').querySelector('.readout');
+  const items=[...pad.querySelectorAll('[data-dir]')].filter(el=>el.classList.contains('petal')||el.classList.contains('blade')||el.classList.contains('glass-arrow')||el.classList.contains('notch'));
+  const MAXR=52;
+  let drag=null, hist=[];
+  let sx=0, sy=0; /* 弹簧当前位置 */
+
+  const spring={x:new Spring(0,.68,.3), y:new Spring(0,.68,.3), active:false};
+  function render(){
+    const x=spring.active?spring.x.x:sx, y=spring.active?spring.x.y:sy;
+    applyOffset(x,y);
+  }
+  function applyOffset(x,y){
+    const dist=Math.hypot(x,y);
+    if(knob.classList.contains('island')){
+      /* 液态拉伸 */
+      const ang=Math.atan2(y,x);
+      const stretch=Math.min(dist/MAXR,1);
+      knob.style.transform=`translate(calc(-50% + ${x*.6}px), calc(-50% + ${y*.6}px)) rotate(${dist>2?ang:0}rad) scaleX(${1+.45*stretch})`;
+    }else{
+      knob.style.transform=`translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`;
+    }
+    /* 方向高亮 */
+    let best=null,bestDot=.5;
+    if(dist>14){
+      const ang=Math.atan2(y,x);
+      items.forEach(el=>{
+        const d=el.dataset.dir; if(!d)return;
+        const da={up:-Math.PI/2,down:Math.PI/2,left:Math.PI,right:0}[d];
+        let diff=Math.abs(((ang-da+Math.PI*3)%(Math.PI*2))-Math.PI);
+        const score=1-diff/Math.PI;
+        if(score>bestDot){bestDot=score;best=el;}
+      });
+    }
+    items.forEach(el=>el.classList.toggle('on',el===best));
+    if(dist>4){
+      const dir=best?best.dataset.dir:'—';
+      const spd=dist<22?1:dist<40?2:3;
+      readout.textContent=`方向 ${({up:'↑ 上移',down:'↓ 下移',left:'← 左移',right:'→ 右移'})[dir]||'—'} · 速度档 ${spd} · 偏移 ${Math.round(dist)}px`;
+    }else if(!drag){
+      readout.textContent='按住中心点拖动试试';
+    }
+  }
+
+  function springBack(){
+    spring.x=new Spring(sx,.68,.3, drag.vx); spring.y=new Spring(sy,.68,.3, drag.vy);
+    spring.x.t=0; spring.y.t=0; spring.active=true;
+    runSprings([
+      {s:spring.x,apply:x=>{sx=x;}},
+      {s:spring.y,apply:y=>{sy=y; render();}}
+    ],()=>{spring.active=false; sx=0; sy=0; render();});
+  }
+
+  knob.addEventListener('pointerdown',e=>{
+    e.preventDefault();
+    knob.setPointerCapture(e.pointerId);
+    spring.active=false;
+    drag={id:e.pointerId, vx:0, vy:0};
+    hist=[{x:e.clientX,y:e.clientY,t:performance.now()}];
+  });
+  knob.addEventListener('pointermove',e=>{
+    if(!drag||e.pointerId!==drag.id)return;
+    const r=pad.getBoundingClientRect();
+    let dx=e.clientX-(r.left+r.width/2), dy=e.clientY-(r.top+r.height/2);
+    const dist=Math.hypot(dx,dy);
+    if(dist>MAXR){ /* 橡皮筋 */
+      const over=dist-MAXR, rb=rubberband(over,MAXR);
+      const s=(MAXR+rb)/dist; dx*=s; dy*=s;
+    }
+    sx=dx; sy=dy;
+    hist.push({x:e.clientX,y:e.clientY,t:performance.now()});
+    if(hist.length>6)hist.shift();
+    render();
+  });
+  function release(e){
+    if(!drag||e.pointerId!==drag.id)return;
+    /* 释放速度（px/s） */
+    const n=hist.length;
+    if(n>1){
+      const a=hist[0], b=hist[n-1], dt=Math.max((b.t-a.t)/1000,.016);
+      drag.vx=(b.x-a.x)/dt; drag.vy=(b.y-a.y)/dt;
+    }
+    const d=drag; drag=null; springBack();
+  }
+  knob.addEventListener('pointerup',release);
+  knob.addEventListener('pointercancel',release);
+});
+</script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {cursorFeedbackPosition,joystick,joystickLevel,joystickRadii,joystickRho} from './core.mjs';
+import {repeatDelay,joystickHoldRate,cursorFeedbackPosition,joystick,joystickLevel,joystickRadii,joystickRho} from './core.mjs';
 // 量「形状」用一组各向同性半径（a=b），这样斜推衰减只剩 n=3 本身带来的那部分；
 // 若 a≠b，衰减里会混进椭圆的各向异性，那是设计使然、不是形状的锅。
 const R={a:150,bUp:150,bDown:150};
@@ -14,11 +14,15 @@ assert.equal(joystickLevel(0.7,1),0,'跌破降档线才回落');
 assert.equal(joystickLevel(0.85,0),1,'最外圈才升档');
 assert.equal(joystick.rates.length,2,'只要两个速度分区');
 // 半径随按下点收缩到最小行程，避免贴边按下时向外推不动。
-assert.deepEqual(joystickRadii(20,300,500),{a:joystick.minSide,bUp:300,bDown:500});
-assert.deepEqual(joystickRadii(140,40,10),{a:140,bUp:joystick.minUp,bDown:joystick.minDown});
+assert.deepEqual(joystickRadii(20,300,500),{a:joystick.minSide,bUp:96,bDown:96});
+assert.deepEqual(joystickRadii(140,40,10),{a:96,bUp:joystick.minUp,bDown:joystick.minDown});
+for(const radii of [joystickRadii(100,320,31),joystickRadii(80,225,126)]){
+  assert.equal(joystickLevel(joystickRho(0,-80,radii),0),1,'主滑轨和方向盘上推80px都应进入持续档，不用推到键盘顶');
+  assert.equal(joystickLevel(joystickRho(0,-30,radii),0),0,'向上30px仍可跟手精调');
+}
 // 上下必须分开定半径：滑轨贴着键盘底、向下只剩几十像素，共用一个半径时正下方永远推不动
 // （斜下能推只是因为水平分量在撑 ρ，表现为「只有底下左右两边能用」）。
-const railEdge={a:131,bUp:329,bDown:joystick.minDown};
+const railEdge=joystickRadii(131,329,joystick.minDown);
 assert.equal(joystickLevel(joystickRho(0,-30,railEdge),0),0,'向上 30px 仍是跟手档');
 assert.equal(joystickLevel(joystickRho(0,20,railEdge),0),0,'向下 20px 仍是跟手档，才定位得准行');
 assert.equal(joystickLevel(joystickRho(0,32,railEdge),0),1,'推到键盘底（向下约 32px）才切最快档');
@@ -115,3 +119,9 @@ assert(orphan.toolbar.includes(orphan.customToolbar[0].id),'Old content without 
 assert.throws(()=>settingsFrom({customToolbar:[{...custom,id:'invalid'}]}));
 assert.throws(()=>settingsFrom({customToolbar:[custom,custom]}));
 console.log('PASS: text selection, grapheme deletion/cursor movement, voice cancellation and layout validation');
+
+assert.equal(repeatDelay(0),110);
+assert.equal(repeatDelay(20),35);
+assert.equal(joystickHoldRate(0),1000/110);
+assert(joystickHoldRate(550)>joystickHoldRate(0));
+assert.equal(joystickHoldRate(5000),24);

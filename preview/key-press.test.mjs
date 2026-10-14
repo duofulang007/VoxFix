@@ -64,7 +64,7 @@ try{
     const page=await browser.newPage({viewport:{width:native?411:1080,height:native?351:1000}}),errors=[];
     page.on('pageerror',e=>errors.push(e.message));
     await page.addInitScript(native=>{
-      if(native){window.calls=[];window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','edit','ready','resize','refreshClipboard','importClipboard'].map(n=>[n,(...a)=>calls.push([n,...a])]));VoxFixIme.voiceReady=()=>true;VoxFixIme.handReady=()=>false;}
+      if(native){window.calls=[];window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','edit','ready','resize','refreshClipboard','importClipboard'].map(n=>[n,(...a)=>calls.push([n,...a])]));VoxFixIme.voiceReady=()=>true;}
     },native);
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await page.waitForFunction(()=>document.querySelector('.key-rows'));

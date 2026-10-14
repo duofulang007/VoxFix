@@ -16,7 +16,7 @@ async function check(name,run){
   await page.addInitScript(()=>{
     window.calls=[];
     window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','gestureStart','gestureMove','gestureEnd','haptic','edit','ready','resize','refreshClipboard','importClipboard','clipHint'].map(name=>[name,(...args)=>calls.push([name,...args])]));
-    VoxFixIme.voiceReady=()=>true;VoxFixIme.handReady=()=>false;
+    VoxFixIme.voiceReady=()=>true;
     VoxFixIme.pinyinReady=()=>true;VoxFixIme.pinyinCandidates=()=>JSON.stringify({words:['你好','你','好']});
     VoxFixIme.pinyinChoose=()=>JSON.stringify({committed:true,remaining:''});VoxFixIme.commitAccepted=()=>JSON.stringify({committed:true});
     VoxFixIme.pinyinClearLearning=()=>{calls.push(['clearLearning']);return JSON.stringify({cleared:true});};

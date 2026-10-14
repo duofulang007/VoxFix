@@ -16,12 +16,10 @@ import java.nio.ByteOrder
 
 class VoxFixSmokeInstrumentation : Instrumentation() {
     private var pinyin = false
-    private var ink = false
     private var benchmark = false
     private var quick = false
     override fun onCreate(arguments: Bundle?) {
         pinyin = arguments?.getString("pinyin") == "true"
-        ink = arguments?.getString("ink") == "true"
         benchmark = arguments?.getString("benchmark") == "true"
         quick = arguments?.getString("quick") == "true"
         super.onCreate(arguments); start()
@@ -39,7 +37,6 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
                 finish(Activity.RESULT_OK, output)
                 return
             }
-            check(ink) { "Use ink=true for the remaining ASR smoke check; handwriting is disabled" }
             val engine = SpeechEngine(targetContext.assets)
             try {
                 check(SpeechEngine.refine("今天天气不错", "今天天气很好") == "今天天气不错")

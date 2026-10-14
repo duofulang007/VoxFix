@@ -21,7 +21,7 @@ try{
   const backup=JSON.parse(await readFile(new URL('../.android/selection-update-storage-backup.json',import.meta.url),'utf8'));
   const live=await page.evaluate(()=>Object.fromEntries(Object.entries(localStorage)));
   for(const key of ['voxfix-snippets-v1','voxfix-learning-v1','voxfix-hotwords-v1'])if(key in backup)assert(live[key]===backup[key],'User data must survive installation: '+key);
-  assert(await page.evaluate(()=>typeof VoxFixIme.gestureLock==='function'&&typeof VoxFixIme.selectionParagraph==='function'),'Installed native bridge must include new methods');
+  assert(await page.evaluate(()=>typeof VoxFixIme.gestureLock==='function'&&typeof VoxFixIme.selectionStep==='function'),'Installed native bridge must include new methods');
   await page.evaluate(()=>{window.selectionEditorProbe={events:[],original:voxfixSelection};globalThis.voxfixSelection=(start,end,count)=>{selectionEditorProbe.events.push({start,end,count});selectionEditorProbe.original(start,end,count);};});
   await page.evaluate(text=>VoxFixIme.commit(text),text);inserted=true;await page.waitForTimeout(300);
   await page.evaluate(()=>{VoxFixIme.moveCursor(-100);VoxFixIme.moveCursor(4);});await page.waitForTimeout(300);
@@ -34,18 +34,19 @@ try{
   const move=p=>touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[p]});
   const end=async()=>{await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await page.waitForTimeout(250);};
   await start('.keyboard-footer .cursor-zone',500);await end();assert.deepEqual(await range(),[4,4]);assert.equal(await page.locator('.selection-editor').count(),1);
-  await page.locator('[data-action="selection-paragraph"][data-value="1"]').click();await page.waitForTimeout(250);assert.deepEqual(await range(),[4,12]);
-  await page.locator('[data-action="selection-paragraph"][data-value="1"]').click();await page.waitForTimeout(250);assert.deepEqual(await range(),[4,25]);
-  let p=await start('.selection-mini-track');await move({x:p.x-25,y:p.y});await end();assert.deepEqual(await range(),[4,23],'Mini refinement must retain the locked origin');
-  await start('.selection-mini-track',500);await end();assert.deepEqual(await range(),[23,23],'Mini long hold must relock the previous head');
-  p=await start('.selection-mini-track');await move({x:p.x-15,y:p.y});await end();assert.deepEqual(await range(),[22,23]);
-  await start('.selection-mini-track',500);await end();assert.deepEqual(await range(),[22,22],'Backward selection relocks its head rather than its maximum endpoint');
+  await page.locator('[data-direction="0,1"]').click();await page.waitForTimeout(250);assert.deepEqual(await range(),[4,17]);
+  await page.locator('[data-direction="1,1"]').click();await page.waitForTimeout(250);assert.deepEqual(await range(),[4,text.length]);
+  await page.locator('[data-direction="1,-1"]').click();await page.waitForTimeout(250);assert.deepEqual(await range(),[4,25]);
+  let p=await start('.selection-mini-track');await move({x:p.x-22,y:p.y});await end();assert.deepEqual(await range(),[4,23],'Mini refinement must retain the locked origin');
+  await start('.selection-mini-track',500);await end();assert.deepEqual(await range(),[23,23],'Long hold unlocks onto the active endpoint');
+  await page.locator('[data-direction="-1,0"]').click();await page.waitForTimeout(250);assert.deepEqual(await range(),[22,22],'Unlocked click moves one character');
+  await start('.selection-mini-track',500);await end();assert.deepEqual(await range(),[22,22]);
   await page.locator('.selection-editor [data-action="select-all"]').click();await page.waitForTimeout(250);assert.deepEqual(await range(),[0,text.length]);
-  await page.locator('[data-action="selection-paragraph"][data-value="-1"]').click();await page.waitForTimeout(250);assert.deepEqual(await range(),[22,26],'Whole-text selection must not replace the locked origin');
+  await page.locator('[data-direction="-1,-1"]').click();await page.waitForTimeout(250);assert.deepEqual(await range(),[13,22],'Select-all must not replace the locked origin');
   assert.equal((await ownText()).replace(/\r/g,''),text,'Selection operations must not edit test text');
   const current=await page.locator('#keyboard').evaluate(e=>({height:e.offsetHeight,keys:[...e.querySelectorAll('.key-row .key')].map(k=>{const r=k.getBoundingClientRect();return [r.x,r.y,r.width,r.height];})}));assert.deepEqual(current,original);
   assert.equal(await page.locator('.selection-toolbar').count(),0);await page.screenshot({path:new URL('../.android/selection-editor-native.png',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1')});
-  console.log('PASS: installed bridge, preserved user data, main/mini origin locks, paragraph jumps, immediate fine adjustment, backward relock, select-all origin retention, unchanged 26-key geometry');
+  console.log('PASS: installed bridge, preserved user data, main/mini origin locks, visual-line direction clicks, immediate fine adjustment, backward relock, select-all origin retention, unchanged 26-key geometry');
 }finally{
   try{
   await touch?.send('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]}).catch(()=>{});
