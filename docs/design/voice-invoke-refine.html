@@ -79,8 +79,10 @@
     transform-origin:50% 100%;border-radius:8px;overflow:hidden}
   .vpanel.growing{animation:vgrow 1.5s cubic-bezier(.23,1,.32,1) infinite alternate}
   @keyframes vgrow{from{transform:scaleY(.2);opacity:.25}to{transform:scaleY(1);opacity:1}}
-  .vpanel.shrinking{animation:vshrink 1.5s cubic-bezier(.4,0,.6,1) infinite alternate}
-  @keyframes vshrink{from{transform:scaleY(1);opacity:1}to{transform:scaleY(.24);opacity:.35}}
+  /* 收回中：面板只压高度，不压缩内容 */
+  .vpanel.folding{height:104px;border-radius:8px;box-shadow:0 -6px 18px rgba(30,34,48,.14);
+    border-top:1px solid #cfd4e0}
+  .keyboard.behind{opacity:.5}
   .vp-title{flex-shrink:0;height:18px;line-height:18px;font-size:12px;color:#69717e}
   .vp-title .dots::after{content:'…';animation:dots 1.6s steps(4) infinite}
   @keyframes dots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'…'}}
@@ -130,19 +132,19 @@
 
   .strip3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}
   @media (max-width:860px){.strip3{grid-template-columns:1fr}}
-  .frame{background:#f7f8fb;border:1px solid #dcdfe8;border-radius:20px;height:250px;
+  .frame{background:#f7f8fb;border:1px solid #dcdfe8;border-radius:20px;height:262px;
     position:relative;overflow:hidden;box-shadow:inset 0 0 0 3px #fff}
-  .frame .keyboard{height:170px}
+  .frame .keyboard{height:182px}
   .frame .kb-row i,.frame .kb-space{height:30px}
-  .frame .vpanel{height:170px;padding:8px}
+  .frame .vpanel{height:182px;padding:8px}
   .frame .cap{position:absolute;top:8px;left:10px;font-size:11px;color:var(--sub);
     background:#ffffffd9;border:1px solid var(--line);border-radius:999px;padding:2px 9px;z-index:5}
-  .frame .orb{width:78px;height:78px}
-  .frame .orb.small{width:52px;height:52px}
-  .frame .hushring{width:96px;height:96px}
-  .frame .dial{width:104px;height:104px;-webkit-mask:radial-gradient(circle,transparent 41px,#000 42px);
+  .frame .orb{width:70px;height:70px}
+  .frame .orb.small{width:40px;height:40px}
+  .frame .hushring{width:84px;height:84px}
+  .frame .dial{width:92px;height:92px;-webkit-mask:radial-gradient(circle,transparent 41px,#000 42px);
     mask:radial-gradient(circle,transparent 41px,#000 42px)}
-  .frame .uturn{width:30px;height:30px}
+  .frame .uturn{width:24px;height:24px}
   .frame .vp-echo{font-size:10.5px}
   .frame .vp-hint,.frame .vp-title{font-size:10.5px}
 
@@ -230,14 +232,14 @@
       </ul>
     </div>
     <div class="strip2">
-      <div class="frame" style="height:220px"><span class="cap">静音 2.5s · 琥珀提示</span>
+      <div class="frame"><span class="cap">静音 2.5s · 琥珀提示</span>
         <div class="vpanel">
           <span class="vp-title hush">没有听到声音</span>
           <div class="vp-stage"><div class="hushring"></div><div class="orb" style="--lvl:.16"></div></div>
           <span class="vp-hint hush">靠近一点，或检查麦克风是否被占用</span>
         </div>
       </div>
-      <div class="frame" style="height:220px"><span class="cap">识别中有内容 · 回显行</span>
+      <div class="frame"><span class="cap">识别中有内容 · 回显行</span>
         <div class="vpanel">
           <span class="vp-title dots">倾听中</span>
           <div class="vp-stage"><div class="orb pulse" style="--lvl:.72"></div></div>
@@ -279,7 +281,7 @@
     <div class="cols">
       <div class="phone">
         <div class="textarea">今天我们来看一下语音输入的<span class="caret"></span></div>
-        <div class="vpanel shrinking">
+        <div class="vpanel">
           <span class="vp-title alarm">识别中</span>
           <div class="vp-stage"><div class="collapse"></div></div>
           <span class="vp-echo" style="color:#69717e">这段文字将在上屏前可撤销</span>
@@ -292,6 +294,32 @@
         <li><span class="tag">新增</span><b>识别中常显「取消识别」</b>：白色圆角胶囊 + 轻投影置于面板底部。现在那颗 88px 按钮与面板底色接近、几乎看不见，误识别时抓不到。</li>
         <li><span class="tag keep">保留</span>长语音模式下「暂停 / 结束」的按钮位置不改，识别中态只是把它替换为「取消识别」。</li>
       </ul>
+    </div>
+    <div class="strip2">
+      <div class="frame"><span class="cap">收回中 · 面板压到键高，键位淡入</span>
+        <div class="keyboard behind">
+          <div class="kb-row"><i class="f"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="f"></i></div>
+          <div class="kb-row"><i class="f"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="f"></i></div>
+          <div class="kb-row"><i class="f"></i>
+            <div class="kb-space"><svg class="mic" viewBox="0 0 24 24"><path d="M4 9v6m4-10v14m4-17v20m4-17v14m4-10v6"/></svg>空格
+            </div><i class="f"></i></div>
+          <div class="kb-footer"><i></i><div class="track"></div><i></i></div>
+        </div>
+        <div class="vpanel folding">
+          <span class="vp-title">正在返回键盘</span>
+          <div class="vp-stage"><div class="orb" style="--lvl:.12;width:34px;height:34px"></div></div>
+        </div>
+      </div>
+      <div class="frame"><span class="cap">收回完成 · 色球已归空格</span>
+        <div class="keyboard">
+          <div class="kb-row"><i class="f"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="f"></i></div>
+          <div class="kb-row"><i class="f"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="f"></i></div>
+          <div class="kb-row"><i class="f"></i>
+            <div class="kb-space"><svg class="mic" viewBox="0 0 24 24"><path d="M4 9v6m4-10v14m4-17v20m4-17v14m4-10v6"/></svg>空格
+            </div><i class="f"></i></div>
+          <div class="kb-footer"><i></i><div class="track"></div><i></i></div>
+        </div>
+      </div>
     </div>
   </section>
 
