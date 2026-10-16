@@ -35,11 +35,19 @@
 .selection-editor{position:absolute;right:14px;bottom:23px;width:min(288px,calc(100% - 28px));z-index:6;padding:8px;border-radius:22px 22px 14px 22px;background:var(--key-bg);box-shadow:0 8px 22px #0003;color:var(--key-color);touch-action:none}
 .selection-editor button{min-height:48px;background:transparent;border-radius:12px;font-size:13px}
 /* 两栏共用大触控区；只有中心点表示锁定，不强调复制按钮。 */
-.selection-editor-header{height:32px;display:flex;align-items:center;padding-left:6px;margin-bottom:6px}
+/* 页头高度、内边距与计数位置都不动：只在右侧原有空白里放一个删除钮（见 .selection-delete）。 */
+.selection-editor-header{height:32px;display:flex;align-items:center;justify-content:space-between;padding-left:6px;margin-bottom:6px}
 .selection-count{font-size:13px;font-variant-numeric:tabular-nums}
 .selection-editor-body{display:grid;grid-template-columns:76px minmax(0,1fr);gap:8px}
 .selection-editor-clipboard{display:grid;grid-template-rows:repeat(4,48px);gap:4px}
-.selection-editor .selection-editor-clipboard button{background:var(--func-bg);color:var(--key-color)}
+/* 左侧四个操作钮：文字换成图标，按钮与命中区不变（仍是 76×48 的格子），只有内容是 SVG。 */
+.selection-editor .selection-editor-clipboard button{display:grid;place-items:center;padding:0;background:var(--func-bg);color:var(--icon-ink)}
+/* 四个图标统一线宽；禁用（无选区）沿用全局 .55 透明度的浅色态，按下仍走 --accent 那条规则。 */
+.selection-editor .selection-editor-clipboard svg{width:22px;height:22px;stroke-width:1.7}
+/* 顶部右侧的删除钮：浅红底、深红图标，按下加深。高度收在页头 32px 之内，不撑高标题栏、也不挤动下方按钮。 */
+.selection-editor .selection-delete{flex:0 0 auto;min-height:0;width:44px;height:28px;padding:0;display:grid;place-items:center;border-radius:9px;background:var(--danger-soft);color:var(--danger-ink)}
+.selection-editor .selection-delete svg{width:18px;height:18px;stroke-width:1.7}
+.selection-editor .selection-delete.pressed{background:var(--danger-soft-press);color:var(--danger-ink-press)}
 .keyboard .selection-editor .selection-mini-track{position:relative;top:auto;display:grid;align-items:stretch;justify-content:stretch;grid-template-columns:repeat(3,minmax(48px,1fr));grid-template-rows:repeat(3,1fr);gap:4px;flex:none;width:100%;height:204px;min-height:0;margin:0;overflow:visible;background:transparent}
 .selection-mini-track button{min-width:48px;min-height:48px;background:var(--func-bg);font-size:23px;padding:0;touch-action:none}
 .selection-mini-track .selection-center{grid-column:2;grid-row:2}
@@ -72,7 +80,9 @@
    全键盘只保留三种形状 —— 圆形图标钮、胶囊分段控件、圆角卡片/弹层。
    字号只保留三档：15px 正文行、13px 次级、11~12px 说明。
    ========================================================================== */
-.keyboard{--accent:#4a86c8;--accent-soft:#e6eff9;--danger:#cf5347;--ctl:36px;--row:48px;--chip:26px;--card:12px}
+.keyboard{--accent:#4a86c8;--accent-soft:#e6eff9;--danger:#cf5347;--ctl:36px;--chip:26px;--card:12px;
+  /* 选字编辑面板：左侧图标统一深灰，删除钮浅红底 + 深红图标（按下再加深一档）。 */
+  --icon-ink:#3c424b;--danger-soft:#fbe5e3;--danger-soft-press:#f5cec9;--danger-ink:#a53229;--danger-ink-press:#86251d}
 
 /* 键盘内不出现浏览器焦点框（依据 docs/键盘焦点框-AndroidWebView.md）。
    Android WebView 在窗口焦点失而复得时（回桌面再回到应用、输入法重新附着、宿主重启输入）
@@ -80,7 +90,37 @@
    浏览器随即按 `button:focus-visible` 给这个 36px 图标钮画 2px 外框，用户看到的是
    「菜单栏莫名被选中」。触摸键盘没有键盘焦点这一说，选中/按压态只由 .selected / .pressed
    表达，与「不写 :active」同源：WebView 代管的伪类在这套壳里不可控，一律不参与样式。 */
-#keyboard :focus-visible{outline:none}
+#keyboard :focus-visible,#ime-local-editor :focus-visible{outline:none}
+
+/* 搜索只复用主键盘的按键区；空候选行的45px留给结果，按键保持原位。 */
+.keyboard.clip-search-mode{padding-top:var(--local-editor-height)}
+.panel-title.clip-header{position:relative;display:grid;grid-template-columns:78px minmax(0,1fr) 78px;height:44px}
+.clip-header .tabs-pill{width:min(190px,100%);margin:0;justify-self:center;justify-content:center;transition:opacity 130ms cubic-bezier(.23,1,.32,1)}
+.clip-header .tabs-pill button{flex:1;min-width:0;padding:6px 2px;white-space:nowrap}
+.clip-header-leading,.clip-header-actions{display:flex;gap:6px;align-items:center}
+.clip-header-actions{justify-content:flex-end}
+.clip-header .clip-search-toggle{position:relative;z-index:1;isolation:isolate;background:transparent}
+.clip-search-toggle::before{content:"";position:absolute;inset:0;border:1px solid #87909e55;border-radius:50%;background:#b5bdca1a;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.clip-search-toggle svg{position:absolute;inset:0;margin:auto;transition:opacity 100ms cubic-bezier(.23,1,.32,1)}
+.clip-search-close{opacity:0}
+.clip-search-surface{position:absolute;left:50px;right:48px;top:2px;bottom:2px;display:flex;align-items:center;background:var(--key-bg);border-radius:999px;clip-path:inset(0 0 0 100%);pointer-events:none;transition:clip-path 220ms cubic-bezier(.23,1,.32,1)}
+.clip-search-input-slot{width:calc(100% - 42px);min-width:0;padding-left:8px}
+.clip-header.search-open .tabs-pill{opacity:0;pointer-events:none}
+.clip-header.search-open .clip-search-surface{clip-path:inset(0);pointer-events:auto}
+.clip-header.search-open .clip-search-glass{opacity:0}
+.clip-header.search-open .clip-search-close{opacity:1}
+.clip-search-input{width:100%;font-size:16px;border:0;border-radius:0;outline:none!important;box-shadow:none!important;background:transparent;color:var(--key-color);padding:6px 4px;appearance:none}
+.clip-search-panel{--kb-bg:#edeff2;--key-bg:#fff;--key-color:#13171d;--func-bg:#dce0e7;--muted:#858a93;--ctl:36px;--card:12px;position:absolute;left:5px;right:5px;bottom:calc(var(--clip-search-total) - var(--local-editor-height));height:var(--local-editor-height);z-index:10;display:flex;flex-direction:column;gap:0;background:var(--kb-bg);color:var(--key-color)}
+.clip-search-panel svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+.clip-search-panel .clip-header{width:100%;flex:none}
+.clip-search-panel .clip-search-results{width:100%;min-height:0;flex:1;gap:8px;padding:0 3px 5px}
+.clip-search-results .clip-search-result{white-space:normal;text-overflow:clip;overflow-wrap:anywhere;font-size:14px;line-height:1.5;min-height:50px;padding:13px 14px;touch-action:pan-y}
+.clip-search-results mark{background:#ffe394;color:inherit;border-radius:3px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+.clip-search-panel :focus-visible{outline:none}
+.clip-search-panel.search-host-target .clip-search-input{caret-color:transparent}
+.clip-search-resume{display:none;flex:none;height:40px;color:var(--muted);background:transparent}
+.search-keys-hidden .clip-search-resume{display:block}
+@media(prefers-reduced-motion:reduce){.clip-search-surface{transition:opacity 100ms ease;clip-path:none;opacity:0}.clip-header.search-open .clip-search-surface{opacity:1}.clip-header .tabs-pill{transition:opacity 100ms ease}}
 
 /* 页头：左圆形返回 + 中部（胶囊分段／已选计数）+ 右侧一两个圆形图标钮。不再放任何文字按钮。 */
 .panel-title{height:48px;gap:6px;padding:0 8px}
@@ -111,24 +151,54 @@
 .group-pill.group-add svg{width:15px;height:15px}
 
 /* 列表：白卡片一行一条；文本行高与内边距统一，不再用 min-height 硬撑。 */
-.clip-list{gap:8px;padding:2px 8px 8px}
-.clip-list>button{background:var(--key-bg);border-radius:var(--card);padding:14px;font-size:14px;line-height:1.45;min-height:0}
+.clip-list{gap:4px;padding:2px 8px 4px}
+.clip-list>button{background:var(--key-bg);border-radius:8px;padding:10px 12px;font-size:14px;line-height:1.45;min-height:44px}
 .clip-list .empty-state{padding-top:0;margin:auto;font-size:13px;color:var(--muted)}
 .clip-list .clip-pick{display:flex;align-items:center;gap:10px;padding-left:12px}
 .clip-list .pick-box{flex:0 0 auto;width:18px;height:18px;border:1.5px solid var(--line);border-radius:50%;background:transparent;color:#fff;font-size:11px;line-height:15px;text-align:center}
 .clip-list .clip-pick.picked .pick-box{background:var(--accent);border-color:var(--accent)}
 .clip-list .pick-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
 
-/* 弹窗：全局唯一一种浮层 —— 底部 sheet（标题行 + 48px 文字行 + 独立取消块）。 */
-.clip-menu-backdrop{position:absolute;inset:0;z-index:8;background:#141a2233;display:flex;align-items:flex-end}
-.clip-menu-sheet{width:100%;max-height:88%;overflow:auto;background:var(--key-bg);border-radius:16px 16px 0 0;box-shadow:0 -2px 18px #0000001f;padding:0 0 8px;touch-action:pan-y}
-.clip-menu-title{font-size:12px;color:var(--muted);padding:16px;text-align:center;line-height:1.5;overflow-wrap:anywhere;border-bottom:0}
-.clip-menu-sheet>button{display:block;width:100%;min-height:var(--row);font-size:15px;padding:0 20px;text-align:left;color:var(--key-color)}
+/* 管理与确认共用紧凑底部菜单，页头和底部导航区留在原位。 */
+.clip-menu-backdrop{position:absolute;inset:0;z-index:8;background:#141a2233;display:flex;align-items:flex-end;padding:44px 8px 49px}
+.clip-menu-sheet{width:100%;max-height:100%;overflow:auto;background:var(--key-bg);border-radius:16px 16px 0 0;box-shadow:0 -2px 18px #0000001f;padding:0;touch-action:pan-y}
+.clip-menu-title{font-size:12px;color:var(--muted);padding:6px 16px;text-align:center;line-height:1.5;white-space:normal;overflow-wrap:anywhere;border-bottom:0}
+.clip-menu-sheet>button{display:block;width:100%;min-height:44px;font-size:15px;padding:0 20px;text-align:left;color:var(--key-color)}
 .clip-menu-sheet>button:focus-visible{outline-offset:-2px}
 .clip-menu-sheet>button+button{border-top:1px solid #8888880d}
 .clip-menu-sheet>button:active{background:#9ab8d61f}
 .clip-menu-sheet>button.danger{color:var(--danger)}
-.clip-menu-sheet>button.clip-menu-cancel{text-align:center;color:var(--muted);margin-top:8px;border-top:0;background:var(--func-bg)}
+.clip-menu-sheet>button.clip-menu-cancel{text-align:center;color:var(--muted);margin-top:4px;border-top:0;background:var(--func-bg)}
+.clip-item-backdrop{display:block;background:transparent;padding:0}
+.clip-item-menu{position:absolute;width:200px;max-width:calc(100% - 16px);max-height:calc(100% - 16px);padding:0;border-radius:16px;box-shadow:0 6px 22px #0002}
+.clip-item-menu>button{height:50px;min-height:50px;font-size:16px;padding:0 20px}
+.clip-item-menu>button+button{border:0}
+.clip-management-backdrop{inset:44px 0 0}
+.clip-management-menu{width:228px;max-height:calc(100% - 57px)}
+.clip-management-backdrop.closing{pointer-events:none;z-index:7}
+.panel-title .ctl.clip-more-open{background:var(--accent-soft);color:var(--accent)}
+.snippet-frame{display:grid;grid-template-columns:minmax(0,1fr) 46px;border:1px solid #dce0e5;border-radius:8px;overflow:hidden}
+.snippet-frame .field{margin:0;min-width:0}
+.snippet-frame textarea{display:block}
+.snippet-frame textarea:focus-visible{outline:none}
+.snippet-frame .dialog-actions{flex-direction:column;align-items:center;justify-content:space-evenly;gap:4px;margin:0;padding:2px 3px;border-left:1px solid #e7eaf0;background:#fafbfc}
+.snippet-frame .dialog-actions button{width:38px;padding:0;min-height:28px;font-size:12px;border:1px solid #e1e5eb;border-radius:4px;background:white;color:#747a83}
+.snippet-frame .dialog-actions button[type=submit]{color:#3482ff;border-color:#d6e5fc;background:#f6f9ff}
+.keyboard.clip-split-page{padding:0}
+.clip-split-title{height:45.4px;flex-shrink:0;padding:0 20.6px;display:flex;align-items:center;justify-content:space-between;color:#60646b;font-size:16px}
+.clip-split-return{width:44px;height:44px;display:grid;place-items:center;background:transparent;flex-shrink:0;color:#60646b}
+.clip-split-return svg{width:19px;height:19px}
+.clip-split-card{height:242.3px;flex-shrink:0;margin:0 5.5px;border-radius:8.3px;background:var(--key-bg);overflow:hidden}
+.clip-split-grid{height:198px;overflow-y:auto;padding:17.7px 15.1px;touch-action:pan-y;scrollbar-width:none}
+.clip-split-grid::-webkit-scrollbar{display:none}
+.clip-split-flow{display:flex;flex-wrap:wrap;gap:11px;align-content:flex-start}
+.clip-split-chip{height:30.6px;min-width:64.3px;max-width:100%;padding:0 16.3px;border:.57px solid #60646b;border-radius:11.9px;background:transparent;color:#60646b;font-size:13.7px;flex-shrink:0;touch-action:none;overflow-wrap:anywhere}
+.clip-split-chip[aria-pressed=true]{border-color:#3482ff;color:#3482ff}
+.clip-split-actions{height:44.3px;border-top:1px solid #e7e7e8;display:flex;align-items:center;justify-content:space-between;padding:0 12.5px}
+.clip-split-all{height:44px;display:flex;align-items:center;gap:12.5px;background:transparent;font-size:14px;color:#60646b}
+.clip-split-dot{width:22.3px;height:22.3px;border-radius:50%;background:#f0f0f0;display:grid;place-items:center;color:transparent}
+.clip-split-all[aria-pressed=true] .clip-split-dot{background:#3482ff;color:white}
+.clip-split-space{flex:1;min-height:0}
 
 /* 键盘选择 / 功能菜单：统一成官方同款「40px 圆角方块 + 11px 灰标签」网格。 */
 .layout-grid{grid-template-columns:repeat(4,1fr);gap:20px 4px;padding:18px 10px}
@@ -175,6 +245,34 @@
 .toolbar,.candidate-bar{height:var(--bar)}
 .candidate-visible button{min-width:52px;font-size:22px;padding:10px 13px;color:#242424}
 .candidate-visible button:first-child{padding-left:17px}
+.candidate-visible{align-items:stretch;height:100%}
+.candidate-visible button{height:100%;display:flex;align-items:center;padding-top:0;padding-bottom:0}
+.clipboard-slot{position:relative;flex:0 0 auto;height:100%;min-width:0}
+.clipboard-slot.has-reference{min-width:min(144px,38vw)}
+.candidate-visible .clipboard-slot button{position:absolute;inset:0;width:100%;min-width:0;padding:0 8px;color:var(--key-color);height:100%;transition:opacity 100ms cubic-bezier(.23,1,.32,1)}
+.clipboard-slot .clipboard-normal{opacity:1}
+.candidate-visible .clipboard-slot .clipboard-normal{position:relative;inset:auto;width:auto;min-width:52px;padding:0 13px;color:var(--key-color)}
+.candidate-visible .clipboard-reference{opacity:0;pointer-events:none;display:flex;align-items:center;gap:5px;font-size:14px;white-space:normal;line-height:1.2;text-align:left}
+.clipboard-reference svg{width:14px;height:16px;flex:none;color:var(--muted)}
+.clipboard-reference span{overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.clipboard-slot.has-reference .clipboard-normal{opacity:0;pointer-events:none}
+.clipboard-slot.has-reference .clipboard-reference{opacity:1;pointer-events:auto;transition-duration:120ms}
+.clipboard-slot.has-reference{min-width:min(172px,43vw);width:min(172px,43vw)}
+.clipboard-slot.reference-open{z-index:9;border-radius:7px 7px 0 0;background:var(--kb-bg);box-shadow:inset 0 0 0 1px var(--line)}
+.clipboard-slot.reference-open::after{content:"";position:absolute;left:1px;right:1px;bottom:0;height:2px;background:var(--kb-bg);pointer-events:none}
+.candidate-visible .clipboard-slot .clipboard-reference{right:34px;width:calc(100% - 34px);padding-right:4px}
+.candidate-visible .clipboard-slot:not(.has-reference) .clipboard-reference{right:0;width:100%}
+.candidate-visible .clipboard-slot .clipboard-count{position:absolute;inset:4px 1px 4px auto;width:32px;min-width:32px;height:calc(100% - 8px);padding:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:#3482ff;border:1px solid var(--line);border-radius:5px;background:var(--key-bg);opacity:0;pointer-events:none}
+.clipboard-slot.has-reference .clipboard-count{opacity:1;pointer-events:auto}
+.candidate-visible .reference-open .clipboard-count{background:transparent;border-color:transparent;border-left-color:var(--line);border-radius:0}
+.clipboard-results{position:absolute;z-index:8;overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:none;padding:4px;border:1px solid var(--line);border-top:0;border-radius:0 0 7px 7px;background:var(--kb-bg);box-shadow:0 5px 8px #0002;display:flex;flex-direction:column;gap:5px}
+.clipboard-results::-webkit-scrollbar{display:none;width:0;height:0}
+.clipboard-result mark{background:#ffe6a0;color:inherit;border-radius:2px}
+.clipboard-reference mark{background:#ffe6a0;color:inherit;border-radius:2px}
+.clipboard-results .clipboard-result{position:relative;display:block;flex-shrink:0;width:100%;min-height:48px;padding:7px 8px;border:1px solid var(--line);border-radius:5px;background:var(--key-bg);color:var(--key-color);font-size:14px;line-height:1.45;white-space:normal;overflow-wrap:anywhere;text-align:left;touch-action:pan-y;user-select:none}
+.clipboard-result-index{position:absolute;right:3px;bottom:0;z-index:0;width:3ch;max-width:calc(100% - 6px);text-align:right;font-size:40px;font-weight:600;line-height:1;color:var(--muted);opacity:.24;font-variant-numeric:tabular-nums;white-space:nowrap;pointer-events:none}
+.clipboard-result-text{position:relative;z-index:1;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+@media(prefers-reduced-motion:reduce){.candidate-visible .clipboard-slot button{transition:none}}
 .candidate-bar button:first-child,.candidate-visible button:first-child{color:#3482ff}
 .candidate-expand{width:57.7px;height:var(--bar)}
 .candidate-expand svg{width:22px;height:22px}
@@ -212,3 +310,5 @@
 .clip-preview [data-action="clip-candidate-insert"]{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font-size:22px;padding:0 23px;color:#3482ff;background:transparent;height:100%}
 .clip-preview .clip-preview-close{width:55px;height:100%;padding:0;flex-shrink:0;display:grid;place-items:center;background:transparent;color:#666}
 .clip-preview-close svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+
+.snippet-frame .field{position:relative}.snippet-highlight{position:absolute;white-space:pre-wrap;overflow:hidden;pointer-events:none;color:transparent;background:white}.snippet-highlight mark{color:transparent;background:#ffe6a0;border-radius:2px}.snippet-frame .field:has(.snippet-highlight) textarea,.native-ime #ime-local-editor .snippet-frame .field:has(.snippet-highlight) textarea{position:relative;background:transparent}

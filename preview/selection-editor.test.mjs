@@ -48,7 +48,8 @@ try{
   await paragraph('-1').click();const afterAll=await points();assert(afterAll.start===unlocked.start||afterAll.end===unlocked.start,'Select-all does not replace the locked origin');
   await page.locator('.selection-editor [data-action="copy-text"]').click();
   assert.equal(await page.locator('.selection-editor').count(),1,'Copy keeps the editing panel');
-  assert.equal(await page.locator('.selection-editor-header button').count(),0,'Header has only the count');
+  assert.equal(await page.locator('.selection-editor-header button').count(),1,'Header carries the count plus the new delete button');
+  assert.equal(await page.locator('.selection-editor-header button').getAttribute('aria-label'),'删除','Header delete keeps its Chinese accessible name');
   await dismiss();assert.deepEqual(await geometry(),original,'Closing restores unchanged key geometry');
   await page.locator('#editor').evaluate(e=>{e.setSelectionRange(3,3);e.dispatchEvent(new PointerEvent('pointerdown',{pointerId:17,button:0,bubbles:true,clientX:10,clientY:10}));});await page.waitForTimeout(390);
   await page.locator('#editor').evaluate(e=>e.dispatchEvent(new PointerEvent('pointerup',{pointerId:17,bubbles:true})));assert.equal(await page.locator('.selection-editor').count(),1,'Editor long press opens the same panel');assert.equal((await points()).start,3);
@@ -57,7 +58,13 @@ try{
   await native.addInitScript(()=>{window.calls=[];window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','gestureStart','gestureLock','gestureUnlock','gestureMove','gestureMove2D','gestureEnd','haptic','selectionStep','edit','ready','resize','refreshClipboard','importClipboard'].map(n=>[n,(...a)=>calls.push([n,...a])]));VoxFixIme.voiceReady=()=>true;});
   await native.goto(`http://127.0.0.1:${server.address().port}/`);await native.waitForFunction(()=>typeof voxfixSelectionOrigin==='function');
   await native.evaluate(()=>{voxfixSelectionOrigin();voxfixSelection(5,15,10);});
-  for(const width of [320,393]){await native.setViewportSize({width,height:351});const kb=await native.locator('#keyboard').boundingBox(),panel=await native.locator('.selection-editor').boundingBox();assert(panel.x>=kb.x&&panel.x+panel.width<=kb.x+kb.width&&panel.y>=kb.y&&panel.y+panel.height<kb.y+kb.height-20);const targets=await native.locator('.selection-editor button').evaluateAll(es=>es.map(e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};}));for(const t of targets)assert(t.width>=48&&t.height>=48);for(let i=0;i<targets.length;i++)for(let j=i+1;j<targets.length;j++){const a=targets[i],b=targets[j];assert(!(a.x<b.x+b.width&&a.x+a.width>b.x&&a.y<b.y+b.height&&a.y+a.height>b.y));}}
+  for(const width of [320,393]){await native.setViewportSize({width,height:351});const kb=await native.locator('#keyboard').boundingBox(),panel=await native.locator('.selection-editor').boundingBox();assert(panel.x>=kb.x&&panel.x+panel.width<=kb.x+kb.width&&panel.y>=kb.y&&panel.y+panel.height<kb.y+kb.height-20);const targets=await native.locator('.selection-editor-body button').evaluateAll(es=>es.map(e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};}));for(const t of targets)assert(t.width>=48&&t.height>=48);for(let i=0;i<targets.length;i++)for(let j=i+1;j<targets.length;j++){const a=targets[i],b=targets[j];assert(!(a.x<b.x+b.width&&a.x+a.width>b.x&&a.y<b.y+b.height&&a.y+a.height>b.y));}
+    // 新增的删除钮只借页头右侧的空白：页头高度不变、不越出面板、不与下方按钮重叠。
+    const header=await native.locator('.selection-editor-header').boundingBox(),remove=await native.locator('.selection-delete').boundingBox();
+    assert.equal(Math.round(header.height),32,'Title bar keeps its height');
+    assert(remove.y>=header.y&&remove.y+remove.height<=header.y+header.height,'Delete button stays inside the title bar');
+    assert(remove.x+remove.width<=panel.x+panel.width-8+1,'Delete button keeps the panel padding');
+    for(const t of targets)assert(!(remove.x<t.x+t.width&&remove.x+remove.width>t.x&&remove.y<t.y+t.height&&remove.y+remove.height>t.y),'Delete button never overlaps the body buttons');}
   await native.locator('[data-direction="1,1"]').click();assert((await native.evaluate(()=>calls)).some(c=>c[0]==='selectionStep'&&c[1]===1&&c[2]===1));
   await native.evaluate(()=>voxfixSelection(5,5,0));assert.equal(await native.locator('.selection-editor').count(),1,'Collapsed origin leaves panel open');
   const nr=await native.locator('.selection-mini-track').boundingBox();

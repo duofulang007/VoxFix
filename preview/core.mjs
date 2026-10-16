@@ -54,7 +54,7 @@ export const defaults = {
   ...keyboardGeometry,
   toolbar: toolbarItems.map(([id]) => id), footerSwitcher: true, footerClipboard: true,
   comma: '，', period: '。', voiceText: '你好。', rememberInput: true, phrasePacks: [],
-  clipboardHistory: true, clipboardCandidate: false, customToolbar: [],
+  clipboardHistory: true, clipboardCandidate: false, clipboardMatch: true, customToolbar: [],
 };
 export function settingsFrom(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('请选择有效的布局配置文件');
@@ -68,7 +68,7 @@ export function settingsFrom(value) {
     if (!Array.isArray(value.toolbar) || value.toolbar.some(id => !toolbarItems.some(([valid]) => valid === id) && !/^custom:[a-z0-9]{1,8}$/.test(id))) throw Error('快捷栏配置无效');
     result.toolbar = [...new Set(value.toolbar)];
   }
-  for (const key of ['footerSwitcher', 'footerClipboard', 'rememberInput', 'clipboardHistory', 'clipboardCandidate']) {
+  for (const key of ['footerSwitcher', 'footerClipboard', 'rememberInput', 'clipboardHistory', 'clipboardCandidate', 'clipboardMatch']) {
     if (key in value && typeof value[key] !== 'boolean') throw Error('底部入口配置无效');
     if (key in value) result[key] = value[key];
   }
@@ -152,21 +152,39 @@ export function migratePhraseGroups(value) {
   }
   return validatePhraseGroups(value);
 }
+export const clipboardShortLimit=32;
 export function validateLearning(records){
   if(!Array.isArray(records)||records.length>2000||records.some(row=>!row||!/^([p9]):[a-z'2-9]{1,60}$/.test(row.key)||typeof row.word!=='string'||!/[\u3400-\u9fff]/.test(row.word)||row.word.length>60||!Number.isInteger(row.hits)||row.hits<1||row.hits>1000000))throw Error('选词记忆格式无效');
+  if(records.some(row=>row.code!==undefined&&(typeof row.code!=='string'||!/^p:/.test(row.key)||!/^[a-z]{1,6}( [a-z]{1,6}){0,15}$/.test(row.code)||!/^[\u3400-\u9fff]{1,16}$/.test(row.word)||row.code.split(' ').length!==row.word.length||row.code.replaceAll(' ','').length>60)))throw Error('选词读音格式无效');
   return records;
 }
-export function learnWord(records,key,word){
+export function learnWord(records,key,word,code=''){
   if(!/[\u3400-\u9fff]/.test(word))return records;
+  if(code)key='p:'+code.replaceAll(' ','');
   const previous=records.find(row=>row.key===key&&row.word===word);
   const row={key,word,hits:Math.min(1000000,(previous?.hits||0)+1)};
+  if(code||previous?.code)row.code=code||previous.code;
   validateLearning([row]);
   // shortcut: keep the most recent 2000 choices; use a database if long-term vocabulary exceeds this.
   return [row,...records.filter(item=>item.key!==key||item.word!==word)].slice(0,2000);
 }
+export function learnSelection(records,chain,raw,word,code,now){
+  records=learnWord(records,'p:'+raw.toLowerCase(),word,code);
+  if(!code)return {records,chain:[]};
+  chain=chain.filter(row=>now>=row.at&&now-row.at<=30000);
+  chain=[...chain,{word,code,at:now}];
+  while(chain.reduce((size,row)=>size+row.word.length,0)>16||chain.reduce((size,row)=>size+row.code.replaceAll(' ','').length,0)>60)chain.shift();
+  const seen=new Set([word]);
+  for(let start=chain.length-2;start>=0;start--){
+    const phrase=chain.slice(start).map(row=>row.word).join(''),spelling=chain.slice(start).map(row=>row.code).join(' ');
+    if(!seen.has(phrase))records=learnWord(records,'p:'+spelling.replaceAll(' ',''),phrase,spelling);
+    seen.add(phrase);
+  }
+  return {records,chain};
+}
 export function rankLearned(words,records,key){
-  const scores=new Map();
-  for(const row of records)if(words.includes(row.word)&&(row.key===key||row.key.slice(0,2)===key.slice(0,2)))scores.set(row.word,(scores.get(row.word)||0)+row.hits);
+  const scores=new Map(),valid=new Set(words);
+  for(const row of records)if(valid.has(row.word)&&(row.key===key||row.key.slice(0,2)===key.slice(0,2)))scores.set(row.word,(scores.get(row.word)||0)+row.hits);
   const learned=[...scores].filter(([,hits])=>hits>=2).sort((a,b)=>b[1]-a[1]).map(([word])=>word);
   return [...new Set([...learned,...words])];
 }

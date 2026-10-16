@@ -12,14 +12,16 @@ core = re.sub(r'^export ', '', (preview / 'core.mjs').read_text(encoding='utf-8'
 voice = re.sub(r'^export ', '', (preview / 'voice.mjs').read_text(encoding='utf-8'), flags=re.M)
 orb = re.sub(r'^export ', '', (preview / 'voice-orb.mjs').read_text(encoding='utf-8'), flags=re.M)
 pinyin = re.sub(r'^export ', '', (preview / 'pinyin.mjs').read_text(encoding='utf-8'), flags=re.M)
+pinyin = re.sub(r'^import .*?;\n', '', pinyin, flags=re.M)
 english = re.sub(r'^export ', '', (preview / 'english.mjs').read_text(encoding='utf-8'), flags=re.M)
+split_module = re.sub(r'^export ', '', (preview / 'split.mjs').read_text(encoding='utf-8'), flags=re.M)
 app = re.sub(r'^import .*?;\n', '', (preview / 'app.mjs').read_text(encoding='utf-8'), flags=re.M)
 refs = {file.name: 'data:image/jpeg;base64,' + base64.b64encode(file.read_bytes()).decode('ascii') for file in (preview / 'reference').glob('*.jpg')}
 import json
 app = app.replace("'reference/'+(referenceMap[ref]||referenceMap.letters)", "referenceImages[referenceMap[ref]||referenceMap.letters]")
 dictionary = (preview / 'pinyin-data.json').read_text(encoding='utf-8')
 packs = (preview/'phrase-packs.json').read_text(encoding='utf-8')
-script = 'const embeddedEnglishWords='+json.dumps((preview/'english-words.txt').read_text(encoding='utf-8'))+';\nconst embeddedEnglishLicense='+json.dumps((preview/'vendor/rime-ice/LICENSE').read_text(encoding='utf-8'))+';\nconst embeddedPinyinData=' + dictionary + ';\nconst embeddedPhrasePacks='+packs+';\nconst referenceImages=' + json.dumps(refs) + ';\n' + core + '\n' + voice + '\n' + orb + '\n' + pinyin + '\n' + english + '\n' + app
+script = 'const embeddedEnglishWords='+json.dumps((preview/'english-words.txt').read_text(encoding='utf-8'))+';\nconst embeddedEnglishLicense='+json.dumps((preview/'vendor/rime-ice/LICENSE').read_text(encoding='utf-8'))+';\nconst embeddedPinyinData=' + dictionary + ';\nconst embeddedPhrasePacks='+packs+';\nconst referenceImages=' + json.dumps(refs) + ';\n' + core + '\n' + voice + '\n' + orb + '\n' + pinyin + '\n' + english + '\n' + split_module + '\n' + app
 assert '</script' not in script.lower()
 html = html.replace('<link rel="stylesheet" href="style.css">', '<style>' + css + '</style>')
 html = html.replace('<link rel="stylesheet" href="native-ime.css">', '<style>' + native_css + '</style>')

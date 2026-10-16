@@ -42,6 +42,21 @@ async function check(name,run){
   finally{await page.close();}
 }
 try{
+  await check('compact item menu stays by its row and editor contains actions without shrinking keys',async({page,click,context})=>{
+    const keys=()=>page.locator('.key-rows .key').evaluateAll(nodes=>nodes.map(node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height};}));
+    const before=await keys();await click('clipboard');await context('A');
+    assert.equal(await page.locator('[data-action="toolbar-add"]').count(),0);
+    assert.equal(await page.locator('.clip-item-menu .clip-menu-title,.clip-item-menu .clip-menu-cancel').count(),0);
+    const menu=await page.locator('.clip-item-menu').boundingBox(),row=await page.locator('.clip-text').first().boundingBox(),kb=await page.locator('#keyboard').boundingBox();
+    assert.equal(menu.width,200);assert.equal(menu.height,250);assert(Math.abs(menu.y-row.y-8)<1);assert(menu.x>=kb.x&&menu.y>=kb.y&&menu.x+menu.width<=kb.x+kb.width&&menu.y+menu.height<=kb.y+kb.height);
+    await click('context-edit');const height=await page.locator('#keyboard').evaluate(e=>e.getBoundingClientRect().height);assert.equal(height,479);
+    const after=await keys();assert.equal(after.length,before.length);for(let i=0;i<before.length;i++){assert.equal(after[i].w,before[i].w);assert.equal(after[i].h,before[i].h);assert.equal(after[i].x,before[i].x);assert.equal(after[i].y-before[i].y,128);}
+    const frame=await page.locator('.snippet-frame').boundingBox(),actions=await page.locator('#snippet-form .dialog-actions').boundingBox(),text=await page.locator('#snippet-content').boundingBox();
+    assert(actions.x>=frame.x&&actions.x+actions.width<=frame.x+frame.width&&actions.y+actions.height<=frame.y+frame.height);assert(text.height>=60);assert.equal(actions.width,46);assert(text.x+text.width<=actions.x,'右侧窄栏不能遮住编辑正文');assert.equal(actions.height,text.height);
+    await page.locator('#snippet-content').fill('修改后');await page.locator('#snippet-form button[type=submit]').click();
+    assert(await page.locator('.clip-text').filter({hasText:'修改后'}).count());assert.equal(await page.locator('#keyboard').evaluate(e=>e.getBoundingClientRect().height),351);
+    await context('C');const lower=await page.locator('.clip-item-menu').boundingBox();assert(lower.y>=0&&lower.y+lower.height<=351);
+  });
   await check('clipboard preview matches official layout and keeps full paste payload',async({page,click,storage})=>{
     const baseHeight=await page.locator('#keyboard').evaluate(node=>node.getBoundingClientRect().height);
     await page.evaluate(()=>{const input=document.querySelector('[data-setting="clipboardCandidate"]');input.checked=true;input.dispatchEvent(new Event('change',{bubbles:true}));voxfixClipboard('好久','preview-1');});
@@ -85,13 +100,16 @@ try{
   });
   await check('failed group creation keeps input and does not report success',async({page,click,storage})=>{
     await click('clipboard');await click('clip-tab','phrases');await click('clip-group-add');await page.locator('#ime-local-editor input').fill('丙');
+    assert.equal(await page.locator('#ime-local-editor input').evaluate(n=>getComputedStyle(n).outlineStyle),'none');
+    assert.equal(await page.locator('#ime-local-editor input').evaluate(n=>getComputedStyle(n).borderTopColor),'rgb(220, 224, 229)');
+    await page.locator('#ime-local-editor').screenshot({path:'.android/group-editor-no-outline.png'});
     await page.evaluate(()=>window.failSave=true);await page.locator('#ime-local-editor button').filter({hasText:'新建'}).click();
     assert(await page.locator('#ime-local-editor').isVisible());assert.equal(await page.locator('#ime-local-editor input').inputValue(),'丙');
     assert.deepEqual((await storage()).phrases.map(group=>group.name),['常用语','甲','乙']);assert.doesNotMatch(await page.locator('#toast').textContent(),/已新建/);
     await page.evaluate(()=>window.failSave=false);await page.locator('#ime-local-editor button').filter({hasText:'新建'}).click();assert.equal((await storage()).phrases.at(-1).name,'丙');
   });
-  await check('custom toolbar survives reload with its original text',async({page,click,context,ready})=>{
-    await click('clipboard');await context('A');await click('toolbar-add');await click('return');assert.equal(await page.locator('[data-action="toolbar-custom"]').count(),1);
+  await check('legacy toolbar data survives removal of the add action',async({page,click,ready})=>{
+    await page.evaluate(()=>{const settings=JSON.parse(localStorage.getItem('voxfix-layout-v1'))||{};settings.toolbar=['menu','clipboard','custom:legacy'];settings.customToolbar=[{id:'custom:legacy',label:'A',text:'A'}];localStorage.setItem('voxfix-layout-v1',JSON.stringify(settings));});
     await page.reload();await ready();assert.equal(await page.locator('[data-action="toolbar-custom"]').count(),1);await click('toolbar-custom');
     assert(await page.evaluate(()=>calls.some(call=>call[0]==='commit'&&call[1]==='A')));
   });
@@ -123,6 +141,7 @@ try{
   });
   await check('failed rename, deletion and group undo preserve persisted content',async({page,key,click,storage,hold,deleteGroup})=>{
     await click('clipboard');await click('clip-tab','phrases');await hold(key('clip-group','1'));await click('group-rename');
+    assert.equal(await page.locator('#ime-local-editor input').evaluate(n=>getComputedStyle(n).outlineStyle),'none');
     await page.locator('#ime-local-editor input').fill('新甲');await page.evaluate(()=>window.failSave=true);await page.locator('#ime-local-editor button').filter({hasText:'保存'}).click();
     assert(await page.locator('#ime-local-editor').isVisible());assert.equal((await storage()).phrases[1].name,'甲');
     await page.evaluate(()=>window.failSave=false);await page.locator('#ime-local-editor button').filter({hasText:'保存'}).click();assert.equal((await storage()).phrases[1].name,'新甲');
@@ -142,7 +161,7 @@ try{
     await click('clip-manage-menu');await click('group-undo');assert.deepEqual((await storage()).phrases.at(-1),{name:'乙',items:['新的乙内容']});assert.match(await page.locator('#toast').textContent(),/同名/);
   });
   await check('long clipboard holds stay open after the initial suppression window',async({page,click,hold})=>{
-    await click('clipboard');await hold(page.locator('.clip-text').first(),1500);assert.equal(await page.locator('.clip-menu-sheet').count(),1);await page.locator('.clip-menu-cancel').click();
+    await click('clipboard');await hold(page.locator('.clip-text').first(),1500);assert.equal(await page.locator('.clip-menu-sheet').count(),1);await page.keyboard.press('Escape');
     await click('clip-manage-menu');await click('clip-manage');await hold(page.locator('.clip-text').first());assert.equal(await page.locator('.clip-menu-sheet').count(),1);
   });
   await check('undo at the clipboard limit refuses to discard newer copies',async({page,click,remove,storage})=>{

@@ -72,12 +72,17 @@ try{
   await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
   assert((await page.evaluate(()=>window.calls)).some(row=>row[0]==='commit'&&row[1]==='1'),'Letter hold releases the highlighted option');
   assert.equal(await page.locator('.key-popup').count(),0);
-  await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:letterBox.x+letterBox.width/2,y:letterBox.y+letterBox.height/2}]});
+  // 此处键盘已是英文小写，键值是 d；长按浮层仍固定为 大写 D｜@｜小写 d。
+  const holdLetter=await page.locator('#keyboard [data-action="letter"][data-value="d"]').boundingBox();
+  const holdX=holdLetter.x+holdLetter.width/2,holdY=holdLetter.y+holdLetter.height/2;
+  await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:holdX,y:holdY}]});
   await page.waitForTimeout(500);
-  const upperOption=await page.locator('.key-popup [data-value="Q"]').boundingBox();
+  // 长按浮层首帧必须停在中间的键帽提示档（D 键为 D｜@｜d）。
+  assert.equal(await page.locator('.key-popup button.selected').getAttribute('data-value'),'@','Letter hold must open on the middle hint option');
+  const upperOption=await page.locator('.key-popup [data-value="D"]').boundingBox();
   await touch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:upperOption.x+upperOption.width/2,y:upperOption.y+upperOption.height/2}]});
   await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
-  assert((await page.evaluate(()=>window.calls)).some(row=>row[0]==='commit'&&row[1]==='Q'),'Dragging selects a different long-press option');
+  assert((await page.evaluate(()=>window.calls)).some(row=>row[0]==='commit'&&row[1]==='D'),'Dragging selects a different long-press option');
   await touch.detach();
   await page.waitForTimeout(30);
   await page.evaluate(()=>window.voxfixStartInput(1,false));

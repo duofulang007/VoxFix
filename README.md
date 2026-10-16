@@ -17,6 +17,12 @@ VoxFix 是一个安装后可在系统里独立选择的自有 Android 输入法�
   （松手后整段补标点与数字格式）+ silero VAD 断句。长按空格 300ms 进入语音，上滑取消、松手结束。
 - 底部滑轨：碰一下即可拖动光标，离触控点越远走得越快（跟手 / 高速两档）；长按在「起点锁定」与「自由移动」
   之间切换，锁定时把光标钉成起点并呼出右侧编辑框，收起面板不等于解锁。
+- **剪贴板**：长按条目可拆词（离线词频切分，点词选中并临时上屏、再点撤回，返回只收起面板、保留已选文字）；
+  候选栏第二个候选位可预览并直接引用剪贴板内容；输入时可检索全部已保存历史（最多 300 条，支持字面／全拼／
+  简拼／混拼与受控近似），点数量展开与第二候选等宽连接的窄浮层。候选引用与剪贴板编辑共用一个
+  「取消 / 拆词 / 保存」编辑框。
+- **拼音个性化学习**：原生成功选词同步到本地记忆，补齐分段短语、全拼／简拼／混拼共享召回与接续联想；
+  可关闭，不保存日常上屏文本，不联网。
 - **手写已停用**：源文件在 `android/disabled-handwriting/`，不参与编译，模型与运行库不打包。
 - **安卓端 Qwen 本地整理已移除**：手机上不再保留 GGUF 模型，输入法不阻塞上屏、不调用大模型。
 
@@ -54,8 +60,10 @@ powershell -ExecutionPolicy Bypass -File tools/build_android.ps1
 网页检查是改动后的第一道回归，**不等于原生通过**。
 
 ```bash
-node preview/native-ime.test.mjs      # 以及 ime-regressions / candidates / fixed-layout /
-                                      # pinyin / english / voice / voice-orb / core 各自同名 *.test.mjs
+node preview/native-ime.test.mjs      # 以及 ime-regressions / candidates / fixed-layout / key-press /
+                                      # focus-ring / interaction-transitions / pinyin / english / learning /
+                                      # split / clipboard-* / selection-* / letter-hold / voice* / core
+                                      # 各自同名 *.test.mjs
 ```
 
 真机脚本（`preview/*-device.test.mjs`）需要先用 `adb forward` 把 IME WebView 的 devtools 端口转到本机，

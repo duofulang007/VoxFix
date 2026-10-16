@@ -2,7 +2,7 @@ let dictionary=Object.create(null), initialDictionary=Object.create(null), keys=
 let mixedBuckets=Object.create(null), shortPrefixes=Object.create(null), nineKeys=null;
 let personal=[], packs={}, enabledPacks=[];
 let pinyinCache=null,nineCache=null;
-let wordStarts=Object.create(null);
+let wordStarts=Object.create(null),clipReadings=new Map(),clipReadingSize=0,clipOverrides=Object.create(null);
 const digits='22233344455566677778889999';
 const toNine=code=>code.replace(/[a-z]/g,char=>digits[char.charCodeAt(0)-97]);
 const unique=rows=>[...new Set(rows.map(row=>row[0]))];
@@ -23,7 +23,7 @@ export function setPinyinData(data,initials={}) {
     for(const [word,freq,ids] of data.entries){
       const parts=ids.map(id=>syllables[id]),code=parts.join(''),row=[word,freq,parts];
       push(dictionary,code,row);
-      if(word.length>1)push(wordStarts,word[0],row);
+      push(wordStarts,word[0],row);
       if(parts.length>1){push(initialDictionary,parts.map(s=>s[0]).join(''),row);push(mixedBuckets,code[0],row);}
       if(word.length===1&&parts.length===1)for(let n=1;n<=Math.min(2,code.length);n++)push(shortPrefixes,code.slice(0,n),row);
     }
@@ -32,6 +32,9 @@ export function setPinyinData(data,initials={}) {
     for(const rows of Object.values(dictionary))for(const row of rows)if(row[0].length>1)push(wordStarts,row[0][0],row);
   }
   keys=Object.keys(dictionary).sort();
+  clipReadings.clear();clipReadingSize=0;clipOverrides=Object.create(null);
+  for(const rows of Object.values(wordStarts))for(const row of rows)if(row[0].length>1&&row[2]?.length===row[0].length&&row[2].some((part,i)=>part!==syllables[characters[row[0][i]]]))push(clipOverrides,row[0][0],row);
+  for(const rows of Object.values(clipOverrides))rows.sort((a,b)=>b[0].length-a[0].length||b[1]-a[1]);
   for(const rows of Object.values(shortPrefixes))rows.sort((a,b)=>b[1]-a[1]);
   pinyinCache=null;nineCache=null;
 }
@@ -80,6 +83,107 @@ function mixedMatch(parts,raw){
     positions=next;if(!positions.size)return false;
   }
   return positions.has(raw.length);
+}
+export function clipboardMatch(input,text){
+  return clipboardMatches(input,[text])[0]?.text||'';
+}
+function clipRuns(text){
+  if(clipReadings.has(text))return clipReadings.get(text);
+  const runs=[];let run=[];
+  for(let i=0;i<text.length;){
+    const char=String.fromCodePoint(text.codePointAt(i));
+    const row=clipOverrides[char]?.find(row=>text.startsWith(row[0],i));
+    const parts=row?.[2]||[syllables[characters[char]]];
+    if(parts.every(Boolean)){for(let j=0;j<parts.length;j++)run.push({part:parts[j],start:i+j,end:i+j+1});i+=row?.[0].length||char.length;}
+    else{if(run.length)runs.push(run);run=[];i+=char.length;}
+  }
+  if(run.length)runs.push(run);
+  while(clipReadings.size&&(clipReadings.size>=300||clipReadingSize+text.length>200000)){const oldest=clipReadings.keys().next().value;clipReadingSize-=oldest.length;clipReadings.delete(oldest);}
+  clipReadingSize+=text.length;
+  clipReadings.set(text,runs);return runs;
+}
+function oneEdit(a,b){
+  if(Math.abs(a.length-b.length)>1)return false;
+  let i=0,j=0,edits=0;
+  while(i<a.length&&j<b.length){if(a[i]===b[j]){i++;j++;continue;}if(++edits>1)return false;if(a.length>=b.length)i++;if(b.length>=a.length)j++;}
+  return edits+(a.length-i)+(b.length-j)<=1;
+}
+function clipToken(input,text,manual){
+  const token=input.toLowerCase(),literal=text.toLowerCase().indexOf(token);
+  if(literal>=0){const ranges=[];for(let at=literal;at>=0;at=text.toLowerCase().indexOf(token,at+token.length))ranges.push([at,at+token.length]);return {start:literal,end:literal+token.length,ranges,score:400,weak:false};}
+  if(manual&&/^[\u3400-\u9fff]{2,32}$/.test(token)){
+    const ranges=[];let at=0;
+    for(const char of token){const index=text.indexOf(char,at);if(index<0)return null;ranges.push([index,index+1]);at=index+1;}
+    return {start:ranges[0][0],end:at,ranges,score:150,weak:true};
+  }
+  const raw=token.replace(/'/g,'');if(!/^[a-z]{2,60}$/.test(raw)&&!(manual&&/^[a-z]$/.test(raw)))return null;
+  let best=null;
+  for(const run of clipRuns(text))for(let start=0;start<run.length;start++){
+    let positions=new Map([[0,0]]),full='';
+    for(let end=start;end<run.length&&end-start<raw.length+1;end++){
+      const part=run[end].part,next=new Map();full+=part;
+      for(const [at,cost] of positions){
+        for(const piece of new Set([part,part[0],/^[zcs]h/.test(part)?part.slice(0,2):part[0]]))if(raw.startsWith(piece,at)){
+          const to=at+piece.length,penalty=cost+(piece===part?0:1);
+          if(!next.has(to)||next.get(to)>penalty)next.set(to,penalty);
+        }
+        if(end>start&&raw.length-at>=2&&part.startsWith(raw.slice(at)))next.set(raw.length,Math.min(next.get(raw.length)??99,cost+1));
+      }
+      positions=next;
+      const cost=positions.get(raw.length),count=end-start+1;
+      if(cost!==undefined&&(count>=2||manual||cost===0&&raw.length>=3)){
+        const parts=run.slice(start,end+1).map(x=>x.part);
+        if(respectsBoundaries(['',0,parts],token)){const hit={start:run[start].start,end:run[end].end,score:300-Math.min(40,cost*10),weak:false};if(!best||hit.score>best.score)best=hit;}
+      }
+      if(raw.length>=4&&count>=2&&Math.abs(full.length-raw.length)<=1&&oneEdit(raw,full)&&!token.includes("'")){
+        const hit={start:run[start].start,end:run[end].end,score:100,weak:true};if(!best||best.score<hit.score)best=hit;
+      }
+      if(!positions.size&&full.length>raw.length+1)break;
+    }
+  }
+  return best;
+}
+export function clipboardMatches(input,texts,{manual=false,recent=false}={}){
+  const tokens=input.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if(!manual&&(!tokens.length||tokens.some(token=>token.replace(/'/g,'').length<2)))return [];
+  if(input.length>100)return [];
+  const hits=[];
+  for(const [order,text] of [...new Set(texts)].entries()){
+    if(!text.trim()||!manual&&/验证码|密码|口令|密钥|https?:\/\/|www\.|[\w.+-]+@[\w.-]+|\d{6,}/i.test(text))continue;
+    const matches=tokens.map(token=>clipToken(token,text,manual));if(matches.some(hit=>!hit))continue;
+    const start=matches.length?Math.min(...matches.map(hit=>hit.start)):0,end=matches.length?Math.max(...matches.map(hit=>hit.end)):0;
+    hits.push({text,start,end,ranges:matches.flatMap(hit=>hit.ranges||[[hit.start,hit.end]]),score:matches.length?Math.min(...matches.map(hit=>hit.score)):0,weak:matches.some(hit=>hit.weak),order});
+  }
+  return hits.sort((a,b)=>recent? a.order-b.order:b.score-a.score||a.order-b.order);
+}
+export function selectionCode(input,word,preedit='',records=[]){
+  if(input.length>60||!/^[\u3400-\u9fff]{1,16}$/.test(word))return '';
+  const raw=input.toLowerCase().replace(/'/g,''),parts=preedit.trim().split(/[\s']+/).slice(0,word.length);
+  if(parts.length===word.length&&parts.every(part=>syllables.includes(part))&&parts.join('')===raw)return parts.join(' ');
+  const codes=new Set((wordStarts[word[0]]||[]).filter(row=>row[0]===word&&row[2]&&mixedMatch(row[2],raw)&&respectsBoundaries(row,input)).map(row=>row[2].join(' ')));
+  for(const row of records)if(row.word===word&&row.code&&mixedMatch(row.code.split(' '),raw)&&respectsBoundaries([word,0,row.code.split(' ')],input))codes.add(row.code);
+  // shortcut: ambiguous or absent readings keep exact-input memory; never guess a personal word's pronunciation.
+  const code=codes.size===1?[...codes][0]:'';
+  return code.replaceAll(' ','').length<=60?code:'';
+}
+export function learnedCandidates(input,records,limit=240){
+  const query=input.toLowerCase(),raw=query.replace(/'/g,'');
+  if(!/^[a-z]{1,60}$/.test(raw))return [];
+  const single=!query.includes("'")&&syllables.some(part=>part.startsWith(raw));
+  return [...new Set(records.filter(row=>row.hits>=2&&row.key.startsWith('p:')&&(!single||row.word.length===1)&&
+    (row.key==='p:'+query||row.code&&mixedMatch(row.code.split(' '),raw)&&respectsBoundaries([row.word,0,row.code.split(' ')],query)))
+    .sort((a,b)=>b.hits-a.hits).map(row=>row.word))].slice(0,limit);
+}
+export function learnedAssociations(context,records,limit=240){
+  const tail=context.match(/[\u3400-\u9fff]+$/)?.[0]?.slice(-16);if(!tail)return [];
+  const words=[];
+  for(let size=tail.length;size>0;size--){
+    const prefix=tail.slice(-size);
+    for(const row of records.filter(row=>row.code&&row.hits>=2&&row.word.startsWith(prefix)&&row.word.length>size).sort((a,b)=>b.hits-a.hits)){
+      const suffix=row.word.slice(size);if(!words.includes(suffix))words.push(suffix);if(words.length>=limit)return words;
+    }
+  }
+  return words;
 }
 export function nineCandidates(input,limit=240){
   const raw=input.replace(/'/g,'');if(!/^[2-9]{1,60}$/.test(raw))return [];

@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>剪贴板拆词 · 一版方案（含候选框互通）</title>
+<style>
+  :root{
+    --ink:#1c1c1e; --sub:#6e6e73; --faint:#aeaeb2;
+    --page:#eef0f5; --card:#ffffff; --line:#e3e5ec;
+    --accent:#0a84ff;
+
+    /* ===== 官方真机实测令牌（K60 / 560dpi 逐像素量得；本页 1 CSS px = 1 dp） ===== */
+    --kb-bg:#EDEFF2;       /* 键盘/面板底 */
+    --chip-ink:#60646B;    /* 词块未选中：边框+文字 */
+    --chip-on:#3482FF;     /* 词块选中：边框+文字 */
+    --sep:#E7E7E8;         /* 底行上方分隔线 */
+    --bar-h:45px;          /* 标题栏 / 候选栏（官方 45.4，取整让发丝线落整像素） */
+    --card-inset:5.5px;    /* 卡片左右内缩 */
+    --card-r:8.3px;        /* 卡片圆角 */
+    --grid-pad:15.5px;     /* 词块区左右内边距（官方 15.1，+0.4 对齐整像素） */
+    --chip-h:30.6px;       /* 词块高 */
+    --chip-min:64.3px;     /* 词块最小宽 */
+    --chip-r:11.9px;       /* 词块圆角 */
+    --chip-gap:11px;       /* 词块间距（横纵） */
+    --chip-pad:16.3px;     /* 词块文字左右内边距 */
+    --chip-font:13.7px;    /* 词块字号 */
+    --dot:22.3px;          /* 全选圆直径 */
+    --row-h:44.3px;        /* 卡片底行高 */
+    --footer-h:49px;       /* VoxFix 底栏（官方 63 含 MIUI 手势条） */
+    --kb-h:351px;          /* 键盘总高 */
+    --shadow:0 10px 28px rgba(30,34,48,.13);
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  html{scroll-behavior:smooth}
+  body{font-family:-apple-system,"SF Pro SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    background:var(--page);color:var(--ink);padding:44px 20px 90px;
+    -webkit-font-smoothing:antialiased;   /* 关掉桌面子像素彩边，字口更接近安卓灰度渲染 */}
+  .wrap{max-width:880px;margin:0 auto}
+  h1{font-size:28px;letter-spacing:-.02em;line-height:1.25}
+  .lede{color:var(--sub);font-size:14px;margin-top:10px;line-height:1.75}
+  .lede b{color:var(--ink)}
+
+  section{background:var(--card);border:1px solid var(--line);border-radius:22px;
+    padding:26px;margin-top:28px;box-shadow:0 2px 10px rgba(30,34,48,.05)}
+  .head{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px}
+  .num{font-size:12px;font-weight:700;color:#fff;background:var(--ink);border-radius:8px;
+    padding:4px 9px;letter-spacing:.06em}
+  h2{font-size:20px;letter-spacing:-.01em}
+  .tag{font-size:12px;color:var(--sub);border:1px solid var(--line);border-radius:999px;padding:3px 10px}
+  .tag.ok{border-color:#22a06b55;color:#22a06b}
+  .idea{color:var(--sub);font-size:13.5px;line-height:1.8;margin-top:12px}
+  .idea b{color:var(--ink)}
+
+  /* ---------- 流程链 ---------- */
+  .chain{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:16px;font-size:12px}
+  .chain span{background:#f4f5f9;border-radius:999px;padding:6px 13px;color:var(--ink);
+    border:1.5px solid transparent;transition:border-color .2s,background .2s}
+  .chain em{font-style:normal;color:var(--faint)}
+  .chain span.on{border-color:var(--chip-on);background:#f2f7ff}
+
+  /* ---------- 手机框（1 CSS px = 1 dp） ---------- */
+  .stage{display:flex;justify-content:center;margin-top:20px}
+  .phone{position:relative;width:413px;height:814px;background:#f7f8fb;border:1px solid #dcdfe8;
+    border-radius:26px;overflow:hidden;user-select:none;
+    box-shadow:inset 0 0 0 4px #fff,0 8px 22px rgba(30,34,48,.09)}
+  .statusbar{height:24px;display:flex;align-items:center;justify-content:center;
+    font-size:9px;color:var(--faint);letter-spacing:.14em}
+  .host{position:absolute;left:0;right:0;top:24px;bottom:var(--kb-h);background:#fff;padding:16px 18px}
+  .host .label{font-size:11px;color:var(--faint);margin-bottom:10px}
+  .host .doc{font-size:15.5px;line-height:1.95;color:#3a3a3c;word-break:break-all}
+  .host .comp{position:relative}
+  .host .comp::after{content:"";position:absolute;left:0;right:0;bottom:1px;height:1.5px;
+    background:#3a3a3c;transform:scaleX(0);transform-origin:left;transition:transform .18s ease}
+  .host .comp.on::after{transform:scaleX(1)}
+
+  .ime{position:absolute;left:0;right:0;bottom:0;height:var(--kb-h);background:var(--kb-bg);
+    z-index:5;display:flex;flex-direction:column;overflow:hidden}
+  .bar{height:var(--bar-h);flex-shrink:0;display:flex;align-items:center;padding:0 20.6px;
+    position:relative}
+  .bar .title{font-size:16px;color:var(--chip-ink)}
+  .bar .right{margin-left:auto;display:flex;align-items:center;gap:18px}
+  .ico{width:17px;height:17px;flex-shrink:0;stroke:var(--chip-ink);stroke-width:1.7;fill:none;
+    stroke-linecap:round;stroke-linejoin:round}
+  .ico.big{width:22px;height:22px;stroke:#4a4e57}
+  .body{flex:1;min-height:0;position:relative}
+
+  /* ---------- 候选栏（含剪贴板引用） ---------- */
+  .candbar{height:var(--bar-h);display:flex;align-items:center;gap:20px;padding:0 20.6px;
+    font-size:17px;color:#3a3a3c;overflow:hidden}
+  .candbar .c{padding:2px 0}
+  .ref{display:inline-flex;align-items:center;gap:7px;color:var(--chip-on);max-width:270px}
+  .ref span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:underline;
+    text-underline-offset:3px}
+  .ref .ico{stroke:var(--chip-on);width:15px;height:15px}
+  .ref.holding{background:#3482FF1a;border-radius:8px;padding:3px 8px;margin:-3px -8px}
+  .hintbar{position:absolute;left:0;right:0;top:0;height:var(--bar-h);display:flex;align-items:center;
+    padding:0 20.6px;font-size:12px;color:var(--faint);gap:8px;
+    opacity:0;transition:opacity .18s ease}
+  .hintbar.on{opacity:1}
+
+  /* ---------- 键盘（示意，尺寸按 351dp 分配） ---------- */
+  #kbState{flex:1;min-height:0;display:flex;flex-direction:column}
+  .kb{flex:1;min-height:0;display:flex;flex-direction:column;gap:6px;padding:6px 4px}
+  .krow{flex:1;display:flex;gap:5px;justify-content:center}
+  .key{flex:1;max-width:38px;background:#fff;border-radius:6.5px;display:flex;align-items:center;
+    justify-content:center;font-size:15px;color:#3a3a3c;
+    box-shadow:0 1px 0 rgba(30,34,48,.14)}
+  .key.f{background:#c0c5d3;flex:1.5;max-width:none;font-size:13px}
+  .key.wide{flex:1;max-width:none}
+  .key .ico{width:18px;height:18px;stroke:#3a3a3c}
+  .footer{height:var(--footer-h);flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 12px;
+    border-top:1px solid #e2e4ea}
+  .footer .fbtn{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;
+    justify-content:center}
+  .footer .mid{flex:1}
+
+  /* ---------- 通用浮层（编辑引用 sheet） ---------- */
+  .sheetwrap{position:absolute;inset:0;background:#00000026;opacity:0;pointer-events:none;
+    transition:opacity .16s ease;z-index:9}
+  .sheetwrap.on{opacity:1;pointer-events:auto}
+  .sheet{position:absolute;left:6px;right:6px;top:6px;background:#fff;border-radius:14px;
+    padding:12px 14px 10px;z-index:10;box-shadow:0 12px 30px rgba(20,24,34,.2);
+    opacity:0;transform:translateY(-8px);pointer-events:none;
+    transition:opacity .16s ease,transform .2s cubic-bezier(.2,.9,.3,1)}
+  .sheet.on{opacity:1;transform:none;pointer-events:auto}
+  .sheet h4{font-size:12.5px;color:var(--sub);font-weight:600;margin-bottom:9px}
+  .sheet .txt{border:1px solid var(--chip-on);border-radius:9px;padding:9px 11px;font-size:14px;
+    line-height:1.65;color:#3a3a3c;min-height:74px}
+  .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
+  .acts button{font:inherit;font-size:14px;border-radius:9px;padding:8px 17px;cursor:pointer;
+    border:1px solid var(--sep);background:#fff;color:var(--ink)}
+  .acts button.splitbtn{border-color:#3482FF66;color:var(--chip-on)}
+  .acts button.refbtn{background:#4a6fa5;border-color:#4a6fa5;color:#fff}
+  .acts button.hit{transform:scale(.95)}
+
+  /* ---------- 拆词面板（唯一一版：实时流动） ---------- */
+  .split{position:absolute;inset:0 0 var(--footer-h) 0;display:flex;flex-direction:column;
+    opacity:0;pointer-events:none;transition:opacity .18s ease}
+  .split.on{opacity:1;pointer-events:auto}
+  .split .topbar{height:var(--bar-h);flex-shrink:0;display:flex;align-items:center;gap:10px;
+    padding:0 20.6px}
+  .split .topbar .title{font-size:16px;color:var(--chip-ink)}  /* 原文行＝可编辑（边改边拆就靠它） */
+  .src{flex:1;height:40.4px;border-radius:10px;background:#fff;border:1px solid #E1E3E8;
+    display:flex;align-items:center;padding:0 12px;overflow:hidden}
+  .src input{flex:1;border:0;outline:none;background:none;font:inherit;font-size:13.7px;color:#3a3a3c}
+  .split .cardwrap{flex:1;min-height:0;display:flex;padding:0 var(--card-inset)}
+  .split .card{background:#fff;border-radius:var(--card-r);flex:1;min-height:0;display:flex;
+    flex-direction:column;overflow:hidden}
+  .grid{flex:1;min-height:0;overflow-y:auto;padding:18px var(--grid-pad);scrollbar-width:none;
+    -webkit-font-smoothing:antialiased}
+  .grid::-webkit-scrollbar{display:none}
+  .flow{display:flex;flex-wrap:wrap;gap:var(--chip-gap);align-content:flex-start}
+  .chip{height:var(--chip-h);min-width:var(--chip-min);border-radius:var(--chip-r);
+    padding:0 var(--chip-pad);display:inline-flex;align-items:center;justify-content:center;
+    font-size:var(--chip-font);color:var(--chip-ink);background:#fff;cursor:pointer;
+    border:1px solid #A6A9AE;                 /* 官方=0.57dp #60646B；预览用 1px 同墨量浅灰，见页末说明 */
+    touch-action:none;transition:border-color .14s ease,color .14s ease,background .14s ease;
+    animation:chipIn .22s cubic-bezier(.2,.9,.3,1) both}
+  @keyframes chipIn{from{opacity:0;transform:translateY(4px) scale(.94)}to{opacity:1;transform:none}}
+  .chip.on{border-color:var(--chip-on);color:var(--chip-on)}
+  .chip.flash{background:#3482FF14}
+  .chipmenu{position:absolute;background:#fff;border-radius:12px;box-shadow:0 10px 26px rgba(20,24,34,.18);
+    z-index:11;overflow:hidden;opacity:0;transform:scale(.94);transform-origin:50% 0;pointer-events:none;
+    transition:opacity .13s ease,transform .15s cubic-bezier(.2,.9,.3,1)}
+  .chipmenu.on{opacity:1;transform:none;pointer-events:auto}
+  .chipmenu button{display:block;width:100%;text-align:left;font:inherit;font-size:14px;color:#000;
+    background:none;border:0;height:44px;padding:0 18px;white-space:nowrap;cursor:pointer}
+  .chipmenu button:hover{background:#f4f5f8}
+  .foot{height:var(--row-h);flex-shrink:0;border-top:1px solid var(--sep);display:flex;
+    align-items:center;padding:0 12.5px}
+  .dot{width:var(--dot);height:var(--dot);border-radius:50%;background:#F0F0F0;display:flex;
+    align-items:center;justify-content:center;cursor:pointer;transition:background .15s ease}
+  .dot.on{background:var(--chip-on)}
+  .dot svg{width:13px;height:13px;stroke:#fff;stroke-width:2.4;fill:none;stroke-linecap:round;
+    stroke-linejoin:round;opacity:0;transform:scale(.6);
+    transition:opacity .15s ease,transform .18s cubic-bezier(.2,1.4,.4,1)}
+  .dot.on svg{opacity:1;transform:scale(1)}
+  .dotlabel{font-size:14px;color:var(--chip-ink);margin-left:12.5px;cursor:pointer}
+  .copy{margin-left:auto;display:flex;align-items:center;gap:7px;cursor:pointer;font-size:13.7px;
+    color:var(--chip-ink);transition:opacity .15s,color .15s}
+  .copy[aria-disabled="true"]{cursor:default}   /* 官方这枚图标不置灰，保持常色 */
+  .copy.hit{color:var(--chip-on)}
+  .copy.hit .ico{stroke:var(--chip-on)}
+
+  .toast{position:absolute;left:50%;bottom:70px;transform:translate(-50%,8px);background:#1c1c1eeb;
+    color:#fff;font-size:12.5px;padding:9px 14px;border-radius:10px;z-index:20;opacity:0;
+    pointer-events:none;transition:opacity .16s ease,transform .2s cubic-bezier(.2,.9,.3,1);
+    box-shadow:0 8px 20px rgba(20,24,34,.24);white-space:nowrap;max-width:340px;
+    overflow:hidden;text-overflow:ellipsis}
+  .toast.on{opacity:1;transform:translate(-50%,0)}
+  .toast b{color:#8ec2ff}
+
+  /* ---------- 说明表 ---------- */
+  table{width:100%;border-collapse:collapse;margin-top:14px;font-size:13px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #eef0f5;vertical-align:top}
+  th{color:var(--sub);font-weight:600;font-size:12px}
+  td b{color:var(--ink)}
+  code{background:#f2f3f7;border-radius:4px;padding:1px 5px;font-size:12px}
+  .todo li{font-size:13px;color:var(--sub);line-height:1.85;margin-left:18px}
+  .todo b{color:var(--ink)}
+  .note{font-size:12px;color:var(--faint);line-height:1.75;margin-top:14px}
+  .btnrow{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+  .btnrow button{font:inherit;font-size:12.5px;color:var(--accent);background:#fff;
+    border:1px solid #0a84ff44;border-radius:999px;padding:7px 16px;cursor:pointer}
+  .btnrow button:hover{background:#0a84ff0f}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>剪贴板拆词 · 一版方案</h1>
+  <p class="lede">
+    整页只有<b>这一版</b>（上一版里的概念①②和呼出动效已删除）。它把两件事串成一条链：
+    <b>候选框里的剪贴板引用</b> ↔ <b>拆词面板</b>，两者<b>互通</b> —— 从候选框长按进编辑、再点「拆词」直接分词；
+    在拆词里挑好词，返回还是那个编辑框，稿子还在。面板顶部那条<b>原文行可以直接改字</b>，改完立刻重新分词。
+  </p>
+
+  <section>
+    <div class="head"><span class="num">唯一一版</span><h2>候选框 ⇄ 拆词 全链路</h2>
+      <span class="tag ok">可交互 · 可自动演示</span></div>
+    <p class="idea">
+      下面每一步都能自己点：<b>长按候选栏里的剪贴板引用</b> → 编辑本次引用（<b>取消 / 拆词 / 引用</b>）→
+      拆词面板 → 点词块或<b>手指拖过批量选</b> → 底行左「全选」、右「复制选中的词」→
+      顶部 ↶ 返回编辑框 → 「引用」上屏。
+    </p>
+    <div class="chain" id="chain">
+      <span data-step="0">候选框引用</span><em>→</em>
+      <span data-step="1">长按 · 编辑本次引用</span><em>→</em>
+      <span data-step="2">拆词面板（边改边拆）</span><em>→</em>
+      <span data-step="3">挑词上屏 / 复制</span><em>→</em>
+      <span data-step="4">返回编辑框 · 引用</span>
+    </div>
+
+    <div class="stage">
+      <div class="phone" id="phone">
+        <div class="statusbar">21:40</div>
+        <div class="host">
+          <div class="label">短信</div>
+          <div class="doc">会议记录：<span class="comp" id="hostComp"></span></div>
+        </div>
+        <div class="ime">
+          <!-- 键盘态（含候选栏剪贴板引用） -->
+          <div class="kbstate" id="kbState">
+            <div class="candbar">
+              <span class="c">明天</span>
+              <span class="ref" id="refChip" title="长按进入编辑引用">
+                <svg class="ico" viewBox="0 0 24 24"><rect x="3.5" y="9" width="12.5" height="11.5" rx="3"/><path d="M7.5 9V6.5a2 2 0 0 1 2-2h8.5a2 2 0 0 1 2 2V15a2 2 0 0 1-2 2h-2.5"/></svg>
+                <span>明天下午四点到会议室</span>
+              </span>
+            </div>
+            <div class="kb" id="kb"></div>
+          </div>
+          <!-- 拆词态 -->
+          <div class="split" id="splitState">
+            <div class="topbar">
+              <span class="title">拆词</span>
+              <span class="src"><input id="srcInput" spellcheck="false" aria-label="原文，可直接改字，改完自动重新拆词"></span>
+              <svg class="ico" id="splitBack" viewBox="0 0 24 24" role="button" aria-label="返回编辑引用"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>
+            </div>
+            <div class="cardwrap">
+              <div class="card">
+                <div class="grid" id="grid"><div class="flow" id="flow"></div></div>
+                <div class="foot">
+                  <span class="dot" id="dot"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>
+                  <span class="dotlabel" id="dotLabel">全选</span>
+                  <span class="copy" id="copyBtn" role="button" aria-disabled="true" title="复制选中的词">
+                    <svg class="ico" viewBox="0 0 24 24"><rect x="3.5" y="9" width="12.5" height="11.5" rx="3"/><path d="M7.5 9V6.5a2 2 0 0 1 2-2h8.5a2 2 0 0 1 2 2V15a2 2 0 0 1-2 2h-2.5"/></svg>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- 编辑本次引用 sheet -->
+          <div class="sheetwrap" id="sheetWrap"></div>
+          <div class="sheet" id="sheet">
+            <h4>编辑本次引用</h4>
+            <div class="txt" id="sheetText">明天下午四点到会议室</div>
+            <div class="acts">
+              <button id="btnCancel">取消</button>
+              <button class="splitbtn" id="btnSplit">拆词</button>
+              <button class="refbtn" id="btnRef">引用</button>
+            </div>
+          </div>
+          <div class="footer">
+            <span class="fbtn"><svg class="ico big" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h1M10 10h1M14 10h1M18 10h1M7 14h10"/></svg></span>
+            <span class="mid"></span>
+            <span class="fbtn"><svg class="ico big" viewBox="0 0 24 24"><rect x="7" y="3" width="14" height="14" rx="2.5"/><path d="M4 8v10.5A2.5 2.5 0 0 0 6.5 21H16"/></svg></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="btnrow">
+      <button id="playBtn">自动演示整条链</button>
+      <button id="resetBtn">重置</button>
+    </div>
+    <p class="note">
+      提示：① <b>长按</b>候选栏里那枚蓝色引用（按住约 0.5 秒）才会出编辑框；
+      ② 拆词面板里<b>按住词块横着划</b>可以整段批量选，<b>划在词块之间</b>才是滚动；
+      ③ 顶部原文行是<b>真的输入框</b>，删/加字会立刻重新分词。
+    </p>
+  </section>
+
+  <section>
+    <div class="head"><span class="num">明细</span><h2>这一版里各控件怎么工作</h2></div>
+    <table>
+      <tr><th style="width:150px">控件</th><th>行为</th></tr>
+      <tr><td><b>候选栏 · 剪贴板引用</b></td><td>第二候选位显示剪贴板内容（蓝色、带复制图标、带下划线）。
+        <b>点按</b>＝整段引用上屏；<b>长按</b>＝进入「编辑本次引用」。与拆词互通：编辑框里点「拆词」直接进拆词面板。</td></tr>
+      <tr><td><b>编辑本次引用</b></td><td>按钮从左到右 <b>取消 / 拆词 / 引用</b>。取消＝关掉不动正文；拆词＝拿框里文字进拆词；引用＝框里全文上屏。</td></tr>
+      <tr><td><b>原文行（拆词面板顶部）</b></td><td>可直接改字的输入行。改完<b>立刻重新分词</b>，词块按阅读顺序流动重排；
+        已选中的词按位置尽量保留，对不上的整段重排。它就是这一版的"键盘"，没有第二把键盘。</td></tr>
+      <tr><td><b>词块</b></td><td><b>点按</b>＝选中/取消，并同步到正文（composing，正文里带下划线）；<b>手指拖过</b>＝经过（含中间跨越）的词块整段一起选中；
+        起点已选中的话，拖过就是整段取消。</td></tr>
+      <tr><td><b>底行左 · 全选</b></td><td>派生状态：点满最后一个词块时才自动变勾。</td></tr>
+      <tr><td><b>底行右 · 复制</b></td><td>把<b>选中的词</b>按顺序连起来复制到剪贴板，并弹一条「已复制 N 个词：…」。未选中时置灰。</td></tr>
+      <tr><td><b>顶部 ↶ 返回</b></td><td>回到「编辑本次引用」，稿子保留；此时正文里那段 composing 会撤销，不会污染正文。</td></tr>
+    </table>
+    <p class="note">
+      令牌全部来自 K60 真机逐像素测量（1 CSS px = 1 dp）：词块高 30.6 / 最小宽 64.3 / 圆角 11.9 /
+      间距 11 / 字号 13.7 / 全选圆 22.3 / 卡片圆角 8.3 / 底行 44.3。
+      词块边线官方是 <b>0.57dp 的 #60646B 发丝线</b>；桌面预览在 1dppx 下画不出亚像素线，
+      故本页用 <b>1px + 同墨量的浅灰 #A6A9AE</b> 等效（真机实现仍按 0.57dp #60646B）。
+    </p>
+  </section>
+
+  <section>
+    <div class="head"><span class="num">待定</span><h2>还没定的两件事</h2></div>
+    <ul class="todo">
+      <li><b>拆词面板的编辑区太窄</b>（你说后面再做）：A 原文行加高到两行；B 点原文行弹大文本框；
+        C 进入编辑时整块换成键盘。</li>
+      <li><b>复制之后是否自动回列表</b>：现在留在面板继续挑；也可以复制完直接回剪贴板列表。</li>
+    </ul>
+  </section>
+</div>
+
+<script>
+/* ============ 词典式切分（演示用；真实现走 APK 内词库做最大概率 DP） ============ */
+const LEX = ["明天","下午","四点半","四点","三点","会议室","会议","记录","公司","三楼","楼上","部门",
+  "负责人","各","准备","准备好","材料","同步","本周","进度","季度","总结会","总结","请","到","在","开",
+  "和","与","及","的","了","是","有","我","你","他","我们","你们","他们","今天","早上","晚上","中午",
+  "这个","那个","可以","需要","进行","时间","地点","内容","问题","情况","工作","项目","方案","计划",
+  "确认","回复","收到","谢谢","麻烦","尽快","提前","如果","但是","所以","因为","而且","已经","还没",
+  "点","分","时","月","日","年","号","楼","室" ];
+const LEXSORTED = [...LEX].sort((a,b)=>b.length-a.length);
+function cut(text){
+  const out=[]; let i=0;
+  while(i<text.length){
+    const w=LEXSORTED.find(x=>text.startsWith(x,i));
+    if(w){ out.push(w); i+=w.length; continue; }
+    const ch=text[i];
+    if(/[0-9A-Za-z]/.test(ch)){                       /* 字母数字连续段不拆 */
+      let j=i; while(j<text.length && /[0-9A-Za-z]/.test(text[j])) j++;
+      out.push(text.slice(i,j)); i=j; continue;
+    }
+    out.push(ch); i++;                                 /* 标点、生字各自成块 */
+  }
+  return out;
+}
+
+const $ = s => document.querySelector(s);
+const el = (tag, cls) => { const n=document.createElement(tag); if(cls) n.className=cls; return n; };
+const phone=$('#phone'), kbState=$('#kbState'), splitState=$('#splitState');
+const flow=$('#flow'), grid=$('#grid'), hostComp=$('#hostComp'), srcInput=$('#srcInput');
+const dot=$('#dot'), dotLabel=$('#dotLabel'), copyBtn=$('#copyBtn'), refChip=$('#refChip');
+const sheet=$('#sheet'), sheetWrap=$('#sheetWrap'), sheetText=$('#sheetText');
+
+/* ============ 状态 ============ */
+const FULL = "明天下午四点到会议室";
+let homeText = FULL;         /* 进入拆词时的原文（返回编辑框要还原它） */
+let words = cut(FULL);
+let picked = new Set();      /* 选中的词块下标 */
+let timers = [], autoTimer = null;
+
+const later = (fn, ms) => timers.push(setTimeout(fn, ms));
+const clearTimers = () => { timers.forEach(clearTimeout); timers=[]; };
+let toastEl=null, toastT=0;
+function toast(html){
+  if(!toastEl){ toastEl=el('div','toast'); phone.appendChild(toastEl); }
+  toastEl.innerHTML=html; toastEl.classList.add('on');
+  clearTimeout(toastT); toastT=setTimeout(()=>toastEl.classList.remove('on'),1600);
+}
+function step(n){ [...document.querySelectorAll('#chain span')].forEach(s=>
+  s.classList.toggle('on', s.dataset.step===String(n))); }
+
+/* ============ 词块渲染 + FLIP 重排 ============ */
+function renderChips(newWords, keepTexts=[]){
+  const old=[...flow.children].map(c=>({t:c.textContent,on:c.classList.contains('on'),r:c.getBoundingClientRect()}));
+  flow.innerHTML='';
+  const next=newWords.map((w,i)=>{
+    const c=el('button','chip'); c.type='button'; c.textContent=w;
+    c.style.animationDelay=(i*10)+'ms';
+    flow.appendChild(c); return c;
+  });
+  /* 选中态：先按"文字"续上，续不上的按位置带 */
+  const pool=[...keepTexts];
+  next.forEach(c=>{
+    let k=pool.indexOf(c.textContent);
+    if(k<0) k=pool.findIndex(t=>c.textContent.startsWith(t)||t.startsWith(c.textContent));
+    if(k>=0){ c.classList.add('on'); pool.splice(k,1); }
+  });
+  /* 出现过的旧块：从旧位置滑到新位置 */
+  next.forEach(c=>{
+    const prev=old.find(o=>o.t===c.textContent); if(!prev) return;
+    const dst=c.getBoundingClientRect();
+    const dx=prev.r.left-dst.left, dy=prev.r.top-dst.top;
+    if(Math.abs(dx)<1&&Math.abs(dy)<1) return;
+    c.style.animation='none'; c.style.transition='none';
+    c.style.transform=`translate(${dx}px,${dy}px)`;
+    requestAnimationFrame(()=>{ c.style.transition='transform .22s cubic-bezier(.2,.9,.3,1)';
+      c.style.transform=''; });
+  });
+  return next;
+}
+function selectedWords(){ return [...flow.children].filter(c=>c.classList.contains('on')).map(c=>c.textContent); }
+function syncHost(){ const t=selectedWords().join(''); hostComp.textContent=t;
+  hostComp.classList.toggle('on',t.length>0); }
+function syncFoot(){
+  const cs=[...flow.children];
+  dot.classList.toggle('on', cs.length>0 && cs.every(c=>c.classList.contains('on')));
+  copyBtn.setAttribute('aria-disabled', cs.some(c=>c.classList.contains('on'))?'false':'true');
+}
+function paintAll(){ syncHost(); syncFoot(); }
+
+/* ============ 拖过即选 ============ */
+function chipAt(x,y){
+  const cs=[...flow.children];
+  for(const c of cs){ const r=c.getBoundingClientRect();
+    if(x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom) return c; }
+  let best=null,bd=1e9;                                   /* 落在空隙：取同一行最近的块 */
+  for(const c of cs){ const r=c.getBoundingClientRect();
+    if(y<r.top-4||y>r.bottom+4) continue;
+    const d = x<r.left ? r.left-x : (x>r.right ? x-r.right : 0);
+    if(d<bd){ bd=d; best=c; } }
+  return best;
+}
+function paintRange(a,b,val){
+  const cs=[...flow.children], i0=cs.indexOf(a), i1=cs.indexOf(b);
+  if(i0<0||i1<0) return;
+  for(let i=Math.min(i0,i1);i<=Math.max(i0,i1);i++) cs[i].classList.toggle('on',val);
+  paintAll();
+}
+function wireChips(){
+  [...flow.children].forEach(c=>{
+    c.addEventListener('pointerdown',e=>{
+      e.preventDefault();
+      const target=!c.classList.contains('on');
+      grid.style.cursor='crosshair';
+      paintRange(c,c,target);
+      const move=ev=>{ const t=chipAt(ev.clientX,ev.clientY); if(t) paintRange(c,t,target); };
+      const up=()=>{ window.removeEventListener('pointermove',move);
+        window.removeEventListener('pointerup',up);
+        window.removeEventListener('pointercancel',up);
+        grid.style.cursor=''; };
+      window.addEventListener('pointermove',move);
+      window.addEventListener('pointerup',up);
+      window.addEventListener('pointercancel',up);
+    });
+  });
+}
+
+/* ============ 三个状态 ============ */
+function showKeyboard(){ sheet.classList.remove('on'); sheetWrap.classList.remove('on');
+  splitState.classList.remove('on'); kbState.style.display='';
+  hostComp.textContent=''; hostComp.classList.remove('on'); step(0); }
+
+function showSheet(){ splitState.classList.remove('on'); kbState.style.display='';
+  step(1); sheetWrap.classList.add('on'); sheet.classList.add('on');
+  sheetText.textContent = homeText; hostComp.textContent=homeText; hostComp.classList.add('on'); }
+
+function showSplit(fromText){
+  clearTimers();
+  kbState.style.display='none';
+  sheet.classList.remove('on'); sheetWrap.classList.remove('on');
+  splitState.classList.add('on');
+  homeText = fromText ?? sheetText.textContent;
+  srcInput.value = homeText;
+  words = cut(homeText);
+  const keep = selectedWords();
+  renderChips(words, keep.length?keep:(picked.size?[...picked].map(i=>words[i]):[]));
+  picked = new Set();
+  wireChips(); paintAll(); step(2);
+}
+
+/* ============ 底行 / 返回 ============ */
+dot.addEventListener('click',()=>{
+  const cs=[...flow.children], on=!cs.every(c=>c.classList.contains('on'));
+  cs.forEach(c=>c.classList.toggle('on',on)); paintAll();
+});
+dotLabel.addEventListener('click',()=>dot.click());
+copyBtn.addEventListener('click',()=>{
+  const w=selectedWords();
+  if(!w.length){ toast('先选几个词再复制'); return; }          /* 官方图标不置灰，所以给个提示 */
+  const text=w.join('');
+  try{ navigator.clipboard && navigator.clipboard.writeText(text); }catch{}
+  copyBtn.classList.add('hit'); setTimeout(()=>copyBtn.classList.remove('hit'),300);
+  toast(`已复制 <b>${w.length}</b> 个词：${text.length>14?text.slice(0,14)+'…':text}`);
+  step(3);
+});
+$('#splitBack').addEventListener('click',()=>{ showSheet(); });   /* 互通：回到编辑引用，稿子保留 */
+
+/* 原文行：边改边拆 */
+srcInput.addEventListener('input',()=>{
+  const keep=selectedWords();
+  words=cut(srcInput.value);
+  renderChips(words, keep);
+  wireChips(); paintAll(); step(2);
+});
+
+/* ============ 候选框：点按引用 / 长按编辑 ============ */
+refChip.addEventListener('pointerdown',()=>{
+  refChip.classList.add('holding');
+  refChip._t=setTimeout(()=>{ refChip.classList.remove('holding'); clearTimers(); showSheet(); }, 520);
+});
+['pointerup','pointerleave','pointercancel'].forEach(ev=>refChip.addEventListener(ev,()=>{
+  clearTimeout(refChip._t); refChip.classList.remove('holding');
+}));
+refChip.addEventListener('click',()=>{                 /* 点按＝整段引用上屏 */
+  if(sheet.classList.contains('on')||splitState.classList.contains('on')) return;
+  hostComp.textContent=FULL; hostComp.classList.add('on'); step(4);
+});
+
+/* ============ sheet 三按钮 ============ */
+$('#btnCancel').addEventListener('click',()=>{ clearTimers(); showKeyboard(); });
+$('#btnSplit').addEventListener('click',()=>{ clearTimers(); showSplit(sheetText.textContent); });
+$('#btnRef').addEventListener('click',()=>{ clearTimers(); hostComp.textContent=sheetText.textContent;
+  hostComp.classList.add('on'); showKeyboard(); step(4);
+  window.setTimeout(()=>{ hostComp.textContent=sheetText.textContent; hostComp.classList.add('on'); },30); });
+
+/* ============ 键盘示意 ============ */
+(function buildKb(){
+  const kb=$('#kb');
+  const rows=[['q','w','e','r','t','y','u','i','o','p'],['a','s','d','f','g','h','j','k','l'],
+    ['SHIFT','z','x','c','v','b','n','m','BK']];
+  rows.forEach(r=>{
+    const row=el('div','krow');
+    r.forEach(k=>{
+      const key=el('div','key'+(k==='SHIFT'||k==='BK'?' f':''));
+      key.textContent = k==='SHIFT' ? '⇧' : k==='BK' ? '⌫' : k;
+      row.appendChild(key);
+    });
+    kb.appendChild(row);
+  });
+  const last=el('div','krow');
+  ['符','123','空格','。','中/英','↵'].forEach(k=>{
+    const key=el('div','key wide'); key.textContent=k; last.appendChild(key);
+  });
+  kb.appendChild(last);
+})();
+
+/* ============ 自动演示整条链 ============ */
+function auto(){
+  clearTimers();
+  showKeyboard();
+  later(()=>{ refChip.classList.add('holding'); step(0); }, 300);
+  later(()=>{ refChip.classList.remove('holding'); showSheet(); }, 1100);
+  later(()=>{ showSplit(sheetText.textContent); step(2); }, 2300);
+  later(()=>{ step(2); const cs=[...flow.children];
+    if(cs[0]) cs[0].dispatchEvent(new PointerEvent('pointerdown',{bubbles:true})); }, 3100);
+  later(()=>{ const cs=[...flow.children];
+    const a=cs[1], b=cs[3]; if(!a||!b) return;                   /* 拖过即选：1→3 */
+    const ra=a.getBoundingClientRect(), rb=b.getBoundingClientRect();
+    a.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:ra.left+6,clientY:ra.top+ra.height/2}));
+    window.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:rb.left+6,clientY:rb.top+rb.height/2}));
+    window.dispatchEvent(new PointerEvent('pointerup',{bubbles:true})); }, 4000);
+  later(()=>{ copyBtn.click(); step(3); }, 5200);
+  later(()=>{ showSheet(); step(4); }, 6600);
+  later(()=>{ $('#btnRef').click(); }, 7600);
+  autoTimer=setTimeout(auto, 9800);
+}
+$('#playBtn').addEventListener('click',()=>{ clearTimeout(autoTimer); auto(); });
+$('#resetBtn').addEventListener('click',()=>{ clearTimeout(autoTimer); clearTimers();
+  picked=new Set(); showKeyboard(); });
+
+/* 离屏暂停：省 CPU，也避免任何动效副作用 */
+const onScreen=new Map();
+const io=new IntersectionObserver(es=>es.forEach(e=>onScreen.set(e.target,e.isIntersecting)),{threshold:.2});
+io.observe(phone);
+/* 首次进入视野再开演 */
+const boot=setInterval(()=>{
+  if(onScreen.get(phone)){ clearInterval(boot); auto(); }
+},400);
+</script>
+</body>
+</html>

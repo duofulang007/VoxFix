@@ -24,7 +24,7 @@ async function check(name,run){
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await page.waitForFunction(()=>typeof voxfixReset==='function'&&document.querySelector('#pinyin-status').textContent.includes('已就绪'));
     const key=(action,value)=>page.locator(`#keyboard [data-action="${action}"]${value===undefined?'':`[data-value="${value}"]`}`).first();
-    const click=(action,value)=>key(action,value).click();
+    const click=async(action,value)=>{await key(action,value).click();await page.locator('.clip-management-backdrop.closing').waitFor({state:'detached'});};
     const local=async()=>{await click('clipboard');await click('clip-tab','phrases');await click('snippet-add');await page.setViewportSize({width:393,height:await page.locator('#keyboard').evaluate(e=>Math.ceil(e.getBoundingClientRect().height))});};
     const touch={async hold(box,ms){const session=await page.context().newCDPSession(page);const point={x:box.x+box.width/2,y:box.y+box.height/2};await session.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[point]});await page.waitForTimeout(ms);await session.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await page.waitForTimeout(40);await session.detach();}};
     await run({page,key,click,local,touch});assert.deepEqual(errors,[]);console.log('PASS '+name);
@@ -62,7 +62,7 @@ try{
   });
   await check('local edit clears stale composition',async({page,click,local})=>{await local();await click('letter','N');await click('letter','I');await page.locator('#snippet-content').fill('replacement');assert.equal(await page.locator('[data-action="candidate"]').count(),0);assert.equal(await page.locator('#snippet-content').inputValue(),'replacement');});
   await check('draft survives reopen and input reset',async({page,click,local})=>{await local();await page.locator('#snippet-content').fill('unsaved draft');await click('clipboard');await click('clip-tab','phrases');await click('snippet-add');assert.equal(await page.locator('#snippet-content').inputValue(),'unsaved draft');await page.evaluate(()=>voxfixReset());await local();assert.equal(await page.locator('#snippet-content').inputValue(),'unsaved draft');});
-  await check('clipboard hold keeps content identity',async({page,click})=>{await click('clipboard');const r=await page.locator('.clip-text').first().boundingBox();await page.mouse.move(r.x+r.width/2,r.y+r.height/2);await page.mouse.down();await page.evaluate(()=>voxfixClipboard('new clip','a'.repeat(64)));await page.waitForTimeout(550);await page.mouse.up();assert.equal(await page.locator('.clip-menu-title').textContent(),'clip-0');});
+  await check('clipboard hold keeps content identity',async({page,click})=>{await click('clipboard');const r=await page.locator('.clip-text').first().boundingBox();await page.mouse.move(r.x+r.width/2,r.y+r.height/2);await page.mouse.down();await page.evaluate(()=>voxfixClipboard('new clip','a'.repeat(64)));await page.waitForTimeout(550);await page.mouse.up();assert.equal(await page.locator('.clip-item-menu').getAttribute('aria-label'),'clip-0');});
   await check('native voice hides without browser snapshot',async({page,key})=>{const r=await key('space').boundingBox();await page.mouse.move(r.x+r.width/2,r.y+r.height/2);await page.mouse.down();await page.waitForTimeout(500);await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));});await page.mouse.up();assert.equal(await page.locator('.voice-panel').count(),0);});
   await check('local voice is isolated and cancellation restores selection',async({page,key,local})=>{await local();await page.locator('#snippet-content').fill('前原文后');await page.locator('#snippet-content').evaluate(e=>e.setSelectionRange(1,3));const r=await key('space').boundingBox();await page.mouse.move(r.x+r.width/2,r.y+r.height/2);await page.mouse.down();await page.waitForTimeout(500);assert(await page.evaluate(()=>calls.some(c=>c[0]==='startLocalVoice')));await page.evaluate(()=>voxfixVoiceText('你好',false));assert.equal(await page.locator('#snippet-content').inputValue(),'前你好后');await page.mouse.move(r.x+r.width/2,r.y-70);await page.mouse.up();assert.equal(await page.locator('#snippet-content').inputValue(),'前原文后');assert(!(await page.evaluate(()=>calls.some(c=>c[0]==='commit'||c[0]==='compose'))));});
   await check('scroll stays per panel',async({page,click})=>{await click('numbers');await page.locator('.number-strip').evaluate(e=>e.scrollTop=130);await page.locator('.number-strip [data-value="%"]') .click();assert.equal(await page.locator('.number-strip').evaluate(e=>e.scrollTop),130);await click('symbols');await click('symbol-category','中文');await click('symbol-lock');await page.locator('.symbol-grid').evaluate(e=>e.scrollTop=200);await page.locator('.symbol-grid button').last().click();assert((await page.locator('.symbol-grid').evaluate(e=>e.scrollTop))>0);await page.evaluate(()=>voxfixReset());await click('clipboard');await page.locator('.clip-list').evaluate(e=>e.scrollTop=400);await click('clip-tab','phrases');await click('clip-tab','clipboard');assert.equal(await page.locator('.clip-list').evaluate(e=>e.scrollTop),400);});
@@ -218,7 +218,7 @@ try{
     assert(await page.locator('[data-action="snippet-add"]').count(),'管理菜单应含添加内容');
     assert(await page.locator('[data-action="system-paste"]').count(),'剪贴板页应含从系统剪贴板导入');
     assert(await page.locator('[data-action="clear-snippets"]').count(),'应含清空列表');
-    await click('clip-close');
+    await page.keyboard.press('Escape');await page.locator('.clip-management-backdrop').waitFor({state:'detached'});
     await click('clip-tab','phrases');
     assert(await page.locator('#keyboard [data-action="clip-manage-menu"]').isVisible(),'常用语页也应有「更多管理操作」入口');
     assert(await page.locator('#keyboard [data-action="clip-group-add"]').isVisible(),'分组行里应有新分组入口');
@@ -232,13 +232,7 @@ try{
     assert.equal(await page.locator('[data-action="association-candidate"]').count(),0,'文本删完后联想候选必须清空');
     assert.equal(await page.locator('.candidate-bar').count(),0);
   });
-  await check('clipboard content can join a sortable toolbar',async({page,click})=>{
-    await click('clipboard');
-    const box=await page.locator('.clip-text').first().boundingBox();
-    await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();await page.waitForTimeout(620);await page.mouse.up();
-    await click('toolbar-add');await click('return');
-    assert.equal(await page.locator('.toolbar-custom-btn').count(),1,'自定义项应出现在工具栏');
-    assert.equal(await page.locator('.toolbar-custom-btn').textContent(),'clip');
+  await check('existing toolbar remains sortable',async({page,click})=>{
     const order=nodes=>nodes.map(n=>n.dataset.action==='toolbar-custom'?n.dataset.value:n.dataset.action);
     const toolbar=()=>page.locator('.toolbar [data-action]:not(.tb-remove)');
     const before=await toolbar().evaluateAll(order);
@@ -277,25 +271,25 @@ try{
     const inserts=await page.evaluate(v=>calls.filter(c=>c[0]==='commit'&&c[1]===v).length,value);
     assert(inserts>=3,'长按表情应连续输入多个，实际 '+inserts);
   });
-  await check('long press a candidate adds it to phrases',async({page,click,touch})=>{
+  await check('long press an ordinary candidate does not silently save phrases',async({page,click,touch})=>{
     for(const l of 'NI')await click('letter',l);
     const target=page.locator('.candidate-visible button').first();
     const word=await target.getAttribute('data-value'),box=await target.boundingBox();
     await touch.hold(box,600);
     await page.evaluate(()=>voxfixReset());
     await click('clipboard');await click('clip-tab','phrases');
-    assert((await page.locator('.clip-text').allTextContents()).includes(word),'长按候选词应加入常用语：'+word);
+    assert(!(await page.locator('.clip-text').allTextContents()).includes(word),'普通候选长按不应自动存入常用语：'+word);
   });
   // ---- 设计收敛守卫：页头只留官方的三件套形状，浮层只有一种 sheet ----
   await check('panel header keeps the three-shape layout',async({page,click})=>{
     await click('clipboard');
-    assert.equal(await page.locator('.panel-title .ctl').count(),2,'剪贴板页应只有返回与更多管理操作两个圆形图标钮');
+    assert.equal(await page.locator('.panel-title .ctl').count(),3,'剪贴板页保留返回、搜索与更多管理操作三个圆形图标钮');
     assert.equal(await page.locator('.panel-title .tabs-pill button').count(),2,'分段控件应仍有两个页签');
-    assert.equal(await page.locator('.panel-title button').count(),4,'剪贴板页页头＝返回＋两页签＋更多');
+    assert.equal(await page.locator('.panel-title button').count(),5,'剪贴板页页头＝返回＋两页签＋搜索＋更多');
     assert.equal(await page.locator('.panel-title .manage-open,.panel-title .clip-more,.panel-title .group-add-title,.panel-title .manage-delete,.clip-manage-count').count(),0,'页头不应再有文字按钮');
     assert.equal(await page.locator('.tabs-pill button.selected').textContent(),'剪贴板');
     await click('clip-tab','phrases');
-    assert.equal(await page.locator('.panel-title button').count(),5,'常用语页＝返回＋两页签＋添加常用语＋更多');
+    assert.equal(await page.locator('.panel-title button').count(),6,'常用语页＝返回＋两页签＋添加常用语＋搜索＋更多');
     assert.equal(await page.locator('.group-pill.group-add').count(),1,'分组行末尾应保留新建分组');
     assert.equal(await page.locator('.group-pill.group-add svg').count(),1,'新建分组应是圆形图标钮而不是文字 pill');
     await click('clip-tab','clipboard');
@@ -308,26 +302,26 @@ try{
     await click('clip-manage');
     assert.equal(await page.locator('.panel-title .title-note').count(),0);
   });
-  await check('every overlay reuses one bottom sheet',async({page,click})=>{
+  await check('management floats from more while confirmation retains the bottom sheet',async({page,click})=>{
     await click('clipboard');
     await click('clip-manage-menu');
     assert.equal(await page.locator('.clip-menu-sheet').count(),1);
-    assert.equal(await page.locator('.clip-menu-title').textContent(),'管理内容');
+    assert.equal(await page.locator('.clip-management-menu').getAttribute('role'),'menu');
     assert.equal(await page.locator('.clip-menu-sheet > button.row').count(),4,'管理菜单＝四行文字');
-    assert.equal(await page.locator('.clip-menu-sheet > button.clip-menu-cancel').count(),1);
+    assert.equal(await page.locator('.clip-management-menu .clip-menu-title,.clip-management-menu .clip-menu-cancel').count(),0);
     await click('clear-snippets');
     assert.equal(await page.locator('.clip-menu-sheet > [data-action="clip-confirm-ok"]').count(),1,'确认层复用同一套 sheet');
     assert.equal(await page.locator('.clip-menu-title').textContent(),'确定清空剪贴板的所有内容？');
     await page.locator('.clip-menu-sheet > button.clip-menu-cancel').click();
     assert.equal(await page.locator('.clip-menu-sheet').count(),0);
     await page.locator('.clip-list').click({button:'right',position:{x:3,y:3}});
-    assert.equal(await page.locator('.clip-menu-title').textContent(),'管理内容','长按空白处落到同一个 sheet');
-    await click('clip-close');
+    assert.equal(await page.locator('.clip-management-menu').count(),1,'长按空白处复用三个点的浮动菜单');
+    await page.keyboard.press('Escape');await page.locator('.clip-management-backdrop').waitFor({state:'detached'});
     await click('clip-tab','phrases');
     await click('clip-manage-menu');
-    assert.equal(await page.locator('.clip-menu-sheet > button.row').count(),3,'常用语页管理菜单＝三行文字');
+    assert.equal(await page.locator('.clip-menu-sheet > button.row').count(),1,'常用语菜单只保留清空，添加和分组沿用直接入口');
     assert.equal(await page.locator('.clip-menu-sheet > button.danger').textContent(),'清空这个分组的常用语','危险项用统一样式');
-    await click('clip-close');
+    await page.keyboard.press('Escape');await page.locator('.clip-management-backdrop').waitFor({state:'detached'});
   });
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 assert.deepEqual(failures,[]);

@@ -22,8 +22,8 @@ try{
   await page.waitForFunction(()=>document.querySelector('#pinyin-status').textContent.includes('已就绪'));
   await page.locator('#editor').pressSequentially('nin');
   const metrics=await page.locator('.candidate-visible').evaluate(row=>({
-    words:row.children.length,scrollWidth:row.scrollWidth,width:row.clientWidth,
-    buttons:[...row.children].map(b=>({text:b.textContent,width:b.clientWidth,content:b.scrollWidth,ellipsis:getComputedStyle(b).textOverflow}))
+    words:row.querySelectorAll('[data-action="candidate"]:not(.clipboard-displaced)').length,scrollWidth:row.scrollWidth,width:row.clientWidth,
+    buttons:[...row.querySelectorAll('[data-action="candidate"]:not(.clipboard-displaced)')].map(b=>({text:b.textContent,width:b.clientWidth,content:b.scrollWidth,ellipsis:getComputedStyle(b).textOverflow}))
   }));
   assert(metrics.buttons.every(b=>b.ellipsis!=='ellipsis'&&b.width>=b.content),'candidate text must be fully displayed');
   assert.equal(metrics.words,words.length,'all available candidates must be reachable in the strip');

@@ -30,7 +30,7 @@ Android WebView 在**窗口焦点失而复得**而文档里没有焦点元素时
 `preview/style.css` 一行：
 
 ```css
-#keyboard :focus-visible{outline:none}
+#keyboard :focus-visible,#ime-local-editor :focus-visible{outline:none}
 ```
 
 键盘内一律不画浏览器焦点框；键盘外的设置区不受影响（焦点框保留）。`键盘试用页.html` 已重新打包。
@@ -46,5 +46,7 @@ Android WebView 在**窗口焦点失而复得**而文档里没有焦点元素时
   - 对照图：`.android/focus-ring-device-ab.png`（上＝模拟修复前，下＝修复后），`.android/focus-ring-ab.png`（浏览器同尺度对照）。
 
 ## 边界
+
+2026-10-16 补充：分组名称输入框位于独立的 `#ime-local-editor` 中，原先未被键盘内规则覆盖，程序聚焦时出现蓝色外框。规则现覆盖该辅助编辑区，保留原有浅灰边框及输入焦点。焦点框检查、18项交互回归和APK构建通过，包内样式与源码一致；用户随后要求安装，已保留数据覆盖安装，37个备份文件前后逐字节一致；未注入触摸或打字，真人效果待验。渲染图在忽略目录 `.android/group-editor-no-outline.png`。
 
 只封「可见外框」。DOM 焦点本身仍可能落在工具栏第一个按钮上 —— 不影响输入（键盘的按压/选中态只由 `.pressed`/`.selected` 表达，没有任何 `:focus` 样式），所以没有加 blur 守卫，避免与「长按剪贴板后给 sheet 按钮对焦」「滑轨/候选条用 tabindex 支持方向键」这些真实对焦互相干扰。

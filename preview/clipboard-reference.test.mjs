@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {clipboardShortLimit,settingsFrom} from './core.mjs';
+import {setPinyinData,clipboardMatch} from './pinyin.mjs';
+setPinyinData(JSON.parse(readFileSync(new URL('./pinyin-lite.json',import.meta.url),'utf8')));
+assert.equal(clipboardShortLimit,32);
+const text='明天下午三点到会议室';
+for(const raw of ['mtxw','mingtian','mingtxw','mt','ming'])assert.equal(clipboardMatch(raw,text),text,raw);
+for(const raw of ['m','nihao','<script>'])assert.equal(clipboardMatch(raw,text),'',raw);
+assert.equal(clipboardMatch('mtxw',text.repeat(4)),text.repeat(4),'Long clips are searchable');
+assert.equal(clipboardMatch('mtxw',text+'\n其他内容'),text+'\n其他内容');
+assert.equal(clipboardMatch('yanzheng','验证码明天下午'),'');
+assert.equal(clipboardMatch('mingtian','明天密码是abc'),'');
+assert.equal(clipboardMatch('mingtian','明天联系13812345678'),'');
+assert.equal(clipboardMatch('mingtian','明天打开https://example.com'),'');
+assert.equal(settingsFrom({clipboardMatch:false}).clipboardMatch,false);
+console.log('PASS: pinyin references, long-text search, sensitive patterns and settings');

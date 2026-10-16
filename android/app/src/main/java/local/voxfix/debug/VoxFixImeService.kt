@@ -79,8 +79,11 @@ class VoxFixImeService : InputMethodService() {
     private var selectedBeforeVoice = ""
     private var streamedText = ""
     private var localVoice = false
+    private var searchInputActive = false
     private val ownSelections = mutableSetOf<Int>()
     private var composingStart: Int? = null
+    private var clipboardSplit: ClipboardSplitState? = null
+    private var clipboardSplitId = 0
     private var selectionStart = 0
     private var selectionEnd = 0
     private val selectionDrag = SelectionDrag()
@@ -336,6 +339,14 @@ class VoxFixImeService : InputMethodService() {
 
     private fun script(code: String) { web?.evaluateJavascript(code, null) }
     private fun voiceDone(message: String = "") { script("globalThis.voxfixVoiceDone?.(${JSONObject.quote(message)})") }
+    private fun setSearchInputActive(active: Boolean) {
+        searchInputActive = active
+        if (android.os.Build.VERSION.SDK_INT >= 31) currentInputConnection?.setImeConsumesInput(active)
+    }
+    private fun focusHostEditor(selectionChanged: Boolean = false) {
+        setSearchInputActive(false)
+        script("globalThis.voxfixHostFocus?.($selectionChanged)")
+    }
     private fun resetKeyboard() {
         annotation.hide()
         script("globalThis.voxfixReset?.()")
@@ -344,6 +355,7 @@ class VoxFixImeService : InputMethodService() {
     private fun clearComposition(keepEnglish: Boolean = false) { if (!keepEnglish) composingStart = null; script("globalThis.voxfixClearComposition?.($keepEnglish)") }
     private fun commitInputText(value: String): Boolean {
         val connection = currentInputConnection ?: return false
+        if (searchInputActive) ownSelectionUntil = SystemClock.uptimeMillis() + 250
         val extracted = connection.getExtractedText(ExtractedTextRequest().apply { hintMaxChars = 1 }, 0)
         val end = composingStart?.plus(value.length) ?: extracted?.let { it.startOffset + minOf(it.selectionStart, it.selectionEnd) + value.length }
         if (!connection.commitText(value, 1)) return false
@@ -352,17 +364,35 @@ class VoxFixImeService : InputMethodService() {
         if (end != null) { if (ownSelections.size >= 100) ownSelections.clear(); ownSelections.add(end) }
         return true
     }
+    private fun splitMatches(connection: InputConnection, state: ClipboardSplitState): Boolean {
+        val extracted = connection.getExtractedText(ExtractedTextRequest().apply { hintMaxChars = 1 }, 0) ?: return false
+        return state.matches(inputGeneration, extracted.startOffset + extracted.selectionStart,
+            extracted.startOffset + extracted.selectionEnd, connection.getSelectedText(0)?.toString().orEmpty(),
+            state.text?.let { connection.getTextBeforeCursor(it.length, 0)?.toString().orEmpty() }.orEmpty())
+    }
+    private fun finishClipboardSplit(): Boolean {
+        val state = clipboardSplit ?: return false
+        clipboardSplit = null
+        val connection = currentInputConnection ?: return false
+        if (!splitMatches(connection, state)) return false
+        composingStart = null
+        return connection.finishComposingText()
+    }
     private fun startKeyboard(info: EditorInfo, restarting: Boolean) { script("globalThis.voxfixStartInput?.(${info.inputType},$restarting,${info.imeOptions})") }
     private fun updateClipboard(explicit: Boolean = false) {
         val clipboard = getSystemService(ClipboardManager::class.java)
-        val text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString().orEmpty().take(10000)
-        val signature = java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+        val clip = clipboard.primaryClip
+        val text = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString().orEmpty().take(10000)
+        val eventKey = "$text\u0000${clip?.description?.timestamp ?: 0L}"
+        val signature = java.security.MessageDigest.getInstance("SHA-256").digest(eventKey.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
         script("globalThis.voxfixClipboard?.(${JSONObject.quote(text)},${JSONObject.quote(signature)},$explicit)")
     }
 
     override fun onStartInput(info: EditorInfo, restarting: Boolean) {
         super.onStartInput(info, restarting)
+        clipboardSplit = null
         if (!restarting) {
+            setSearchInputActive(false)
             selectionNavigation?.cancel()
             selectionDrag.clear(); selectionLockedAnchor = -1; selectionGestureActive = false
             annotation.hide()
@@ -409,6 +439,12 @@ class VoxFixImeService : InputMethodService() {
         }
         updateClipboard()
         anchorFrames = 0; anchorAttempt = 0; requestCursorUpdates()
+    }
+
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+    override fun onViewClicked(focusChanged: Boolean) {
+        super.onViewClicked(focusChanged)
+        if (shown && searchInputActive) focusHostEditor()
     }
 
     /**
@@ -556,6 +592,8 @@ class VoxFixImeService : InputMethodService() {
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        setSearchInputActive(false)
+        finishClipboardSplit()
         hiddenSelection.cancel()
         selectionNavigation?.cancel()
         selectionDrag.clear(); selectionLockedAnchor = -1; selectionGestureActive = false
@@ -570,6 +608,8 @@ class VoxFixImeService : InputMethodService() {
     }
 
     override fun onFinishInput() {
+        setSearchInputActive(false)
+        finishClipboardSplit()
         hiddenSelection.cancel()
         selectionNavigation?.cancel()
         selectionDrag.clear(); selectionLockedAnchor = -1; selectionGestureActive = false
@@ -586,6 +626,17 @@ class VoxFixImeService : InputMethodService() {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
         selectionStart = newSelStart
         selectionEnd = newSelEnd
+        if (shown && searchInputActive && candidatesStart < 0 && newSelStart >= 0 && newSelEnd >= 0 &&
+            (oldSelStart != newSelStart || oldSelEnd != newSelEnd) &&
+            !selectionGestureActive && SystemClock.uptimeMillis() > ownSelectionUntil &&
+            !(newSelStart == newSelEnd && ownSelections.contains(newSelEnd))) focusHostEditor(true)
+        clipboardSplit?.let { state ->
+            val connection = currentInputConnection
+            if (SystemClock.uptimeMillis() > ownSelectionUntil && (connection == null || !splitMatches(connection, state))) {
+                clipboardSplit = null
+                script("globalThis.voxfixSplitInvalidated?.()")
+            }
+        }
         if (selectionNavigation?.observe(newSelStart, newSelEnd) == true) return
         val hostWord = shown && !selectionGestureActive && candidatesStart < 0 &&
             SystemClock.uptimeMillis() > ownSelectionUntil &&
@@ -775,6 +826,10 @@ class VoxFixImeService : InputMethodService() {
     }
 
     inner class KeyboardBridge(private val owner: WebView) {
+        @JavascriptInterface fun searchFocus(active: Boolean) {
+            val generation = inputGeneration
+            main.post { if (web === owner && shown && generation == inputGeneration) setSearchInputActive(active) }
+        }
         private fun inputReply(action: () -> String): String {
             val generation = inputGeneration
             val result = FutureTask {
@@ -805,8 +860,53 @@ class VoxFixImeService : InputMethodService() {
             if (!value.matches(Regex("[a-z']{1,100}")) || word.isEmpty() || word.length > 200) return "{}"
             return inputReply { pinyin?.choose(value, word, learn, ::commitInputText) ?: "{}" }
         }
+        @JavascriptInterface fun pinyinChooseLocal(value: String, word: String): String {
+            if (web !== owner || !value.matches(Regex("[a-z']{1,100}")) || word.isEmpty() || word.length > 200) return "{}"
+            return try { pinyin?.choose(value, word, false) { true } ?: "{}" }
+            catch (error: Exception) { Log.e("VoxFix", "IME_LOCAL_PINYIN_CHOOSE_FAILED", error); "{}" }
+        }
         @JavascriptInterface fun commitAccepted(value: String): String = if (value.length > 10000) "{}"
             else inputReply { JSONObject().put("committed", commitInputText(value)).toString() }
+        @JavascriptInterface fun splitBegin(): String = inputReply {
+            val connection = currentInputConnection ?: return@inputReply "{}"
+            finishClipboardSplit()
+            val extracted = connection.getExtractedText(ExtractedTextRequest().apply { hintMaxChars = 1 }, 0) ?: return@inputReply "{}"
+            val start = extracted.startOffset + minOf(extracted.selectionStart, extracted.selectionEnd)
+            val end = extracted.startOffset + maxOf(extracted.selectionStart, extracted.selectionEnd)
+            val original = connection.getSelectedText(0)?.toString().orEmpty()
+            if (start < 0 || original.length != end - start || original.length > 10000) return@inputReply "{}"
+            clipboardSplit = ClipboardSplitState(++clipboardSplitId, inputGeneration, start, original)
+            JSONObject().put("session", clipboardSplitId).toString()
+        }
+        @JavascriptInterface fun splitCompose(id: Int, value: String): String = if (value.length > 10000) "{}" else inputReply {
+            val state = clipboardSplit ?: return@inputReply "{}"
+            val connection = currentInputConnection ?: return@inputReply "{}"
+            if (state.id != id || !splitMatches(connection, state)) { clipboardSplit = null; return@inputReply "{}" }
+            ownSelectionUntil = SystemClock.uptimeMillis() + 250
+            hostSelectionOpen?.let { main.removeCallbacks(it) }; hostSelectionOpen = null
+            selectionDrag.clear(); selectionLockedAnchor = -1; annotation.hide()
+            val oldStart = if (state.text == null) state.start else state.end
+            val oldEnd = state.end
+            var updated = false
+            connection.beginBatchEdit()
+            try {
+                connection.finishComposingText()
+                if (connection.setSelection(state.start, state.end)) {
+                    updated = connection.setComposingText(value.ifEmpty { state.original }, 1)
+                    if (updated && value.isEmpty()) {
+                        connection.finishComposingText()
+                        updated = connection.setSelection(state.start, state.start + state.original.length)
+                    }
+                    if (!updated) connection.setSelection(oldStart, oldEnd)
+                }
+            } finally { connection.endBatchEdit() }
+            if (updated) { state.accepted(value); composingStart = value.takeIf { it.isNotEmpty() }?.let { state.start } }
+            else clipboardSplit = null
+            JSONObject().put("updated", updated).toString()
+        }
+        @JavascriptInterface fun splitFinish(id: Int): String = inputReply {
+            JSONObject().put("finished", clipboardSplit?.id == id && finishClipboardSplit()).toString()
+        }
         @JavascriptInterface fun pinyinClearLearning(): String = inputReply {
             val ready = pinyin ?: return@inputReply "{}"
             ready.clearLearning()
@@ -1127,6 +1227,7 @@ class VoxFixImeService : InputMethodService() {
     }
 
     override fun onDestroy() {
+        setSearchInputActive(false)
         destroyed = true
         getSystemService(ClipboardManager::class.java).removePrimaryClipChangedListener(clipboardListener)
         main.removeCallbacks(releaseVoice)

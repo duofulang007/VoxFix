@@ -25,14 +25,14 @@
         <details><summary>长句与领域词库</summary><div id="phrase-options" class="feature-toggles"></div><label class="field">搜索常用语与已启用长句<input id="phrase-search" maxlength="100" placeholder="例如：千里之行"></label><div id="phrase-results" class="quick-pages"></div></details>
         <h2>离线整理文字</h2><p id="polish-status" class="note" role="status">正在检查离线润色模型…</p><div class="small-actions"><button id="polish-text" disabled>整理口语</button><button id="undo-polish" disabled>撤销润色</button></div><p class="note">保留原意和语气，整理重复、标点与段落。先预览，再选择替换；不会自动改写流式识别。</p>
         <div class="small-actions"><button id="clear-input">清空试用文字</button><button id="compare-toggle" aria-pressed="false">对照录屏</button></div>
-        <details class="coverage"><summary>本版功能范围</summary><p>9 键拼音、26 键拼音、全屏单字手写、离线语音；数字、符号、剪贴板／常用语、表情与颜文字、文字编辑和布局设置。</p><p>完整讯飞设置页与在线表情商店不在当前范围。</p></details>
+        <details class="coverage"><summary>本版功能范围</summary><p>9 键拼音、26 键拼音、离线语音；数字、符号、剪贴板／常用语、表情与颜文字、文字编辑和布局设置。</p><p>完整讯飞设置页与在线表情商店不在当前范围。</p></details>
       </section>
       <section id="custom-panel" hidden>
         <p class="note">键盘尺寸、按键大小与背景已按讯飞小米版固定。</p>
         <h2>保留哪些入口</h2><p class="note">重复入口先保留。取消勾选即可隐藏，随时能加回来。</p><div id="feature-toggles" class="feature-toggles"></div>
         <h2>剪贴板</h2><p class="note">对齐官方小米版：可关闭历史记录；开启后复制内容会出现在候选栏，一键上屏。</p><div id="clipboard-toggles" class="feature-toggles"></div>
         <h2>常用按键</h2><div class="punctuation"><label class="field">逗号键<input id="comma" maxlength="8"></label><label class="field">句号键<input id="period" maxlength="8"></label></div>
-        <h2>输入习惯记忆</h2><label class="demo-toggle"><input type="checkbox" id="remember-input" checked>记住选词习惯</label><p id="learning-status" class="note">只在当前浏览器保存选词次数，不上传。</p><button id="clear-learning" class="clear-learning">清空选词记忆</button>
+        <h2>输入习惯记忆</h2><label class="demo-toggle"><input type="checkbox" id="remember-input" checked>记住选词习惯</label><p id="learning-status" class="note">记住常选词与连续输入的短语，支持简拼和接续联想，只保存在本机。</p><button id="clear-learning" class="clear-learning">清空选词记忆</button>
         <div class="config-actions"><button id="export">导出功能设置</button><button id="import">导入功能设置</button><input type="file" id="config-file" accept=".json,application/json" hidden><button id="reset">恢复默认功能设置</button></div><p class="note">功能设置自动保存；键盘尺寸保持固定，试用文字不会保存。</p>
       </section>
       <p id="feedback" class="feedback" role="status" aria-live="polite">默认布局保留了录屏中的重复入口。</p>
@@ -53,7 +53,7 @@
   </main>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <dialog id="snippet-dialog" class="snippet-dialog">
-    <form id="snippet-form"><h2 id="snippet-title">添加剪贴板内容</h2><label class="field">内容<textarea id="snippet-content" rows="5" maxlength="10000" required></textarea></label><p class="note">保存到当前浏览器，可随时编辑或删除。</p><p id="snippet-error" role="alert"></p><div class="dialog-actions"><button type="button" id="snippet-cancel">取消</button><button type="submit">保存</button></div></form>
+    <form id="snippet-form"><h2 id="snippet-title">添加剪贴板内容</h2><div class="snippet-frame"><label class="field">内容<textarea id="snippet-content" aria-labelledby="snippet-title" rows="5" maxlength="10000" required></textarea></label><div class="dialog-actions"><button type="button" id="snippet-cancel">取消</button><button type="button" id="snippet-split">拆词</button><button type="submit">保存</button></div></div><p class="note">保存到当前浏览器，可随时编辑或删除。</p><p id="snippet-error" role="alert"></p></form>
   </dialog>
   <dialog id="polish-dialog" class="snippet-dialog">
     <h2>离线整理 · 原文与结果</h2><label class="field">原文<textarea id="polish-original" rows="5" readonly></textarea></label><label class="field">整理结果<textarea id="polish-preview" rows="7" readonly></textarea></label><p id="polish-message" role="status"></p><div class="dialog-actions"><button id="polish-close">关闭</button><button id="polish-apply" disabled>使用整理结果</button></div>

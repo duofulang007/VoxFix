@@ -3,17 +3,28 @@ html.native-ime, .native-ime body {margin:0;padding:0;background:#edeff2;overflo
 .native-ime #phone {width:100%;height:auto;min-height:100vh;border:0;border-radius:0;box-shadow:none;margin:0;overflow:hidden;}
 .native-ime #phone > :not(#keyboard) {display:none!important;}
 .native-ime #phone > #ime-local-editor:not([hidden]) {display:flex!important;position:absolute;top:0;left:5px;right:5px;height:44px;z-index:10;align-items:center;background:#edeff2;gap:8px;}
-.native-ime #phone > #ime-local-editor.snippet-edit:not([hidden]) {top:8px;left:8px;right:8px;height:calc(var(--local-editor-height) - 16px);background:white;border-radius:12px;padding:12px;box-shadow:0 2px 12px #0002;}
+.native-ime #phone > #ime-local-editor.snippet-edit:not([hidden]) {top:4px;left:5px;right:5px;height:calc(var(--local-editor-height) - 8px);background:white;border-radius:8px;padding:0;}
 .native-ime #ime-local-editor form {display:flex;flex-direction:column;gap:6px;width:100%;height:100%;margin:0;}
 .native-ime #ime-local-editor .note {display:none;}
 .native-ime #ime-local-editor h2 {display:block;font-size:14px;margin:0;}
+.native-ime #ime-local-editor.snippet-edit h2 {position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;}
+.native-ime #ime-local-editor .snippet-frame {flex:1;min-height:0;border:0;}
 .native-ime #ime-local-editor .field {flex:1;margin:0;min-height:0;font-size:0;}
 .native-ime #ime-local-editor textarea,.native-ime #ime-local-editor input {height:100%;min-height:0;resize:none;width:100%;margin:0;padding:8px;font-size:16px;line-height:1.5;border:1px solid #dce0e5;border-radius:6px;background:white;color:#292d34;}
 .native-ime #ime-local-editor > input {height:36px;flex:1;min-width:0;}
+.native-ime #phone > #ime-local-editor.clip-search-panel:not([hidden]){top:0;bottom:auto;height:var(--local-editor-height);align-items:stretch;gap:0;}
+.native-ime #ime-local-editor.clip-search-panel .clip-search-input{height:36px;min-height:0;padding:6px 4px;border:0;border-radius:0;outline:none;box-shadow:none;background:transparent;color:var(--key-color);line-height:1.5;}
+.native-ime #ime-local-editor.clip-search-panel button{padding:0;}
+.native-ime #ime-local-editor.clip-search-panel .tabs-pill button{padding:6px 2px;}
+.native-ime #ime-local-editor.clip-search-panel .clip-search-result{padding:13px 14px;font-size:14px;white-space:normal;}
 .native-ime #ime-local-editor .dialog-actions {display:flex;margin:0;gap:6px;}
 .native-ime #ime-local-editor button {font-size:13px;white-space:nowrap;padding:6px;}
+.native-ime #ime-local-editor .snippet-frame textarea {border:0;border-radius:8px 0 0 8px;padding:5px 8px;}
+.native-ime #ime-local-editor .snippet-frame .dialog-actions {gap:4px;padding:4px 3px;background:white;}
+.native-ime #ime-local-editor .snippet-frame .dialog-actions button {flex:1;min-width:0;padding:0;font-size:12px;}
+.native-ime #ime-local-editor .snippet-frame .dialog-actions button[type=submit] {color:#3482ff;}
 .native-ime #ime-local-editor #snippet-error:empty {display:none;}
-.native-ime #ime-local-editor #snippet-error:not(:empty) {position:absolute;left:12px;right:12px;bottom:42px;background:white;z-index:11;}
+.native-ime #ime-local-editor #snippet-error:not(:empty) {position:absolute;left:12px;right:12px;bottom:52px;background:white;z-index:11;}
 .native-ime #keyboard {width:100%;border-radius:0;}
 .native-ime #keyboard.local-edit {padding-top:var(--local-editor-height);}
 .keyboard .key-rows {gap:10px;padding:5px 0 15px;}

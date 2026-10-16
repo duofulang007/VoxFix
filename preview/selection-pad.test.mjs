@@ -88,9 +88,14 @@ try{
   assert.equal(await page.locator('[data-action="selection-paragraph"]').count(),0);
   for(const width of [320,393]){
     await page.setViewportSize({width,height:351});
-    const targets=await page.locator('.selection-editor button').evaluateAll(es=>es.map(e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height};}));
+    const targets=await page.locator('.selection-editor-body button').evaluateAll(es=>es.map(e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height};}));
     for(const t of targets)assert(t.w>=48&&t.h>=48,'Every tap target must be at least 48 CSS pixels');
     for(let i=0;i<targets.length;i++)for(let j=i+1;j<targets.length;j++){const a=targets[i],b=targets[j];assert(!(a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y),'Tap targets cannot overlap');}
+    // 面板顶部新增的删除钮借用页头原有空白：页头高度、面板高度与下方按钮全都不动。
+    const header=await page.locator('.selection-editor-header').boundingBox(),remove=await page.locator('.selection-delete').boundingBox();
+    assert.equal(Math.round(header.height),32,'The title bar keeps its 32px height');
+    assert(remove.y>=header.y&&remove.y+remove.height<=header.y+header.height,'The delete button fits inside the title bar');
+    for(const t of targets)assert(!(remove.x<t.x+t.w&&remove.x+remove.w>t.x&&remove.y<t.y+t.h&&remove.y+remove.h>t.y),'The delete button never overlaps the pad');
   }
   await page.locator('[data-direction="1,1"]').tap();
   assert((await page.evaluate(()=>calls)).some(c=>c[0]==='selectionStep'&&c[1]===1&&c[2]===1));
