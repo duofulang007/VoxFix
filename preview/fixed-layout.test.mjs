@@ -29,12 +29,21 @@ try{
     // 键高 = (351 - 候选栏 45 - 底部条 49 - key-rows 上下内边距 5+15 - 行间距 30) / 4 = 51.75。
     assert.equal(result.height,351);assert.equal(Math.round(result.keyHeight*100)/100,51.75);assert.equal(result.font,'22px');assert.equal(result.radius,'7px');assert.equal(result.gap,'4px');assert.equal(result.bg,'rgb(237, 239, 242)');
     for(const [key,value] of Object.entries(keyboardGeometry))assert.equal(result.stored[key],value);
-    assert.equal(result.stored.rememberInput,false);assert.equal(result.stored.clipboardHistory,false);
+    assert.equal(result.stored.rememberInput,true);assert.equal(result.stored.clipboardHistory,false);
     assert.equal(await page.locator('input[type="range"],input[type="color"]').count(),0);
     if(native){
       assert((await page.evaluate(()=>calls)).some(c=>c[0]==='resize'&&c[1]===351));
       await page.locator('[data-action="menu"]').click();await page.locator('[data-action="custom"]').click();
       assert.equal(await page.locator('dialog[open] input[type="range"],dialog[open] input[type="color"]').count(),0);
+      assert.equal(await page.locator('dialog[open] input[type="checkbox"]').count(),2);
+      for(const width of [320,393,411]){
+        await page.setViewportSize({width,height:550});
+        await page.locator('#custom-panel').evaluate(e=>e.scrollTop=e.scrollHeight);
+        const back=await page.locator('.settings-back').boundingBox();
+        assert(back.y>=199&&back.y+back.height<=550,'返回按钮必须位于底部351px可见区');
+        assert.equal(await page.locator('dialog[open]').evaluate(e=>e.scrollTop),0);
+      }
+      await page.screenshot({path:'.android/settings-simplified.png',clip:{x:0,y:199,width:411,height:351}});
       await page.locator('dialog[open] > button').click();
       await page.evaluate(()=>voxfixReset());
     }else{

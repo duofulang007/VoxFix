@@ -68,7 +68,7 @@ export function settingsFrom(value) {
     if (!Array.isArray(value.toolbar) || value.toolbar.some(id => !toolbarItems.some(([valid]) => valid === id) && !/^custom:[a-z0-9]{1,8}$/.test(id))) throw Error('快捷栏配置无效');
     result.toolbar = [...new Set(value.toolbar)];
   }
-  for (const key of ['footerSwitcher', 'footerClipboard', 'rememberInput', 'clipboardHistory', 'clipboardCandidate', 'clipboardMatch']) {
+  for (const key of ['footerSwitcher', 'footerClipboard', 'clipboardHistory', 'clipboardCandidate', 'clipboardMatch']) {
     if (key in value && typeof value[key] !== 'boolean') throw Error('底部入口配置无效');
     if (key in value) result[key] = value[key];
   }
@@ -154,8 +154,9 @@ export function migratePhraseGroups(value) {
 }
 export const clipboardShortLimit=32;
 export function validateLearning(records){
-  if(!Array.isArray(records)||records.length>2000||records.some(row=>!row||!/^([p9]):[a-z'2-9]{1,60}$/.test(row.key)||typeof row.word!=='string'||!/[\u3400-\u9fff]/.test(row.word)||row.word.length>60||!Number.isInteger(row.hits)||row.hits<1||row.hits>1000000))throw Error('选词记忆格式无效');
+  if(!Array.isArray(records)||records.some(row=>!row||!(/^(?:p:[a-z']{1,60}|9:[2-9]{1,60})$/.test(row.key))||typeof row.word!=='string'||!/[\u3400-\u9fff]/.test(row.word)||row.word.length>60||/[\u0000-\u001f\u007f-\u009f]/.test(row.word)||!Number.isInteger(row.hits)||row.hits<1||row.hits>1000000))throw Error('选词记忆格式无效');
   if(records.some(row=>row.code!==undefined&&(typeof row.code!=='string'||!/^p:/.test(row.key)||!/^[a-z]{1,6}( [a-z]{1,6}){0,15}$/.test(row.code)||!/^[\u3400-\u9fff]{1,16}$/.test(row.word)||row.code.split(' ').length!==row.word.length||row.code.replaceAll(' ','').length>60)))throw Error('选词读音格式无效');
+  if(records.some(row=>row.pinned!==undefined&&typeof row.pinned!=='boolean'))throw Error('词条来源格式无效');
   return records;
 }
 export function learnWord(records,key,word,code=''){
@@ -165,8 +166,7 @@ export function learnWord(records,key,word,code=''){
   const row={key,word,hits:Math.min(1000000,(previous?.hits||0)+1)};
   if(code||previous?.code)row.code=code||previous.code;
   validateLearning([row]);
-  // shortcut: keep the most recent 2000 choices; use a database if long-term vocabulary exceeds this.
-  return [row,...records.filter(item=>item.key!==key||item.word!==word)].slice(0,2000);
+  return [row,...records.filter(item=>item.key!==key||item.word!==word)];
 }
 export function learnSelection(records,chain,raw,word,code,now){
   records=learnWord(records,'p:'+raw.toLowerCase(),word,code);

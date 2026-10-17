@@ -19,16 +19,43 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
     private var benchmark = false
     private var quick = false
     private var memory = false
+    private var latency = false
+    private var modelLoad = false
+    private var numberNormalization = false
+    private var lexicon = false
+    private var english = false
     override fun onCreate(arguments: Bundle?) {
         pinyin = arguments?.getString("pinyin") == "true"
         benchmark = arguments?.getString("benchmark") == "true"
         quick = arguments?.getString("quick") == "true"
         memory = arguments?.getString("memory") == "true"
+        latency = arguments?.getString("latency") == "true"
+        modelLoad = arguments?.getString("modelLoad") == "true"
+        numberNormalization = arguments?.getString("numbers") == "true"
+        lexicon = arguments?.getString("lexicon") == "true"
+        english = arguments?.getString("english") == "true"
         super.onCreate(arguments); start()
     }
     override fun onStart() {
         val output = Bundle()
         try {
+            if (english) { output.putString("result", VoiceEnglishSmoke.run(targetContext)); finish(Activity.RESULT_OK, output); return }
+            if (lexicon) { output.putString("result", PersonalLexiconSmoke.run(targetContext)); finish(Activity.RESULT_OK, output); return }
+            if (numberNormalization) {
+                output.putString("result", NumberNormalizationSmoke.run(targetContext))
+                finish(Activity.RESULT_OK, output)
+                return
+            }
+            if (modelLoad) {
+                output.putString("result", VoiceModelLoadSmoke.run(targetContext))
+                finish(Activity.RESULT_OK, output)
+                return
+            }
+            if (latency) {
+                output.putString("result", VoiceLatencySmoke.run(targetContext))
+                finish(Activity.RESULT_OK, output)
+                return
+            }
             if (memory) {
                 output.putString("result", VoiceMemorySmoke.run(this))
                 finish(Activity.RESULT_OK, output)
@@ -165,7 +192,8 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
                         }
                     }, { value -> check(value != last); last = value; updates++ })
                     check(text.isNotBlank())
-                    if (pipelineReference == null) pipelineReference = text else check(pipelineReference == text)
+                    if (pipelineReference == null) pipelineReference = text
+                    else check(SpeechEngine.refine(checkNotNull(pipelineReference), text) == text) { "Streaming content changed beyond allowed corrections" }
                     pipelineRows.put(JSONObject().put("elapsedMs", (System.nanoTime() - elapsed) / 1e6).put("updates", updates).put("characters", text.length))
                 }
                 var cancelled = false

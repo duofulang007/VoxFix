@@ -20,4 +20,21 @@ assert.equal(clipboardMatches('',[text,'其他'],{manual:true}).length,2);
 const history=Array.from({length:300},(_,i)=>'项目'+i+'：'+text.repeat(5));
 const begin=performance.now();assert.equal(clipboardMatches('mtxw',history).length,300);assert.equal(clipboardMatches('huoyishi',history).length,300);console.log('300 history entries, first index and two searches: '+Math.round(performance.now()-begin)+'ms');
 assert(performance.now()-begin<5000,'History search must be bounded');
+const longHistory=Array.from({length:300},(_,i)=>('项目'+i+'：明天'+text.repeat(700)).slice(0,10000));
+const longTimes=[];
+for(let run=0;run<2;run++){
+  const start=performance.now(),hits=clipboardMatches('mingtian',longHistory);
+  longTimes.push(performance.now()-start);
+  assert.equal(hits.length,300);
+  assert(hits.every(hit=>hit.score===300&&!hit.weak&&hit.text.slice(hit.start,hit.end)==='明天'));
+}
+console.log('300 x 10k history, exact full-pinyin search: '+longTimes.map(ms=>Math.round(ms)+'ms').join(', '));
+assert(Math.min(...longTimes)<500,'A maximum-score match must not keep scanning the remaining 10k text (desktop budget)');
+for(const email of ['a@b','name+tag@example.com','+@x','a@_'])assert.equal(clipboardMatches('mingtian',['明天 '+email]).length,0);
+const englishHistory=Array.from({length:30},(_,i)=>'a'.repeat(9990)+'明天'+i);
+const englishStart=performance.now();
+assert.equal(clipboardMatches('mingtian',englishHistory).length,30);
+const englishMs=performance.now()-englishStart;
+console.log('30 x 10k mixed English history, privacy filter and search: '+Math.round(englishMs)+'ms');
+assert(englishMs<500,'Privacy filtering must not backtrack over long non-email text (desktop budget)');
 console.log('PASS full history, middle/long/multiline, initials/mixed/full pinyin, readings, typo, keywords, stable rank, dedupe and privacy');

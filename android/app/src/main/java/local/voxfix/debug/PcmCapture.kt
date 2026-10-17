@@ -13,18 +13,19 @@ internal class PcmCapture(
 ) : AutoCloseable {
     private val queue = ArrayBlockingQueue<FloatArray>(capacity)
     private val closed = AtomicBoolean(false)
+    private val stopped = AtomicBoolean(false)
     @Volatile private var done = false
     @Volatile private var error: Throwable? = null
     private val thread = Thread({
         try {
-            while (!closed.get() && keepRecording()) {
+            while (!closed.get() && !stopped.get() && keepRecording()) {
                 val samples = read() ?: break
                 check(queue.offer(samples)) { "识别积压过多，请分段说话" }
             }
         } catch (failure: Throwable) {
-            if (!closed.get()) error = failure
+            if (!closed.get() && !stopped.get()) error = failure
         } finally {
-            try { stopRead() } catch (failure: Throwable) { if (!closed.get() && error == null) error = failure }
+            try { stop() } catch (failure: Throwable) { if (!closed.get() && error == null) error = failure }
             done = true
         }
     }, "VoxFix-microphone").apply { start() }
@@ -38,9 +39,13 @@ internal class PcmCapture(
         return null
     }
 
+    @Synchronized fun stop() {
+        if (stopped.compareAndSet(false, true)) stopRead()
+    }
+
     override fun close() {
         closed.set(true)
-        try { stopRead() } finally {
+        try { stop() } finally {
             thread.join(2000)
             check(!thread.isAlive) { "麦克风未及时停止" }
             queue.clear()

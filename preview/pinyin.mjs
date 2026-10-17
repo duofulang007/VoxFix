@@ -133,7 +133,7 @@ function clipToken(input,text,manual){
       const cost=positions.get(raw.length),count=end-start+1;
       if(cost!==undefined&&(count>=2||manual||cost===0&&raw.length>=3)){
         const parts=run.slice(start,end+1).map(x=>x.part);
-        if(respectsBoundaries(['',0,parts],token)){const hit={start:run[start].start,end:run[end].end,score:300-Math.min(40,cost*10),weak:false};if(!best||hit.score>best.score)best=hit;}
+        if(respectsBoundaries(['',0,parts],token)){const hit={start:run[start].start,end:run[end].end,score:300-Math.min(40,cost*10),weak:false};if(cost===0)return hit;if(!best||hit.score>best.score)best=hit;}
       }
       if(raw.length>=4&&count>=2&&Math.abs(full.length-raw.length)<=1&&oneEdit(raw,full)&&!token.includes("'")){
         const hit={start:run[start].start,end:run[end].end,score:100,weak:true};if(!best||best.score<hit.score)best=hit;
@@ -149,7 +149,8 @@ export function clipboardMatches(input,texts,{manual=false,recent=false}={}){
   if(input.length>100)return [];
   const hits=[];
   for(const [order,text] of [...new Set(texts)].entries()){
-    if(!text.trim()||!manual&&/验证码|密码|口令|密钥|https?:\/\/|www\.|[\w.+-]+@[\w.-]+|\d{6,}/i.test(text))continue;
+    // 邮箱只需判断片段是否存在，重复量词会在长英文文本上反复回溯。
+    if(!text.trim()||!manual&&/验证码|密码|口令|密钥|https?:\/\/|www\.|[\w.+-]@[\w.-]|\d{6,}/i.test(text))continue;
     const matches=tokens.map(token=>clipToken(token,text,manual));if(matches.some(hit=>!hit))continue;
     const start=matches.length?Math.min(...matches.map(hit=>hit.start)):0,end=matches.length?Math.max(...matches.map(hit=>hit.end)):0;
     hits.push({text,start,end,ranges:matches.flatMap(hit=>hit.ranges||[[hit.start,hit.end]]),score:matches.length?Math.min(...matches.map(hit=>hit.score)):0,weak:matches.some(hit=>hit.weak),order});
@@ -159,6 +160,10 @@ export function clipboardMatches(input,texts,{manual=false,recent=false}={}){
 export function selectionCode(input,word,preedit='',records=[]){
   if(input.length>60||!/^[\u3400-\u9fff]{1,16}$/.test(word))return '';
   const raw=input.toLowerCase().replace(/'/g,''),parts=preedit.trim().split(/[\s']+/).slice(0,word.length);
+  if(/^[2-9]+$/.test(raw)){
+    const codes=new Set([...((wordStarts[word[0]]||[]).filter(row=>row[0]===word&&row[2]).map(row=>row[2].join(' '))),...records.filter(row=>row.word===word&&row.code).map(row=>row.code)].filter(code=>toNine(code.replaceAll(' ',''))===raw&&code.replaceAll(' ','').length<=60));
+    return codes.size===1?[...codes][0]:'';
+  }
   if(parts.length===word.length&&parts.every(part=>syllables.includes(part))&&parts.join('')===raw)return parts.join(' ');
   const codes=new Set((wordStarts[word[0]]||[]).filter(row=>row[0]===word&&row[2]&&mixedMatch(row[2],raw)&&respectsBoundaries(row,input)).map(row=>row[2].join(' ')));
   for(const row of records)if(row.word===word&&row.code&&mixedMatch(row.code.split(' '),raw)&&respectsBoundaries([word,0,row.code.split(' ')],input))codes.add(row.code);
@@ -168,18 +173,19 @@ export function selectionCode(input,word,preedit='',records=[]){
 }
 export function learnedCandidates(input,records,limit=240){
   const query=input.toLowerCase(),raw=query.replace(/'/g,'');
+  if(/^[2-9]{1,60}$/.test(raw))return [...new Set(records.filter(row=>(row.pinned||row.hits>=2)&&(row.key==='9:'+raw||row.code&&toNine(row.code.replaceAll(' ',''))===raw)).sort((a,b)=>b.hits-a.hits).map(row=>row.word))].slice(0,limit);
   if(!/^[a-z]{1,60}$/.test(raw))return [];
   const single=!query.includes("'")&&syllables.some(part=>part.startsWith(raw));
-  return [...new Set(records.filter(row=>row.hits>=2&&row.key.startsWith('p:')&&(!single||row.word.length===1)&&
+  return [...new Set(records.filter(row=>(row.pinned||row.hits>=2)&&row.key.startsWith('p:')&&(!single||row.word.length===1)&&
     (row.key==='p:'+query||row.code&&mixedMatch(row.code.split(' '),raw)&&respectsBoundaries([row.word,0,row.code.split(' ')],query)))
-    .sort((a,b)=>b.hits-a.hits).map(row=>row.word))].slice(0,limit);
+    .sort((a,b)=>b.hits-a.hits||b.word.length-a.word.length).map(row=>row.word))].slice(0,limit);
 }
 export function learnedAssociations(context,records,limit=240){
   const tail=context.match(/[\u3400-\u9fff]+$/)?.[0]?.slice(-16);if(!tail)return [];
   const words=[];
   for(let size=tail.length;size>0;size--){
     const prefix=tail.slice(-size);
-    for(const row of records.filter(row=>row.code&&row.hits>=2&&row.word.startsWith(prefix)&&row.word.length>size).sort((a,b)=>b.hits-a.hits)){
+    for(const row of records.filter(row=>row.code&&(row.pinned||row.hits>=2)&&row.word.startsWith(prefix)&&row.word.length>size).sort((a,b)=>b.hits-a.hits||b.word.length-a.word.length)){
       const suffix=row.word.slice(size);if(!words.includes(suffix))words.push(suffix);if(words.length>=limit)return words;
     }
   }

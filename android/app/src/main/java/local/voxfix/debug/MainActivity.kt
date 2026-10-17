@@ -19,6 +19,7 @@ import android.widget.EditText
 class MainActivity : Activity() {
     private val worker = Executors.newSingleThreadExecutor()
     private var engine: SpeechEngine? = null
+    @Volatile private var microphoneCapture: PcmCapture? = null
     private var original = ""
     private lateinit var status: TextView
     private lateinit var result: TextView
@@ -40,6 +41,7 @@ class MainActivity : Activity() {
         label("VoxFix 真机验证", 26f)
         Button(this).apply { text = "启用 VoxFix 输入法"; layout.addView(this); setOnClickListener { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) } }
         Button(this).apply { text = "系统选择输入法"; layout.addView(this); setOnClickListener { getSystemService(InputMethodManager::class.java).showInputMethodPicker() } }
+        Button(this).apply { text = "个人词库与迁移"; layout.addView(this); setOnClickListener { startActivity(Intent(this@MainActivity, LexiconActivity::class.java)) } }
         Button(this).apply { text = "允许麦克风"; layout.addView(this); setOnClickListener { requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1) } }
         EditText(this).apply { hint = "在这里试用 VoxFix 输入法"; contentDescription = "VoxFix输入法试用框"; layout.addView(this) }
         label("中文语音输入 · 本地离线\n停止后自动补全标点。", 16f)
@@ -73,18 +75,19 @@ class MainActivity : Activity() {
     private fun beginRecording() {
         if (active) return
         active = true; recordingRequested = true; start.isEnabled = false; stop.isEnabled = true
-        status.text = "正在录音 · 停止后统一补标点"; result.text = ""
+        status.text = "正在开启麦克风"; result.text = ""
         worker.execute {
             try {
-                if (engine == null) engine = SpeechEngine(assets)
                 if (!visible) return@execute
                 Log.i("VoxFix", "CAPTURE_REQUESTED")
-                val text = checkNotNull(engine).record(
+                val text = SpeechEngine.record(
+                    { engine ?: SpeechEngine(assets).also { engine = it } },
                     { value -> ui { result.text = value } },
                     { rms ->
-                        if (!visible) engine?.stop()
                         ui { level.text = "麦克风音量：$rms / 100" }
-                    }, { recordingRequested && visible }, { !visible })
+                    }, { recordingRequested && visible }, { !visible },
+                    { ui { if (recordingRequested && visible) status.text = "实时识别 · 点击停止结束" } },
+                    { capture -> microphoneCapture = capture; if (!recordingRequested || !visible) capture?.stop() })
                 Log.i("VoxFix", "CAPTURE_FINISHED characters=${text.length}")
                 original = text
                 if (visible) ui {
@@ -100,7 +103,8 @@ class MainActivity : Activity() {
     }
     private fun stopRecording() {
         recordingRequested = false
-        if (active) { engine?.stop(); stop.isEnabled = false; status.text = "正在结束录音并补全标点…" }
+        microphoneCapture?.stop()
+        if (active) { stop.isEnabled = false; status.text = "正在结束录音…" }
     }
     override fun onStart() { super.onStart(); visible = true }
     override fun onStop() {
@@ -110,7 +114,6 @@ class MainActivity : Activity() {
     }
     override fun onSaveInstanceState(state: Bundle) { state.putString("transcript", if (active && original.isNotEmpty()) original else result.text.toString()); super.onSaveInstanceState(state) }
     override fun onDestroy() {
-        engine?.stop()
         worker.execute { engine?.release(); engine = null }
         worker.shutdown()
         super.onDestroy()

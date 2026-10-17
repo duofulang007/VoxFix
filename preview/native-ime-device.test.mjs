@@ -27,6 +27,7 @@ let testedPage,learningBefore;
 try{
   const page=browser.contexts().flatMap(context=>context.pages()).find(page=>page.url()==='https://voxfix.local/keyboard/index.html');
   assert(page,'The VoxFix native WebView must be open');
+  assert(!await page.evaluate(()=>typeof VoxFixIme.lexiconLookup==='function'),'Legacy live-input test cannot restore the unified SQLite lexicon; use isolated PersonalLexiconSmoke and human touch acceptance.');
   testedPage=page;learningBefore=await page.evaluate(()=>localStorage.getItem('voxfix-learning-v1'));
   const base=await inputText();
   assert(base.trim()==='','This check only runs in a blank own-app test field');

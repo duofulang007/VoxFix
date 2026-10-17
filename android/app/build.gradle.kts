@@ -21,15 +21,28 @@ android {
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 }
+val streamingModelFiles = listOf("encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx")
+val optimizeStreamingModels by tasks.registering(Exec::class) {
+    workingDir("../..")
+    commandLine(file("../../.venv/Scripts/python.exe"), "tools/prepare_streaming_models.py")
+    inputs.files("../../tools/prepare_streaming_models.py", "../../tools/setup_voice.py", "../../tools/streaming-optimization-requirements.txt")
+    streamingModelFiles.forEach {
+        inputs.file("../../models/streaming/$it")
+        outputs.file("../../.android/streaming-optimized/$it")
+    }
+    outputs.file("../../.android/streaming-optimized/receipt.json")
+}
 val stageModels by tasks.registering(Sync::class) {
-    from("../../models") { include("streaming/**", "vad/**", "sensevoice/**") }
+    dependsOn(optimizeStreamingModels)
+    from("../../models") { include("streaming/**", "vad/**", "sensevoice/**"); exclude("streaming/*.onnx") }
+    from("../../.android/streaming-optimized") { include(streamingModelFiles); into("streaming") }
     // getVadModelConfig hardcodes the asset name "silero_vad.onnx", so the VAD model has to sit at
     // the assets root instead of under vad/. Keeping the source under vad/ stays tidy on disk.
     from("../../models/vad") { include("*.onnx") }
     into(layout.buildDirectory.dir("modelAssets"))
 }
 val stageKeyboard by tasks.registering(Sync::class) {
-    from("../../preview") { include("index.html", "*.css", "app.mjs", "core.mjs", "voice.mjs", "voice-orb.mjs", "pinyin.mjs", "english.mjs", "split.mjs", "english-words.txt", "pinyin-data.json", "pinyin-lite.json", "phrase-packs.json", "vendor/rime-ice/LICENSE", "vendor/rime-ice/UPSTREAM.md") }
+    from("../../preview") { include("index.html", "*.css", "app.mjs", "core.mjs", "lexicon.mjs", "voice.mjs", "voice-orb.mjs", "pinyin.mjs", "english.mjs", "split.mjs", "english-words.txt", "pinyin-data.json", "pinyin-lite.json", "phrase-packs.json", "vendor/rime-ice/LICENSE", "vendor/rime-ice/UPSTREAM.md") }
     from("src/main/licenses/sensevoice") { include("LICENSE", "UPSTREAM.md"); into("licenses/sensevoice") }
     from("src/main/licenses/sherpa") { include("LICENSE", "UPSTREAM.md"); into("licenses/sherpa") }
     into(layout.buildDirectory.dir("keyboardAssets/keyboard"))
@@ -37,7 +50,7 @@ val stageKeyboard by tasks.registering(Sync::class) {
 val buildPinyinNative by tasks.registering(Exec::class) {
     workingDir("../..")
     commandLine(file("../../.venv/Scripts/python.exe"), "tools/build_pinyin_rime.py")
-    inputs.files("src/main/cpp/rime_jni.cpp", "src/main/cpp/rime/rime_api.h", "../../tools/build_pinyin_rime.py", "../../tools/pinyin-rime-dependencies.json")
+    inputs.files("src/main/cpp/rime_jni.cpp", "src/main/cpp/rime/rime_api.h", "src/main/cpp/rime/rime_levers_api.h", "../../tools/build_pinyin_rime.py", "../../tools/pinyin-rime-dependencies.json")
     outputs.files("../../.android/pinyin-rime/jni/arm64-v8a/libvoxfix_rime.so", "../../.android/pinyin-rime/jni/arm64-v8a/libfeelime_rime.so", "../../.android/pinyin-rime/jni/arm64-v8a/libc++_shared.so")
 }
 val stagePinyin by tasks.registering(Sync::class) {

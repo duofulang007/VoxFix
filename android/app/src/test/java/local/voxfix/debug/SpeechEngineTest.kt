@@ -5,6 +5,22 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class SpeechEngineTest {
+    @Test fun formatsSpokenNumbersByDefaultWithoutChangingOrdinaryWords() {
+        for ((spoken, written) in listOf(
+            "下午三点半" to "下午3点半", "跑了十公里" to "跑了10公里",
+            "一百二十三元" to "123元", "负十二点五元" to "-12.5元",
+            "三点五公里" to "3.5公里", "一千零五元" to "1005元",
+            "上午一点开会" to "上午1点开会", "三点五十分" to "3点50分",
+            "二十三点五十九分" to "23点59分", "十点开会" to "10点开会")) {
+            assertEquals(spoken, written, SpeechEngine.formatNumbers(spoken))
+            assertEquals(written, SpeechEngine.formatNumbers(written))
+        }
+        for (text in listOf("我们一起去公园散步", "一直一般一心一意", "一点也不好，有一点进展",
+            "千万别改，三心二意", "三点五", "二三十公里", "三四公里", "一百二元", "一百二点五元", "一万二元", "十几元", "三点六十分",
+            "OpenAI 12.50元，3.5公里", "下午25点半", "万一公里不够")) {
+            assertEquals(text, text, SpeechEngine.formatNumbers(text))
+        }
+    }
     @Test fun protectsNumbersEnglishAndNegation() {
         for ((raw, changed) in listOf("不要跑10公里" to "要跑10公里", "明天跑10公里" to "明天跑15公里", "打开Obsidian" to "打开Office")) {
             assertEquals(raw, SpeechEngine.refine(raw, changed))
@@ -91,5 +107,47 @@ class SpeechEngineTest {
         assertEquals("Hello world.", SpeechEngine.punctuate(SpeechEngine.clean("HELLO WORLD")))
         assertEquals("Hello world.", SpeechEngine.punctuate("Hello world."))
         assertEquals("打开 USB。", SpeechEngine.punctuate(SpeechEngine.clean("打开 USB")))
+    }
+
+    /**
+     * 回归：旧实现比较前删掉全部空白，`JSON` 与 `J S O N`、`VOXFIX` 与 `VOX FIX` 成了同一个串，
+     * 二遍的错误拆词被当成「内容一致」放进来，固定音频里混合样本因此从 5/16 掉到 4/16。
+     */
+    @Test fun keepsEnglishWordBoundariesWhenComparingSecondPass() {
+        assertEquals("这个 API返回的是 JSON数据",
+            SpeechEngine.refine("这个 API返回的是 JSON数据", "这个 API 返回的是 J S O N 数据"))
+        assertEquals("我想用 VOXFIX 进行离线语音输入",
+            SpeechEngine.refine("我想用 VOXFIX 进行离线语音输入", "我想用 VOX FIX 进行离线语音输入"))
+        assertEquals("把文件保存成 PDF格式",
+            SpeechEngine.refine("把文件保存成 PDF格式", "把文件保存成 PF 格式"))
+        // 词序列一致，只差撇号与标点：仍然采用二遍，拿到它的撇号与标点。
+        assertEquals("I DON'T THINK THIS IS THE RIGHT ANSWER.",
+            SpeechEngine.refine("I DONT THINK THIS IS THE RIGHT ANSWER", "I DON'T THINK THIS IS THE RIGHT ANSWER."))
+    }
+
+    /**
+     * 二遍补出流式完全漏掉的英文词，是它最值得采用的一类；但汉字必须逐字相同，
+     * 否则就是借「补英文」改写中文（`我今天用脚本 → 我今天用 PYHO写了一个脚本`）。
+     */
+    @Test fun takesEnglishWordsTheSecondPassHeardInPureChineseSpeech() {
+        assertEquals("这个 BUG 已经修好了", SpeechEngine.refine("这个已经修好了", "这个 BUG 已经修好了"))
+        assertEquals("请把代码提交到 GITHUB", SpeechEngine.refine("请把代码提交到", "请把代码提交到 GITHUB"))
+        // 两个字母、又不在缩写表里，是二遍在换声片段上吐出的半截词，不是补内容。
+        assertEquals("这个已经修好了", SpeechEngine.refine("这个已经修好了", "这个 BU 已经修好了"))
+        // 已知缩写仍可补：AI 只有两个字母但在缩写表里。
+        assertEquals("打开 AI", SpeechEngine.refine("打开", "打开 AI"))
+        assertEquals("我今天用脚本", SpeechEngine.refine("我今天用脚本", "我今天用 PYHO写了一个脚本"))
+        assertEquals("先运行", SpeechEngine.refine("先运行", "先运行给 STATUS 再执行给T COMMIT"))
+    }
+
+    /** 纯英文、字母数不变的改写才采用；漏字/多字（MPUTER、PF、APPI）必须拒绝。 */
+    @Test fun onlyTrustsEnglishRewritesThatKeepTheLetterCount() {
+        assertEquals("OFFLINE", SpeechEngine.refine("ARE FINE", "OFFLINE"))
+        for ((raw, heard) in listOf("COMPUTER" to "MPUTER", "API" to "APPI", "VOX FIX" to "OX FIX",
+            "CODE" to "CODE LAN", "I WOULD LIKE TO BOOK A TABLE" to "I WOULD LIKE TO BOOK AABLE")) {
+            assertEquals(raw, SpeechEngine.refine(raw, heard))
+        }
+        // 带中文的句子不走这条放行：PDF→PF 仍按英文内容变化拒绝。
+        assertEquals("把文件保存成 PDF格式", SpeechEngine.refine("把文件保存成 PDF格式", "把文件保存成 PF 格式"))
     }
 }

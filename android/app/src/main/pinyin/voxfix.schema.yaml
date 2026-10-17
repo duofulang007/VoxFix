@@ -5,7 +5,7 @@ schema:
 engine:
   processors: [speller, selector, navigator, express_editor]
   segmentors: [abc_segmentor, fallback_segmentor]
-  translators: [script_translator, script_translator@personal]
+  translators: [script_translator]
   filters: [simplifier, uniquifier]
 speller:
   alphabet: abcdefghijklmnopqrstuvwxyz
@@ -18,7 +18,7 @@ translator:
   dictionary: luna_pinyin
   prism: luna_pinyin
   user_dict: voxfix
-  enable_user_dict: true
+  enable_user_dict: false
   enable_sentence: true
   enable_completion: true
   enable_correction: true
@@ -29,7 +29,7 @@ personal:
   dictionary: voxfix_personal
   user_dict: voxfix_personal
   initial_quality: -1
-  enable_user_dict: true
+  enable_user_dict: false
   enable_sentence: false
   enable_completion: false
 simplifier:

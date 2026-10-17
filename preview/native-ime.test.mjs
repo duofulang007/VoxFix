@@ -1,3 +1,4 @@
+import {lexiconRecords} from './test-lexicon.mjs';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 import {createServer} from 'node:http';
@@ -18,6 +19,7 @@ try{
   await page.addInitScript(()=>{
     window.calls=[];window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','gestureStart','gestureLock','gestureMove','gestureEnd','haptic','edit','ready','resize','refreshClipboard','importClipboard'].map(name=>[name,(...args)=>window.calls.push([name,...args])]));
     window.VoxFixIme.voiceReady=()=>true;
+    for(const name of ['startVoice','startLocalVoice'])window.VoxFixIme[name]=()=>{window.calls.push([name,!!document.querySelector('.voice-panel')]);if(!window.holdVoiceReady)setTimeout(()=>window.voxfixVoiceListening?.(),0);};
     for(const name of ['commit','delete'])window.VoxFixIme[name]=(...args)=>{window.calls.push([name,...args]);setTimeout(()=>{window.voxfixClearComposition?.(true);if(window.voxfixStartInput)window.voxfixStartInput(1,true);else{window.voxfixReset?.();window.voxfixInputType?.(1);}},10);};
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
@@ -30,7 +32,7 @@ try{
   let calls=await page.evaluate(()=>window.calls);
   assert(calls.some(row=>row[0]==='compose'&&row[1]==='ni'));
   assert(calls.some(row=>row[0]==='commit'&&row[1]===word));
-  assert((await page.evaluate(()=>JSON.parse(localStorage.getItem('voxfix-learning-v1')||'[]'))).some(row=>row.word===word),'Native manual candidate selection must learn');
+  assert((await lexiconRecords(page)).some(row=>row.word===word),'Native manual candidate selection must learn');
   await key('delete').click();await key('enter').click();
   await key('language').click();await page.locator('#keyboard [data-action="letter"]').first().click();
   calls=await page.evaluate(()=>window.calls);assert(calls.some(row=>row[0]==='commit'&&row[1]==='q'));
@@ -106,14 +108,30 @@ try{
   assert.equal(calls.filter(row=>row[0]==='startVoice').length,0,'A short space press must not start voice');
   assert(calls.some(row=>row[0]==='commit'&&row[1]===' '),'A short space press must still insert a space');
   await page.waitForTimeout(30);
+  await page.evaluate(()=>window.holdVoiceReady=true);
   await voiceTouch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
   await page.waitForTimeout(350);
   assert.equal(await page.evaluate(()=>window.calls.filter(row=>row[0]==='startVoice').length),1,'Space hold must start voice before 350ms');
+  assert.equal(await page.evaluate(()=>window.calls.find(row=>row[0]==='startVoice')[1]),false,'Request capture before rendering or compiling the voice animation');
+  assert(await page.locator('.voice-panel.loading').isVisible(),'Do not advertise listening before microphone samples arrive');
+  assert.equal(await page.locator('.voice-orb').isVisible(),false,'The speaking cue must wait for capture');
+  await page.evaluate(()=>window.voxfixVoiceListening());
+  assert(await page.locator('.voice-panel.listening .voice-orb').isVisible(),'First captured samples enable the speaking cue');
   await voiceTouch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  await page.evaluate(()=>window.voxfixVoiceListening());
+  assert(await page.locator('.voice-panel.recognizing').isVisible(),'Late capture callback must not undo release');
+  await page.evaluate(()=>window.holdVoiceReady=false);
   await voiceTouch.detach();
   calls=await page.evaluate(()=>window.calls);assert.equal(calls.filter(row=>row[0]==='startVoice').length,1);assert.equal(calls.filter(row=>row[0]==='stopVoice').length,1);
   await page.evaluate(()=>window.voxfixVoiceDone(''));
-  await page.mouse.move(x,y);await page.mouse.down();await page.waitForTimeout(350);await page.mouse.move(x,y-70);await page.mouse.up();
+  await page.evaluate(()=>window.holdVoiceReady=true);
+  await page.mouse.move(x,y);await page.mouse.down();await page.waitForTimeout(350);await page.mouse.move(x,y-70);
+  assert.equal(await page.locator('.voice-orb').isVisible(),false,'Cancel gesture must not expose the speaking cue before capture');
+  await page.mouse.move(x,y);
+  assert(await page.locator('.voice-panel.loading').isVisible(),'Sliding back must keep waiting for microphone samples');
+  await page.mouse.move(x,y-70);await page.mouse.up();
+  await page.evaluate(()=>{window.voxfixVoiceListening();window.holdVoiceReady=false;});
+  assert.equal(await page.locator('.voice-panel').count(),0,'Late capture callback must not revive cancelled speech');
   calls=await page.evaluate(()=>window.calls);assert.equal(calls.filter(row=>row[0]==='cancelVoice').length,1);
   await page.mouse.move(x,y);await page.mouse.down();await page.waitForTimeout(500);
   await page.evaluate(()=>window.voxfixVoiceLevel(12));

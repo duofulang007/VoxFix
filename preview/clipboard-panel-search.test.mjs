@@ -1,3 +1,4 @@
+import {lexiconRecords} from './test-lexicon.mjs';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 import {createServer} from 'node:http';
@@ -117,7 +118,7 @@ for(const name of ['compact centered panels','anchored management motion','geome
    assert.deepEqual(await key('letter','Q').boundingBox(),at);
    await page.locator('.candidate-visible [data-value="明天"]').click();assert.equal(await input.inputValue(),'明天xiawu');
    assert.deepEqual(await page.evaluate(()=>calls.filter(r=>['commit','compose','commitAccepted','pinyinChoose'].includes(r[0]))),[]);
-   assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('voxfix-learning-v1')||'[]')),[]);
+   assert.deepEqual(await lexiconRecords(page),[]);
   }else if(name==='host focus routes shared keyboard'){
    await input.fill('软件');
    assert.equal(await page.evaluate(()=>calls.filter(r=>r[0]==='searchFocus').at(-1)[1]),true);
@@ -168,7 +169,7 @@ for(const name of ['compact centered panels','anchored management motion','geome
    assert.equal(await input.inputValue(),'明天');assert.deepEqual(await results.allTextContents(),before);assert.equal(await list.evaluate(n=>n.scrollTop),top);
    assert(await page.locator('.clip-search-resume').isVisible());assert.equal(await page.locator('.key-rows').count(),0);
    assert.equal(await page.evaluate(()=>localStorage.getItem('voxfix-snippets-v1')),snippets);
-   assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('voxfix-learning-v1')||'[]')),[]);
+   assert.deepEqual(await lexiconRecords(page),[]);
    await toggle().click();assert(await page.locator('#ime-local-editor').isHidden());assert.equal(await key('clip-tab','clipboard').getAttribute('aria-pressed'),'true');assert.equal(await page.locator('.candidate-bar').count(),0);assert.equal(await page.locator('#editor').inputValue(),'');
    await key('clip-tab','clipboard').click();await key('clip-tab','clipboard').click();
    assert.equal(await key('clip-tab','clipboard').getAttribute('aria-pressed'),'false');await toggle().click();await input.fill('软件');await results.first().click();assert(await page.locator('#ime-local-editor').isHidden());

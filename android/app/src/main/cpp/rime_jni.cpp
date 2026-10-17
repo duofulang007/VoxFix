@@ -1,5 +1,8 @@
 #include <jni.h>
 #include <rime_api.h>
+#include <rime_levers_api.h>
+#include <fstream>
+#include <sys/stat.h>
 #include <string>
 #include <vector>
 #include <unistd.h>
@@ -43,17 +46,26 @@ extern "C" JNIEXPORT jlong JNICALL Java_local_voxfix_debug_PinyinEngine_nativeSt
   env->ReleaseStringUTFChars(shared, a); env->ReleaseStringUTFChars(user, b); env->ReleaseStringUTFChars(staging, c);
   auto* api = rime_get_api();
   if (!initialized || !RIME_API_AVAILABLE(api, get_candidate_preview)) return 0;
-  const char* directory = env->GetStringUTFChars(shared, nullptr);
-  // Deploy the compilation target. librime compiles the main translator
-  // dictionary of the schema passed here, which is the supplementary lexicon.
-  // The main schema is not deployed on purpose: luna_pinyin ships as a prebuilt
-  // binary without a dictionary source, and deploying the main schema would
-  // abort on that missing source before the lexicon is compiled.
-  std::string schema = std::string(directory) + "/voxfix_personal.schema.yaml";
-  env->ReleaseStringUTFChars(shared, directory);
-  if (access(schema.c_str(), F_OK) == 0) {
-    api->deployer_initialize(nullptr);
-    if (!api->deploy_schema(schema.c_str())) { feelime_rime_finalize(); return 0; }
+  const char* user_path = env->GetStringUTFChars(user, nullptr);
+  std::string user_dir(user_path);
+  env->ReleaseStringUTFChars(user, user_path);
+  if (access((user_dir + "/lexicon-migrated").c_str(), F_OK) != 0) {
+    auto* module = api->find_module("levers");
+    auto* levers = module && module->get_api ? reinterpret_cast<RimeLeversApi*>(module->get_api()) : nullptr;
+    if (!levers || !RIME_API_AVAILABLE(levers, export_user_dict)) { feelime_rime_finalize(); return 0; }
+    const auto directory = user_dir + "/lexicon-export";
+    mkdir(directory.c_str(), 0700);
+    bool ok = true;
+    RimeUserDictIterator iter{};
+    if (levers->user_dict_iterator_init(&iter)) {
+      while (const char* name = levers->next_user_dict(&iter)) {
+        const std::string dict(name);
+        if (dict.find_first_of("/\\") != std::string::npos || dict.find("..") != std::string::npos ||
+            levers->export_user_dict(name, (directory + "/" + dict + ".tsv").c_str()) < 0) { ok = false; break; }
+      }
+      levers->user_dict_iterator_destroy(&iter);
+    }
+    if (!ok || !std::ofstream(directory + "/ready").put('1')) { feelime_rime_finalize(); return 0; }
   }
   auto session = api->create_session();
   if (session && !api->select_schema(session, "voxfix")) { api->destroy_session(session); return 0; }
@@ -106,27 +118,6 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_local_voxfix_debug_PinyinEngine_n
     api->free_candidate_preview(&preview);
   }
   return strings(env, result);
-}
-
-extern "C" JNIEXPORT void JNICALL Java_local_voxfix_debug_PinyinEngine_nativeLearn(JNIEnv*, jobject, jlong session, jint index, jint consumed) {
-  auto* api = rime_get_api();
-  if (!api->select_candidate(session, index)) return;
-  const char* input = api->get_input(session);
-  std::size_t length = input ? std::char_traits<char>::length(input) : 0;
-  api->set_caret_pos(session, length);
-  while (length > static_cast<std::size_t>(consumed)) {
-    api->process_key(session, 0xff08, 0);
-    const char* remaining = api->get_input(session);
-    auto next = remaining ? std::char_traits<char>::length(remaining) : 0;
-    if (next >= length) break;
-    length = next;
-  }
-  api->commit_composition(session);
-  RIME_STRUCT(RimeCommit, commit);
-  if (api->get_commit(session, &commit)) api->free_commit(&commit);
-  // Finish the accepted learning transaction before the next input session.
-  api->process_key(session, 0xff1b, 0);
-  api->clear_composition(session);
 }
 
 extern "C" JNIEXPORT void JNICALL Java_local_voxfix_debug_PinyinEngine_nativeClose(JNIEnv*, jobject, jlong session) {

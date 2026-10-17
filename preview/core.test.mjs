@@ -60,7 +60,7 @@ assert.equal(moveCursor('前👨‍👩‍👧‍👦后',1,1),'前👨‍👩�
 assert.equal(moveCursor('前👨‍👩‍👧‍👦后','前👨‍👩‍👧‍👦'.length,-1),1);
 const legacy=settingsFrom({height:321,fontSize:25,gap:9,radius:11,background:'#ff0000',candidateCount:9,candidateFont:13,clipboardHistory:false,rememberInput:false,phrasePacks:['running']});
 for(const [key,value] of Object.entries(keyboardGeometry))assert.equal(legacy[key],value,'Saved geometry must be replaced: '+key);
-assert.equal(legacy.clipboardHistory,false);assert.equal(legacy.rememberInput,false);assert.deepEqual(legacy.phrasePacks,['running']);
+assert.equal(legacy.clipboardHistory,false);assert.equal(legacy.rememberInput,true);assert.deepEqual(legacy.phrasePacks,['running']);
 const snapshot={text:'前原文后',start:1,end:3};
 assert.deepEqual(voiceResult(snapshot,'你好。'),{text:'前你好。后',cursor:4});
 assert.deepEqual(voiceResult(snapshot,'演示',true),{text:snapshot.text,cursor:1});
@@ -89,7 +89,7 @@ assert.deepEqual(rankLearned(['从','出'],[{key:'p:c',word:'吃饭了吗',hits:
 assert.deepEqual(rankLearned(['年会','你好'],[{key:'p:nihao',word:'你好',hits:2}],'p:nh'),['你好','年会']);
 assert.deepEqual(validateLearning(JSON.parse(JSON.stringify(memory))),memory);
 assert.throws(()=>validateLearning([{key:'p:ni',word:'泥',hits:-1}]));
-assert.equal(settingsFrom({rememberInput:false}).rememberInput,false);
+assert.equal(settingsFrom({rememberInput:false}).rememberInput,true);
 // 剪贴板：上限对齐官方 300 条，到上限丢最旧而不是报错（R2-07 / R2-08）。
 let full=[];
 for(let i=0;i<snippetLimit+7;i++)full=addSnippet(full,'条目'+i);

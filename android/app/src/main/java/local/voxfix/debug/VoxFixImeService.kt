@@ -43,6 +43,7 @@ import java.util.concurrent.FutureTask
 import java.util.concurrent.atomic.AtomicBoolean
 
 class VoxFixImeService : InputMethodService() {
+    private val lexicon by lazy { PersonalLexicon(this) }
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
     private val pinyinLoader = Executors.newSingleThreadExecutor()
@@ -53,7 +54,8 @@ class VoxFixImeService : InputMethodService() {
     private val session = InputSession()
     private val capturing = AtomicBoolean(false)
     @Volatile private var engine: SpeechEngine? = null
-    private var web: WebView? = null
+    @Volatile private var web: WebView? = null
+    @Volatile private var microphoneCapture: PcmCapture? = null
     private var clipHint: PopupWindow? = null
     /** 最近一次 resize() 请求的键盘像素高度。标签定位只认它，不认 view.height：
      *  网页在同一帧里先调 clipHint() 再调 resize()，此时 layoutParams 刚改、layout 还没跑，
@@ -110,9 +112,32 @@ class VoxFixImeService : InputMethodService() {
             try {
                 preparePersonalData()
                 val ready = PinyinEngine(assets, filesDir)
+                try {
+                    if (!lexicon.nativeMigrationComplete()) {
+                        val replacements = mutableMapOf<String, String>()
+                        for (name in listOf("TSCharacters.txt", "TSPhrases.txt")) {
+                            assets.open("pinyin/opencc/$name").bufferedReader().useLines { lines ->
+                                lines.filter { it.contains('\t') && !it.startsWith("#") }.forEach { line ->
+                                    val pair = line.split('\t'); replacements[pair[0]] = pair[1].substringBefore(' ')
+                                }
+                            }
+                        }
+                        val maxLength = replacements.keys.maxOfOrNull { it.length } ?: 1
+                        lexicon.migrateNative(filesDir) { text -> buildString {
+                            var offset = 0
+                            while (offset < text.length) {
+                                val count = (minOf(maxLength, text.length - offset) downTo 1).firstOrNull { text.substring(offset, offset + it) in replacements } ?: 1
+                                append(replacements[text.substring(offset, offset + count)] ?: text.substring(offset, offset + count)); offset += count
+                            }
+                        } }
+                    }
+                } catch (error: Throwable) { ready.close(); throw error }
                 main.post {
                     if (destroyed) ready.close()
-                    else { pinyin = ready; script("globalThis.voxfixPinyinReady?.()") }
+                    else {
+                        pinyin = ready; script("globalThis.voxfixPinyinReady?.()")
+                        pinyinLoader.execute { try { lexicon.cleanupLegacy(filesDir) } catch (error: Exception) { Log.w("VoxFix", "Legacy lexicon cleanup deferred", error) } }
+                    }
                 }
             } catch (error: Throwable) {
                 pinyinFailed = true
@@ -198,6 +223,7 @@ class VoxFixImeService : InputMethodService() {
     /** The personal English list is bundled too, so a first run works before staging finishes. */
     private fun openKeyboardAsset(path: String): java.io.InputStream {
         if (path != "keyboard/personal-english.txt") return assets.open(path)
+        lexicon.personalEnglish()?.let { return it.byteInputStream(Charsets.UTF_8) }
         val staged = File(filesDir, "pinyin-personal/personal-english.txt")
         return if (staged.isFile) staged.inputStream() else assets.open("pinyin-personal/personal-english.txt")
     }
@@ -741,7 +767,7 @@ class VoxFixImeService : InputMethodService() {
         }
         session.close()
         capturing.set(false)
-        engine?.stop()
+        microphoneCapture?.stop()
         streamedText = ""
         selectedBeforeVoice = ""
         localVoice = false
@@ -780,9 +806,10 @@ class VoxFixImeService : InputMethodService() {
         worker.execute {
             var received = ""
             try {
-                if (engine == null) engine = SpeechEngine(assets)
                 if (capturing.get() && session.accepts(current)) {
-                    received = checkNotNull(engine).record({ text ->
+                    received = SpeechEngine.record({
+                        engine ?: SpeechEngine(assets).also { engine = it }
+                    }, { text ->
                         received = text
                         if (text.isNotBlank()) main.post {
                             if (session.accepts(current) && shown && inputGeneration == targetGeneration) {
@@ -793,7 +820,13 @@ class VoxFixImeService : InputMethodService() {
                         }
                     }, { level -> main.post {
                         if (session.accepts(current) && shown && inputGeneration == targetGeneration) script("globalThis.voxfixVoiceLevel?.($level)")
-                    } }, { capturing.get() && session.accepts(current) }, { !session.accepts(current) || inputGeneration != targetGeneration })
+                    } }, { capturing.get() && session.accepts(current) }, { !session.accepts(current) || inputGeneration != targetGeneration }, { main.post {
+                        if (capturing.get() && session.accepts(current) && shown && inputGeneration == targetGeneration)
+                            script("globalThis.voxfixVoiceListening?.()")
+                    } }, { capture ->
+                        microphoneCapture = capture
+                        if (!capturing.get()) capture?.stop()
+                    })
                 }
                 capturing.set(false)
                 val result = received
@@ -852,17 +885,37 @@ class VoxFixImeService : InputMethodService() {
         }
         @JavascriptInterface fun ready() { main.post { if (web === owner) { currentInputEditorInfo?.let { startKeyboard(it, false) } ?: resetKeyboard(); Log.i(selTag, "page-ready anchor=$selectionLockedAnchor drag=${selectionDrag.anchor},${selectionDrag.head}"); if (selectionLockedAnchor >= 0 && selectionDrag.anchor >= 0) { script("globalThis.voxfixSelectionOrigin?.()"); reportSelection(selectionDrag.anchor, selectionDrag.head); showAnnotation() }; updateClipboard(); if (pinyinFailed) script("globalThis.voxfixPinyinReady?.(true)") } } }
         @JavascriptInterface fun pinyinReady() = pinyin != null
+        @JavascriptInterface fun lexiconMigrate(value: String): String = lexiconReply {
+            require(value.toByteArray().size <= PersonalLexicon.MAX_BYTES)
+            lexicon.migrateWeb(org.json.JSONArray(value))
+            val cleaned = pinyin != null && runCatching { lexicon.cleanupLegacy(filesDir) }.getOrDefault(false)
+            JSONObject().put("ok", true).put("legacyCleaned", cleaned).put("count", lexicon.count())
+        }
+        @JavascriptInterface fun lexiconStatus(): String = lexiconReply { JSONObject().put("ready", lexicon.migrationComplete()).put("count", lexicon.count()).put("legacyCleaned", lexicon.legacyCleaned()) }
+        @JavascriptInterface fun lexiconLookup(raw: String): String = lexiconReply { JSONObject().put("rows", lexicon.lookup(raw)) }
+        @JavascriptInterface fun lexiconAssociations(value: String): String = lexiconReply { JSONObject().put("rows", lexicon.associations(value)) }
+        @JavascriptInterface fun lexiconLearn(value: String): String = lexiconReply {
+            require(value.length <= 20000)
+            lexicon.learn(org.json.JSONArray(value)); JSONObject().put("ok", true)
+        }
+        @JavascriptInterface fun lexiconRevision() = lexicon.revision().toString()
+        @JavascriptInterface fun openLexicon() { main.post {
+            if (web === owner) startActivity(android.content.Intent(this@VoxFixImeService, LexiconActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        } }
+        private fun lexiconReply(action: () -> JSONObject): String = try {
+            check(web === owner && !destroyed); action().toString()
+        } catch (error: Exception) { JSONObject().put("error", error.message ?: "个人词库操作失败").toString() }
         @JavascriptInterface fun pinyinCandidates(value: String, limit: Int): String =
             if (web !== owner || !value.matches(Regex("[a-z']{1,100}"))) "{}"
             else try { pinyin?.candidates(value, limit.coerceIn(1, 2000)) ?: "{}" }
             catch (error: Exception) { Log.e("VoxFix", "IME_PINYIN_QUERY_FAILED", error); "{}" }
         @JavascriptInterface fun pinyinChoose(value: String, word: String, learn: Boolean): String {
             if (!value.matches(Regex("[a-z']{1,100}")) || word.isEmpty() || word.length > 200) return "{}"
-            return inputReply { pinyin?.choose(value, word, learn, ::commitInputText) ?: "{}" }
+            return inputReply { pinyin?.choose(value, word, ::commitInputText) ?: "{}" }
         }
         @JavascriptInterface fun pinyinChooseLocal(value: String, word: String): String {
             if (web !== owner || !value.matches(Regex("[a-z']{1,100}")) || word.isEmpty() || word.length > 200) return "{}"
-            return try { pinyin?.choose(value, word, false) { true } ?: "{}" }
+            return try { pinyin?.choose(value, word) { true } ?: "{}" }
             catch (error: Exception) { Log.e("VoxFix", "IME_LOCAL_PINYIN_CHOOSE_FAILED", error); "{}" }
         }
         @JavascriptInterface fun commitAccepted(value: String): String = if (value.length > 10000) "{}"
@@ -906,11 +959,6 @@ class VoxFixImeService : InputMethodService() {
         }
         @JavascriptInterface fun splitFinish(id: Int): String = inputReply {
             JSONObject().put("finished", clipboardSplit?.id == id && finishClipboardSplit()).toString()
-        }
-        @JavascriptInterface fun pinyinClearLearning(): String = inputReply {
-            val ready = pinyin ?: return@inputReply "{}"
-            ready.clearLearning()
-            JSONObject().put("cleared", true).toString()
         }
         @JavascriptInterface fun refreshClipboard() = editInput { updateClipboard() }
         @JavascriptInterface fun importClipboard() = editInput { updateClipboard(true) }
@@ -987,8 +1035,15 @@ class VoxFixImeService : InputMethodService() {
         @JavascriptInterface fun switcher() = editInput { getSystemService(InputMethodManager::class.java).showInputMethodPicker() }
         @JavascriptInterface fun startVoice() = editInput { beginVoice() }
         @JavascriptInterface fun startLocalVoice() = editInput { beginVoice(true) }
-        @JavascriptInterface fun stopVoice() = editInput { capturing.set(false); engine?.stop() }
-        @JavascriptInterface fun cancelVoice() = editInput { cancelRecording(true) }
+        private fun stopMicrophone() {
+            if (web !== owner || !shown || destroyed) return
+            val started = System.nanoTime()
+            capturing.set(false)
+            microphoneCapture?.stop()
+            Log.i("VoxFix", "IME_MIC_STOP_REQUESTED elapsedMs=${(System.nanoTime() - started) / 1_000_000}")
+        }
+        @JavascriptInterface fun stopVoice() = stopMicrophone()
+        @JavascriptInterface fun cancelVoice() { stopMicrophone(); editInput { cancelRecording(true) } }
         @JavascriptInterface fun cursorPosition() = editInput {
             currentInputConnection?.getExtractedText(ExtractedTextRequest(), 0)?.let { text -> script("globalThis.voxfixCursor?.(${text.selectionEnd},${text.text?.length ?: 0})") }
         }
@@ -1237,6 +1292,7 @@ class VoxFixImeService : InputMethodService() {
         cancelRecording()
         destroyKeyboardView()
         pinyin?.close(); pinyin = null
+        pinyinLoader.execute { lexicon.close() }
         pinyinLoader.shutdown()
         worker.execute { engine?.release() }
         worker.shutdown()

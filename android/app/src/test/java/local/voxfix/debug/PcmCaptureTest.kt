@@ -5,8 +5,42 @@ import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 
 class PcmCaptureTest {
+    @Test fun stopUnblocksAnInFlightReadWithoutAcceptingLaterAudio() {
+        val reading = CountDownLatch(1)
+        val unblock = CountDownLatch(1)
+        var read = 0
+        PcmCapture(8, {
+            if (read++ == 0) floatArrayOf(1f) else {
+                reading.countDown()
+                unblock.await()
+                null
+            }
+        }, { true }, { unblock.countDown() }).use { capture ->
+            assertTrue(reading.await(2, TimeUnit.SECONDS))
+            capture.stop()
+            assertEquals(1f, capture.next()!!.single())
+            assertNull("Audio arriving after release must never reach recognition", capture.next())
+        }
+    }
+
+    @Test fun releaseDuringColdLoadStillDrainsTheOpeningAudio() {
+        val recording = AtomicBoolean(true)
+        val stopped = CountDownLatch(1)
+        var read = 0
+        PcmCapture(SpeechEngine.CAPTURE_BUFFER_CHUNKS, {
+            read++
+            if (read == 40) recording.set(false)
+            floatArrayOf(read.toFloat())
+        }, { recording.get() }, { stopped.countDown() }).use { capture ->
+            // Simulate model loading until the user has already released the voice key.
+            assertTrue(stopped.await(2, TimeUnit.SECONDS))
+            assertEquals((1..40).map { it.toFloat() }, generateSequence { capture.next()?.single() }.toList())
+        }
+    }
+
     @Test fun readsAheadDuringDecodeAndPreservesOrder() {
         val read = AtomicInteger()
         val ready = CountDownLatch(1)

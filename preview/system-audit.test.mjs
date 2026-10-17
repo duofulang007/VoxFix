@@ -1,3 +1,4 @@
+import {lexiconRecords} from './test-lexicon.mjs';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 import {createServer} from 'node:http';
@@ -44,7 +45,7 @@ try{
     await page.evaluate(()=>voxfixStartInput(1,false,0x1000000));
     await key('letter','N').click();await key('letter','I').click();await key('candidate').click();
     assert.equal(await page.evaluate(()=>calls.find(row=>row[0]==='pinyinChoose')?.[3]),false);
-    assert.equal(await page.evaluate(()=>localStorage.getItem('voxfix-learning-v1')),null);
+    assert.deepEqual(await lexiconRecords(page),[]);
     await page.evaluate(()=>voxfixStartInput(1,false,0));
     await key('letter','N').click();await key('letter','I').click();await key('candidate').click();
     assert.equal(await page.evaluate(()=>calls.filter(row=>row[0]==='pinyinChoose').at(-1)?.[3]),true);
@@ -52,10 +53,10 @@ try{
   await check('no personalized learning flag prevents fallback history updates',async(page,key)=>{
     await page.evaluate(()=>{VoxFixIme.pinyinReady=()=>false;voxfixPinyinReady(true);voxfixStartInput(1,false,0x1000000);});
     await key('letter','N').click();await key('letter','I').click();await key('candidate').click();
-    assert.equal(await page.evaluate(()=>localStorage.getItem('voxfix-learning-v1')),null);
+    assert.deepEqual(await lexiconRecords(page),[]);
     await page.evaluate(()=>voxfixStartInput(1,true,0));
     await key('letter','N').click();await key('letter','I').click();await key('candidate').click();
-    assert(await page.evaluate(()=>JSON.parse(localStorage.getItem('voxfix-learning-v1')||'[]').length>0));
+    assert((await lexiconRecords(page)).length>0);
   });
   await check('editor entrance survives an ordinary native redraw',async(page)=>{
     const result=await page.evaluate(()=>{

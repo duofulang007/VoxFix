@@ -23,6 +23,7 @@ try{
     window.calls=[];
     window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','edit','ready','resize','refreshClipboard','importClipboard'].map(name=>[name,(...args)=>calls.push([name,...args])]));
     VoxFixIme.voiceReady=()=>true;
+    VoxFixIme.startVoice=()=>{calls.push(['startVoice']);setTimeout(()=>voxfixVoiceListening(),0);};
   });
   await page.goto(origin+'/preview/index.html');
   await page.waitForFunction(()=>typeof voxfixVoiceLevel==='function');

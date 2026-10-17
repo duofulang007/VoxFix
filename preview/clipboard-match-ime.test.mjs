@@ -1,3 +1,4 @@
+import {lexiconRecords} from './test-lexicon.mjs';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 import {createServer} from 'node:http';
@@ -33,7 +34,7 @@ async function check(name,run){
   const ready=()=>page.waitForFunction(()=>typeof voxfixStartInput==='function'&&document.querySelector('#pinyin-status').textContent.includes('已就绪'));
   const key=(action,value)=>page.locator(`#keyboard [data-action="${action}"]${value===undefined?'':`[data-value="${value}"]`}`).first();
   const type=async raw=>{for(const letter of raw)await key('letter',letter.toUpperCase()).click();};
-  const records=()=>page.evaluate(()=>JSON.parse(localStorage.getItem('voxfix-learning-v1')||'[]'));
+  const records=()=>lexiconRecords(page);
   const reset=()=>page.evaluate(()=>voxfixStartInput(1,false,0));
   try{await page.goto(`http://127.0.0.1:${server.address().port}/`);await ready();await run({page,key,type,records,reset,ready});assert.deepEqual(errors,[]);console.log('PASS '+name);}
   catch(e){failures.push(name+': '+e.message);console.log('FAIL '+name+': '+e.message.slice(0,500));}

@@ -19,3 +19,8 @@ Every downloaded file is checked against its Git blob ID; published SHA-256
 values are also checked for the core, runtime, and compiled dictionary.
 The local JNI adapter is compiled with the existing Android NDK r28b.
 Packaging strips debug symbols from verified copies; originals remain intact.
+
+The vendored `rime_levers_api.h` is the unmodified BSD-licensed header from
+`rime/librime@417db2385f732cb0fa194b497042c42abb897d99/src/rime_levers_api.h`.
+It is used only to export historical user dictionaries before migrating them to
+the local unified personal lexicon. Existing Rime user database files are retained.

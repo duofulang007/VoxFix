@@ -28,12 +28,9 @@
         <details class="coverage"><summary>本版功能范围</summary><p>9 键拼音、26 键拼音、离线语音；数字、符号、剪贴板／常用语、表情与颜文字、文字编辑和布局设置。</p><p>完整讯飞设置页与在线表情商店不在当前范围。</p></details>
       </section>
       <section id="custom-panel" hidden>
-        <p class="note">键盘尺寸、按键大小与背景已按讯飞小米版固定。</p>
-        <h2>保留哪些入口</h2><p class="note">重复入口先保留。取消勾选即可隐藏，随时能加回来。</p><div id="feature-toggles" class="feature-toggles"></div>
-        <h2>剪贴板</h2><p class="note">对齐官方小米版：可关闭历史记录；开启后复制内容会出现在候选栏，一键上屏。</p><div id="clipboard-toggles" class="feature-toggles"></div>
-        <h2>常用按键</h2><div class="punctuation"><label class="field">逗号键<input id="comma" maxlength="8"></label><label class="field">句号键<input id="period" maxlength="8"></label></div>
-        <h2>输入习惯记忆</h2><label class="demo-toggle"><input type="checkbox" id="remember-input" checked>记住选词习惯</label><p id="learning-status" class="note">记住常选词与连续输入的短语，支持简拼和接续联想，只保存在本机。</p><button id="clear-learning" class="clear-learning">清空选词记忆</button>
-        <div class="config-actions"><button id="export">导出功能设置</button><button id="import">导入功能设置</button><input type="file" id="config-file" accept=".json,application/json" hidden><button id="reset">恢复默认功能设置</button></div><p class="note">功能设置自动保存；键盘尺寸保持固定，试用文字不会保存。</p>
+        <h2>剪贴板</h2><div id="clipboard-toggles"></div>
+        <h2>个人词库</h2><button id="personal-lexicon">个人词库与迁移</button><div id="lexicon-actions" class="config-actions" hidden><button id="lexicon-backup">导出完整备份</button><button id="lexicon-text">导出通用词库</button><button id="lexicon-import">合并导入词库</button><input id="lexicon-file" type="file" accept=".json,.tsv,.txt" hidden><p class="note">默认在本机长期保存。通用文本只含读音明确的词条，完整备份保留全部记录。</p></div>
+        <div class="config-actions"><button id="export">导出功能设置</button><button id="import">导入功能设置</button><input type="file" id="config-file" accept=".json,application/json" hidden><button id="reset">恢复默认功能设置</button></div>
       </section>
       <p id="feedback" class="feedback" role="status" aria-live="polite">默认布局保留了录屏中的重复入口。</p>
     </aside>

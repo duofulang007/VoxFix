@@ -22,7 +22,8 @@ async function check(name,run){
     VoxFixIme.pinyinClearLearning=()=>{calls.push(['clearLearning']);return JSON.stringify({cleared:true});};
     const original=Storage.prototype.setItem;
     Storage.prototype.setItem=function(key,value){if(window.failSave&&key==='voxfix-snippets-v1')throw new DOMException('full','QuotaExceededError');return original.call(this,key,value);};
-    if(!localStorage.getItem('voxfix-snippets-v1'))localStorage.setItem('voxfix-snippets-v1',JSON.stringify({clips:['A','B','C'],phrases:[{name:'常用语',items:['默认']},{name:'甲',items:['甲内容']},{name:'乙',items:['乙内容']}]}));
+    if(!localStorage.getItem('voxfix-snippets-v1'))localStorage.setItem('voxfix-layout-v1',JSON.stringify({clipboardCandidate:true}));
+    localStorage.setItem('voxfix-snippets-v1',JSON.stringify({clips:['A','B','C'],phrases:[{name:'常用语',items:['默认']},{name:'甲',items:['甲内容']},{name:'乙',items:['乙内容']}]}));
   });
   const key=(action,value)=>page.locator(`#keyboard [data-action="${action}"]${value===undefined?'':`[data-value="${value}"]`}`).first();
   const click=(action,value)=>key(action,value).click();
@@ -50,16 +51,17 @@ try{
     const menu=await page.locator('.clip-item-menu').boundingBox(),row=await page.locator('.clip-text').first().boundingBox(),kb=await page.locator('#keyboard').boundingBox();
     assert.equal(menu.width,200);assert.equal(menu.height,250);assert(Math.abs(menu.y-row.y-8)<1);assert(menu.x>=kb.x&&menu.y>=kb.y&&menu.x+menu.width<=kb.x+kb.width&&menu.y+menu.height<=kb.y+kb.height);
     await click('context-edit');const height=await page.locator('#keyboard').evaluate(e=>e.getBoundingClientRect().height);assert.equal(height,479);
-    const after=await keys();assert.equal(after.length,before.length);for(let i=0;i<before.length;i++){assert.equal(after[i].w,before[i].w);assert.equal(after[i].h,before[i].h);assert.equal(after[i].x,before[i].x);assert.equal(after[i].y-before[i].y,128);}
+    const after=await keys();assert.deepEqual(after,before,'固定画布中编辑框展开不能移动或缩小按键');
+    assert(await page.evaluate(()=>calls.some(call=>call[0]==='resize'&&call[1]===479)));
     const frame=await page.locator('.snippet-frame').boundingBox(),actions=await page.locator('#snippet-form .dialog-actions').boundingBox(),text=await page.locator('#snippet-content').boundingBox();
     assert(actions.x>=frame.x&&actions.x+actions.width<=frame.x+frame.width&&actions.y+actions.height<=frame.y+frame.height);assert(text.height>=60);assert.equal(actions.width,46);assert(text.x+text.width<=actions.x,'右侧窄栏不能遮住编辑正文');assert.equal(actions.height,text.height);
     await page.locator('#snippet-content').fill('修改后');await page.locator('#snippet-form button[type=submit]').click();
     assert(await page.locator('.clip-text').filter({hasText:'修改后'}).count());assert.equal(await page.locator('#keyboard').evaluate(e=>e.getBoundingClientRect().height),351);
-    await context('C');const lower=await page.locator('.clip-item-menu').boundingBox();assert(lower.y>=0&&lower.y+lower.height<=351);
+    await context('C');const lower=await page.locator('.clip-item-menu').boundingBox(),restored=await page.locator('#keyboard').boundingBox();assert(lower.y>=restored.y&&lower.y+lower.height<=restored.y+restored.height);
   });
   await check('clipboard preview matches official layout and keeps full paste payload',async({page,click,storage})=>{
     const baseHeight=await page.locator('#keyboard').evaluate(node=>node.getBoundingClientRect().height);
-    await page.evaluate(()=>{const input=document.querySelector('[data-setting="clipboardCandidate"]');input.checked=true;input.dispatchEvent(new Event('change',{bubbles:true}));voxfixClipboard('好久','preview-1');});
+    await page.evaluate(()=>{voxfixClipboard('好久','preview-1');});
     const geometry=await page.evaluate(()=>{const preview=document.querySelector('.clip-preview'),source=preview.querySelector('.clip-preview-source'),text=preview.querySelector('.clip-preview-text'),close=preview.querySelector('.clip-preview-close'),keyboard=document.querySelector('#keyboard');return {height:keyboard.getBoundingClientRect().height,keyboardTop:keyboard.getBoundingClientRect().top,sourceHeight:source.getBoundingClientRect().height,sourceBottom:source.getBoundingClientRect().bottom,sourceLeft:source.getBoundingClientRect().left,sourceWidth:source.getBoundingClientRect().width,barTop:text.getBoundingClientRect().top,font:getComputedStyle(text).fontSize,color:getComputedStyle(text).color,closeWidth:close.getBoundingClientRect().width,hint:calls.filter(row=>row[0]==='clipHint').at(-1)?.[1]};});
     // 标签悬在键盘上沿之外，**不占键盘高度**：有没有剪贴板预览，键盘高度必须一模一样。
     assert.equal(geometry.height,baseHeight);assert.equal(geometry.height,351);
@@ -127,13 +129,8 @@ try{
     assert.equal(await page.locator('.key-popup').count(),1);await page.evaluate(()=>window.dispatchEvent(new Event('blur')));await page.mouse.up();await page.waitForTimeout(50);
     assert.equal(await page.locator('.key-popup').count(),0);assert.equal(await page.locator('.key.pressed').count(),0);assert.equal(await page.evaluate(()=>calls.filter(call=>call[0]==='commit').length),0);
   });
-  await check('clear-learning confirmation is visible and needs a second click',async({page,click})=>{
-    await click('menu');await click('custom');await page.locator('#clear-learning').click();
-    assert(await page.locator('#toast').isVisible());assert.match(await page.locator('#toast').textContent(),/再次点击/);assert.equal(await page.evaluate(()=>calls.filter(call=>call[0]==='clearLearning').length),0);
-    await page.locator('#clear-learning').click();assert.equal(await page.evaluate(()=>calls.filter(call=>call[0]==='clearLearning').length),1);assert.equal(await page.locator('#toast').textContent(),'已清空选词记忆。');
-  });
   await check('history disabled still allows copied-content hints and explicit import',async({page,click,storage})=>{
-    await click('menu');await click('custom');await page.locator('[data-setting="clipboardHistory"]').uncheck();await page.locator('[data-setting="clipboardCandidate"]').check();
+    await click('menu');await click('custom');await page.locator('[data-setting="clipboardHistory"]').uncheck();await page.locator('dialog[open] > button').first().click();await page.evaluate(()=>{const key='voxfix-layout-v1';localStorage.setItem(key,JSON.stringify({...JSON.parse(localStorage.getItem(key)||'{}'),clipboardCandidate:true}));});await page.reload();await page.waitForFunction(()=>typeof voxfixReset==='function');await click('menu');await click('custom');
     await page.locator('dialog[open] > button').first().click();await click('return');await page.evaluate(()=>voxfixClipboard('X','new-copy'));
     assert.equal(await page.locator('.clip-candidate').count(),1);assert(!(await storage()).clips.includes('X'));
     await click('clipboard');await click('clip-manage-menu');await click('system-paste');await page.evaluate(()=>voxfixClipboard('X','new-copy',true));
