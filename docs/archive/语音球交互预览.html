@@ -57,7 +57,7 @@ try{
   const init=`<base href="${new URL('../../preview/',location.href)}"><script>
     window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','edit','ready','resize','refreshClipboard','importClipboard'].map(n=>[n,()=>{}]));
     VoxFixIme.voiceReady=()=>true;VoxFixIme.handReady=()=>false;
-    let demoGeneration=0;VoxFixIme.startVoice=()=>demoGeneration++;VoxFixIme.cancelVoice=()=>demoGeneration++;
+    let demoGeneration=0;VoxFixIme.startVoice=()=>{demoGeneration++;setTimeout(()=>voxfixVoiceListening(),0);};VoxFixIme.cancelVoice=()=>demoGeneration++;
     VoxFixIme.stopVoice=()=>{const serial=demoGeneration;setTimeout(()=>{if(serial===demoGeneration)voxfixVoiceDone('');},1100);};
     window.addEventListener('pointerdown',()=>parent.postMessage('voice-interaction','*'));
   <\/script>`;
