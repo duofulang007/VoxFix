@@ -1,11 +1,16 @@
 """Download and verify the offline voice models the Android build ships.
 
-The Android package uses three models:
+The Android package uses four models:
 
 - a streaming Zipformer for pass 1, so text appears while the user talks;
-- SenseVoiceSmall int8 for pass 2, which re-reads the whole utterance and supplies
-  punctuation and inverse text normalization in one non-autoregressive pass;
-- silero-vad, which decides when a pause closes an utterance.
+- SenseVoiceSmall int8 for pass 2, which re-reads the whole utterance;
+- silero-vad, which decides when a pause closes an utterance;
+- a CT-Transformer int8 punctuation model, applied to the final text.
+
+SenseVoice is often described as supplying punctuation and ITN in one pass, but this
+build does not: on fixed audio the output is identical and punctuation-free for
+`language=zh/auto` × `useInverseTextNormalization=true/false`, including questions.
+Punctuation therefore comes from the separate CT-Transformer model.
 
 Every download is checked against a fixed SHA-256. Digests are recorded per extracted
 file rather than per archive, so the check still holds when a mirror is used instead of
@@ -26,6 +31,7 @@ MIRROR = 'https://hf-mirror.com/csukuangfj'
 ARCHIVES = [
     ('asr-models', 'sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20-mobile'),
     ('asr-models', 'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09'),
+    ('punctuation-models', 'sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8'),
 ]
 
 # source name inside the archive -> destination under models/, with its digest
@@ -41,6 +47,11 @@ FILES = {
                             '12ca1a2ae7ecf3e0019ef2822307ee0b5cadc9196569e379b4c4026f8205276d'),
         'tokens.txt': ('sensevoice/tokens.txt',
                        'f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc'),
+    },
+    # 词表与标点符号集内嵌在 onnx 元数据里，只需要这一个文件。
+    'sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8': {
+        'model.int8.onnx': ('punctuation/model.int8.onnx',
+                            '65a3fb9f5ad7bfb96bf69e0dc4481df97f6ee60513c1d94ce981ba6effd524b1'),
     },
 }
 

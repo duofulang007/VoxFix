@@ -34,7 +34,7 @@ val optimizeStreamingModels by tasks.registering(Exec::class) {
 }
 val stageModels by tasks.registering(Sync::class) {
     dependsOn(optimizeStreamingModels)
-    from("../../models") { include("streaming/**", "vad/**", "sensevoice/**"); exclude("streaming/*.onnx") }
+    from("../../models") { include("streaming/**", "vad/**", "sensevoice/**", "punctuation/*.onnx"); exclude("streaming/*.onnx") }
     from("../../.android/streaming-optimized") { include(streamingModelFiles); into("streaming") }
     // getVadModelConfig hardcodes the asset name "silero_vad.onnx", so the VAD model has to sit at
     // the assets root instead of under vad/. Keeping the source under vad/ stays tidy on disk.
@@ -45,6 +45,7 @@ val stageKeyboard by tasks.registering(Sync::class) {
     from("../../preview") { include("index.html", "*.css", "app.mjs", "core.mjs", "lexicon.mjs", "voice.mjs", "voice-orb.mjs", "pinyin.mjs", "english.mjs", "split.mjs", "english-words.txt", "pinyin-data.json", "pinyin-lite.json", "phrase-packs.json", "vendor/rime-ice/LICENSE", "vendor/rime-ice/UPSTREAM.md") }
     from("src/main/licenses/sensevoice") { include("LICENSE", "UPSTREAM.md"); into("licenses/sensevoice") }
     from("src/main/licenses/sherpa") { include("LICENSE", "UPSTREAM.md"); into("licenses/sherpa") }
+    from("src/main/licenses/punctuation") { include("LICENSE", "UPSTREAM.md"); into("licenses/punctuation") }
     into(layout.buildDirectory.dir("keyboardAssets/keyboard"))
 }
 val buildPinyinNative by tasks.registering(Exec::class) {

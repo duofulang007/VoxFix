@@ -24,6 +24,7 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
     private var numberNormalization = false
     private var lexicon = false
     private var english = false
+    private var punctuation = false
     override fun onCreate(arguments: Bundle?) {
         pinyin = arguments?.getString("pinyin") == "true"
         benchmark = arguments?.getString("benchmark") == "true"
@@ -34,12 +35,14 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
         numberNormalization = arguments?.getString("numbers") == "true"
         lexicon = arguments?.getString("lexicon") == "true"
         english = arguments?.getString("english") == "true"
+        punctuation = arguments?.getString("punct") == "true"
         super.onCreate(arguments); start()
     }
     override fun onStart() {
         val output = Bundle()
         try {
             if (english) { output.putString("result", VoiceEnglishSmoke.run(targetContext)); finish(Activity.RESULT_OK, output); return }
+            if (punctuation) { output.putString("result", VoicePunctuationSmoke.run(targetContext)); finish(Activity.RESULT_OK, output); return }
             if (lexicon) { output.putString("result", PersonalLexiconSmoke.run(targetContext)); finish(Activity.RESULT_OK, output); return }
             if (numberNormalization) {
                 output.putString("result", NumberNormalizationSmoke.run(targetContext))

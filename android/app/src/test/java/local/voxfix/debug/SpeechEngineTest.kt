@@ -81,6 +81,40 @@ class SpeechEngineTest {
         assertEquals("你好。继续", SpeechEngine.join("你好。", "。继续"))
     }
 
+    /**
+     * 回归：交给标点模型前必须剥掉已有句读。
+     *
+     * 模型对已带标点的文本会叠标点（实测 `你好，请问洗手间在哪里？` →
+     * `你好，，请问洗手间在哪里？？`）。剥句读让模型重新断句，但不能动小数点，
+     * 否则 `120.5` 会被模型拆成 `120 . 5`。
+     */
+    @Test fun stripsSentenceMarksBeforePunctuationModelButKeepsDecimals() {
+        assertEquals("你好请问洗手间在哪里", SpeechEngine.stripSentencePunctuation("你好，请问洗手间在哪里？"))
+        assertEquals("这个一共120.5元", SpeechEngine.stripSentencePunctuation("这个一共120.5元"))
+        assertEquals("真的吗", SpeechEngine.stripSentencePunctuation("真的吗？"))
+        assertEquals("Hello how are you", SpeechEngine.stripSentencePunctuation("Hello, how are you?"))
+    }
+
+    /** 二次防御：模型偶尔在残留标点后追加，相邻重复只能留一个。 */
+    @Test fun dedupesStackedPunctuationFromModel() {
+        assertEquals("你好，请问洗手间在哪里？", SpeechEngine.dedupePunctuation("你好，，请问洗手间在哪里？？"))
+        assertEquals("好的。", SpeechEngine.dedupePunctuation("好的。。"))
+        // 不同标点连用是合法写法，不合并。
+        assertEquals("真的吗？！", SpeechEngine.dedupePunctuation("真的吗？！"))
+    }
+
+    /**
+     * 模型只吃含汉字的文本：整句英文会被它加上中文逗号，纯英文继续走句末规则；
+     * 含引号括号的正文会被它插入错逗号，直接不交给模型。
+     */
+    @Test fun onlySendsChineseTextWithoutQuotesToPunctuationModel() {
+        assertEquals(true, SpeechEngine.needsPunctuationModel("请帮我打开WIFI设置"))
+        assertEquals(true, SpeechEngine.needsPunctuationModel("这个bug已经修好了"))
+        assertEquals(false, SpeechEngine.needsPunctuationModel("HELLO WORLD HOW ARE YOU"))
+        assertEquals(false, SpeechEngine.needsPunctuationModel("他说“明天见”就走了"))
+        assertEquals(false, SpeechEngine.needsPunctuationModel("（备注）"))
+    }
+
     @Test fun stripsSpacesSenseVoiceLeavesAroundPunctuation() {
         assertEquals("今天，天气不错。", SpeechEngine.clean("今天 ，天气不错 。"))
         assertEquals("中文输入", SpeechEngine.clean(" 中 文 输 入 "))
@@ -107,6 +141,10 @@ class SpeechEngineTest {
         assertEquals("Hello world.", SpeechEngine.punctuate(SpeechEngine.clean("HELLO WORLD")))
         assertEquals("Hello world.", SpeechEngine.punctuate("Hello world."))
         assertEquals("打开 USB。", SpeechEngine.punctuate(SpeechEngine.clean("打开 USB")))
+        // 纯英文没有标点模型覆盖，句首疑问词决定问号，否则陈述句被补成句号。
+        assertEquals("COULD YOU TURN OFF THE LIGHT?", SpeechEngine.punctuate("COULD YOU TURN OFF THE LIGHT"))
+        assertEquals("Where is the file?", SpeechEngine.punctuate("Where is the file"))
+        assertEquals("The door is closed.", SpeechEngine.punctuate("The door is closed"))
     }
 
     /**

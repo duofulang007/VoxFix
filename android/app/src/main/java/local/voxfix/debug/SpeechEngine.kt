@@ -35,6 +35,8 @@ class SpeechEngine(assets: AssetManager) {
     private var secondLoader: FutureTask<OfflineRecognizer>? = null
     private var vad: Vad? = null
     private var secondStarted = false
+    /** 标点与二遍解耦：模型只吃文本，二遍没跑完时同样能给尾段补标点。 */
+    private val punctuator = Punctuator(assets)
     private val secondWorker = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(1), { task ->
         Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "VoxFix-second-pass")
     })
@@ -90,6 +92,8 @@ class SpeechEngine(assets: AssetManager) {
             if (text.isNotBlank() && text != previousText && !isCancelled()) {
                 if (previousText.isEmpty()) {
                     Log.i("VoxFix", "ASR_FIRST_TEXT elapsedMs=${(System.nanoTime() - started) / 1_000_000}")
+                    // 标点模型与二遍同时开始加载，都在后台，不占实时出字这条路径。
+                    punctuator.start()
                     if (!finishing && isRecording() && !secondStarted) {
                         secondStarted = true
                         secondWorker.execute(checkNotNull(secondLoader))
@@ -224,7 +228,7 @@ class SpeechEngine(assets: AssetManager) {
             val tail = clean(recognizer.getResult(stream).text)
             var result = segments.fold("") { text, segment -> join(text, segment.finish()) }
             if (tail.isNotEmpty() && result.isEmpty()) result = tail
-            if (result.isNotEmpty()) result = punctuate(formatNumbers(result))
+            if (result.isNotEmpty()) result = restorePunctuation(result)
             emit(result)
             // Diagnostic only: which text each committed segment finally contributed.
             segments.forEachIndexed { index, segment ->
@@ -237,6 +241,25 @@ class SpeechEngine(assets: AssetManager) {
             stream.release()
             detector.reset()
         }
+    }
+
+    /**
+     * 收尾标点：离线标点模型在原始识别文本上补标点，然后才做数字转换与句末兜底。
+     *
+     * 顺序不能反：模型会破坏阿拉伯数字，实测 `这个一共120.5元` 输出成 `这个一共120 . 5元`；
+     * 而识别原文是「这个一共一百二十点五元」，模型处理正常。所以标点必须在 formatNumbers 之前。
+     *
+     * 模型只用于含汉字的文本。它是中文优先的，整句英文会被加上中文逗号
+     * （`HELLO WORLD HOW ARE YOU` → `HELLO WORLD，HOW ARE YOU？`），纯英文仍走原句末规则。
+     *
+     * 模型不可用或超时时退回流式文本，[punctuate] 仍会补句末 —— 松手不会因为标点而卡住。
+     */
+    private fun restorePunctuation(text: String): String {
+        val marked = if (needsPunctuationModel(text)) {
+            val stripped = stripSentencePunctuation(text)
+            punctuator.add(stripped)?.let { dedupePunctuation(it) } ?: text
+        } else text
+        return punctuate(formatNumbers(marked))
     }
 
     internal fun secondPass(): OfflineRecognizer {
@@ -254,6 +277,8 @@ class SpeechEngine(assets: AssetManager) {
         catch (error: java.util.concurrent.ExecutionException) { Log.e("VoxFix", "ASR_SECOND_LOAD_FAILED", error.cause) }
         finally { secondLoader = null }
         vad?.release(); vad = null
+        // 标点模型随引擎一起释放，纳入既有的空闲 30 秒回收，不单独常驻。
+        punctuator.release()
         // Return freed inference buffers to Android instead of keeping allocator caches resident.
         if (!NativeMemory.purge()) Log.w("VoxFix", "ASR_NATIVE_PURGE_UNAVAILABLE")
     }
@@ -552,7 +577,39 @@ class SpeechEngine(assets: AssetManager) {
             // 片段类收尾（括号、引号、连字符等）不补句号。
             if (last in CLOSERS) return trimmed
             if (last.code < 128 && !last.isLetterOrDigit()) return trimmed
-            return trimmed + if (trimmed.any { it in '\u4e00'..'\u9fff' }) "。" else "."
+            // 中文疑问句的问号由标点模型给出；纯英文没有模型覆盖，用句首疑问词判断，
+            // 否则 `COULD YOU TURN OFF THE LIGHT` 会被补成陈述句句号。
+            return trimmed + when {
+                trimmed.any { it in '\u4e00'..'\u9fff' } -> "。"
+                ENGLISH_QUESTION_START.containsMatchIn(trimmed) -> "?"
+                else -> "."
+            }
         }
+        /**
+         * 只有含汉字、且不带引号括号的文本才交给标点模型。
+         *
+         * 模型会在引号前插逗号（`他说“明天见”就走了` → `他说“，明天见”就走了`），
+         * 这类正文宁可不加标点也不能改坏。
+         */
+        fun needsPunctuationModel(text: String) =
+            text.any { it in '\u4e00'..'\u9fff' } && text.none { it in QUOTE_OR_BRACKET }
+        /**
+         * 交给模型前剥掉句读类标点。
+         *
+         * 模型对已经带标点的文本会叠标点：`你好，请问洗手间在哪里？` 会变成
+         * `你好，，请问洗手间在哪里？？`。剥成纯文字让它重新断句，位置由模型重算。
+         * 不剥 `.`：小数点（`120.5`）会被拆成 `120 . 5`；纯英文句子本来也不走模型。
+         */
+        fun stripSentencePunctuation(text: String) = SENTENCE_MARKS.replace(text, "")
+        /** 二次防御：模型偶尔仍在残留标点后追加，相邻重复只留一个。 */
+        fun dedupePunctuation(text: String) = REPEATED_MARK.replace(text, "$1")
+        /** 引号与括号：模型处理这些会插错逗号，出现即不交给模型。 */
+        private const val QUOTE_OR_BRACKET = "\"'「」『』“”‘’（）()《》【】〈〉〔〕"
+        /** 纯英文句首疑问词：没有模型兜底时用它决定问号还是句号。 */
+        private val ENGLISH_QUESTION_START = Regex(
+            "(?i)^(could|would|can|will|should|shall|do|does|did|is|are|was|were|have|has|had|" +
+                "what|where|when|why|how|who|whom|whose|which)\\b")
+        private val SENTENCE_MARKS = Regex("[，。？！；：、…,?!;]")
+        private val REPEATED_MARK = Regex("([，。？！；：、])\\1+")
     }
 }
