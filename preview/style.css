@@ -247,24 +247,6 @@
 .candidate-visible button:first-child{padding-left:17px}
 .candidate-visible{align-items:stretch;height:100%}
 .candidate-visible button{height:100%;display:flex;align-items:center;padding-top:0;padding-bottom:0}
-.clipboard-slot{position:relative;flex:0 0 auto;height:100%;min-width:0}
-.clipboard-slot.has-reference{min-width:min(144px,38vw)}
-.candidate-visible .clipboard-slot button{position:absolute;inset:0;width:100%;min-width:0;padding:0 8px;color:var(--key-color);height:100%;transition:opacity 100ms cubic-bezier(.23,1,.32,1)}
-.clipboard-slot .clipboard-normal{opacity:1}
-.candidate-visible .clipboard-slot .clipboard-normal{position:relative;inset:auto;width:auto;min-width:52px;padding:0 13px;color:var(--key-color)}
-.candidate-visible .clipboard-reference{opacity:0;pointer-events:none;display:flex;align-items:center;gap:5px;font-size:14px;white-space:normal;line-height:1.2;text-align:left}
-.clipboard-reference svg{width:14px;height:16px;flex:none;color:var(--muted)}
-.clipboard-reference span{overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.clipboard-slot.has-reference .clipboard-normal{opacity:0;pointer-events:none}
-.clipboard-slot.has-reference .clipboard-reference{opacity:1;pointer-events:auto;transition-duration:120ms}
-.clipboard-slot.has-reference{min-width:min(172px,43vw);width:min(172px,43vw)}
-.clipboard-slot.reference-open{z-index:9;border-radius:7px 7px 0 0;background:var(--kb-bg);box-shadow:inset 0 0 0 1px var(--line)}
-.clipboard-slot.reference-open::after{content:"";position:absolute;left:1px;right:1px;bottom:0;height:2px;background:var(--kb-bg);pointer-events:none}
-.candidate-visible .clipboard-slot .clipboard-reference{right:34px;width:calc(100% - 34px);padding-right:4px}
-.candidate-visible .clipboard-slot:not(.has-reference) .clipboard-reference{right:0;width:100%}
-.candidate-visible .clipboard-slot .clipboard-count{position:absolute;inset:4px 1px 4px auto;width:32px;min-width:32px;height:calc(100% - 8px);padding:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:#3482ff;border:1px solid var(--line);border-radius:5px;background:var(--key-bg);opacity:0;pointer-events:none}
-.clipboard-slot.has-reference .clipboard-count{opacity:1;pointer-events:auto}
-.candidate-visible .reference-open .clipboard-count{background:transparent;border-color:transparent;border-left-color:var(--line);border-radius:0}
 .clipboard-results{position:absolute;z-index:8;overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:none;padding:4px;border:1px solid var(--line);border-top:0;border-radius:0 0 7px 7px;background:var(--kb-bg);box-shadow:0 5px 8px #0002;display:flex;flex-direction:column;gap:5px}
 .clipboard-results::-webkit-scrollbar{display:none;width:0;height:0}
 .clipboard-result mark{background:#ffe6a0;color:inherit;border-radius:2px}
@@ -312,3 +294,30 @@
 .clip-preview-close svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
 
 .snippet-frame .field{position:relative}.snippet-highlight{position:absolute;white-space:pre-wrap;overflow:hidden;pointer-events:none;color:transparent;background:white}.snippet-highlight mark{color:transparent;background:#ffe6a0;border-radius:2px}.snippet-frame .field:has(.snippet-highlight) textarea,.native-ime #ime-local-editor .snippet-frame .field:has(.snippet-highlight) textarea{position:relative;background:transparent}
+
+/* 悬浮入口不参与普通候选的宽度计算。 */
+.natural-candidates>button{flex:0 0 auto;white-space:nowrap;font-size:20px;text-overflow:clip}
+.candidate-bar:has(.clipboard-slot){position:relative;overflow:visible}
+.clipboard-slot{position:absolute;top:0;right:57.7px;width:68px;height:100%;z-index:9;opacity:0;visibility:hidden;pointer-events:none;transform:translateX(4px);transition:opacity 160ms cubic-bezier(.23,1,.32,1),transform 160ms cubic-bezier(.23,1,.32,1),visibility 160ms}
+.clipboard-slot.has-reference{opacity:1;visibility:visible;transform:none}
+.clipboard-slot .clipboard-reference{position:relative;z-index:2;display:flex;align-items:center;justify-content:center;gap:2px;width:100%;height:100%;min-width:0;padding:0 2px;white-space:nowrap;font-size:20px;color:var(--key-color);pointer-events:auto;isolation:isolate}
+.clipboard-reference::before{content:"";position:absolute;inset:4px 0;z-index:-1;border:1px solid #b9c8dc;border-radius:7px;background:#f8fbff;box-shadow:-4px 0 5px var(--kb-bg);transition:background 120ms,border-color 120ms}
+.clipboard-reference.pressed::before{background:#e5efff;border-color:#8da9d1}
+.clipboard-slot:not(.has-reference) .clipboard-reference{pointer-events:none}
+.candidate-bar .clipboard-slot button{color:var(--key-color)}
+.clipboard-preview{flex:none;white-space:nowrap;line-height:24px}
+.clipboard-count{display:flex;align-items:center;gap:0;font-size:9px;color:#3482ff;white-space:nowrap;line-height:1}
+.clipboard-count-arrow{font-size:6px}
+.clipboard-slot.reference-open .clipboard-reference::before{background:var(--kb-bg);border-color:transparent;box-shadow:none}
+.clipboard-slot.reference-open .clipboard-preview{color:#4e5662}
+.keyboard.night .clipboard-slot.reference-open .clipboard-preview{color:var(--key-color)}
+.clipboard-surface{position:absolute;inset:0;z-index:1;pointer-events:none;filter:drop-shadow(0 0 .5px #7e899966) drop-shadow(0 2px 4px #253c5a1a);transition:opacity 180ms cubic-bezier(.23,1,.32,1)}
+.clipboard-surface-tab{position:absolute;background:var(--kb-bg);border-radius:7px 7px 0 0}
+.clipboard-surface .clipboard-results{z-index:auto;pointer-events:auto;padding:4px;gap:4px;border:0;border-radius:7px 0 7px 7px;box-shadow:none;background:var(--kb-bg);transition:clip-path 180ms cubic-bezier(.23,1,.32,1);clip-path:inset(0)}
+.clipboard-surface .clipboard-result{height:48px;min-height:48px;padding:6px 8px;border:0;border-radius:6px;background:var(--key-bg);box-shadow:none;font-size:14px;line-height:18px}
+.clipboard-surface .clipboard-result.pressed{background:var(--key-press)}
+.clipboard-result-text{max-height:36px}
+.clipboard-surface.opening .clipboard-results,.clipboard-surface.closing .clipboard-results{clip-path:inset(0 0 100% 0)}
+.clipboard-surface.closing{opacity:0}
+.clipboard-surface.closing .clipboard-results{pointer-events:none}
+@media(prefers-reduced-motion:reduce){.clipboard-slot{transform:none;transition:opacity 100ms,visibility 100ms}.clipboard-surface,.clipboard-surface .clipboard-results{transition:opacity 100ms}.clipboard-surface.opening,.clipboard-surface.closing{opacity:0}.clipboard-surface.opening .clipboard-results,.clipboard-surface.closing .clipboard-results{clip-path:none}}

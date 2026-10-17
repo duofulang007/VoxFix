@@ -18,15 +18,22 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
     private var pinyin = false
     private var benchmark = false
     private var quick = false
+    private var memory = false
     override fun onCreate(arguments: Bundle?) {
         pinyin = arguments?.getString("pinyin") == "true"
         benchmark = arguments?.getString("benchmark") == "true"
         quick = arguments?.getString("quick") == "true"
+        memory = arguments?.getString("memory") == "true"
         super.onCreate(arguments); start()
     }
     override fun onStart() {
         val output = Bundle()
         try {
+            if (memory) {
+                output.putString("result", VoiceMemorySmoke.run(this))
+                finish(Activity.RESULT_OK, output)
+                return
+            }
             if (pinyin) {
                 output.putString("result", PinyinSmoke.run(targetContext))
                 finish(Activity.RESULT_OK, output)
@@ -39,12 +46,15 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
             }
             val engine = SpeechEngine(targetContext.assets)
             try {
+                engine.secondPass()
                 check(SpeechEngine.refine("今天天气不错", "今天天气很好") == "今天天气不错")
                 check(SpeechEngine.refine("我买了三斤苹果", "我买了3斤苹果") == "我买了3斤苹果")
                 check(SpeechEngine.clean(" 你好 世界 ") == "你好世界")
                 check(SpeechEngine.join("hello", "world") == "hello world")
                 check(SpeechEngine.join("今天", "天气") == "今天天气")
-            } finally { engine.release() }
+            } finally { engine.release(); engine.release() }
+            // Releasing while pass 2 is still loading must not leak it or race its destruction.
+            repeat(2) { SpeechEngine(targetContext.assets).release() }
             output.putString("result", "ARM64_ASR_LOAD_PASS")
             finish(Activity.RESULT_OK, output)
         } catch (error: Throwable) {
@@ -72,7 +82,7 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
         val pipelineRows = JSONArray()
         try {
             val online = engine.javaClass.getDeclaredField("online").apply { isAccessible = true }.get(engine) as OnlineRecognizer
-            val sense = engine.javaClass.getDeclaredField("sense").apply { isAccessible = true }.get(engine) as OfflineRecognizer
+            val sense = if (quick) null else engine.secondPass()
             if (!quick) engine.release()
             var reference: String? = null
             var streamReference: String? = null
@@ -82,8 +92,9 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
                 Triple(2, 2, 1600), Triple(2, 4, 3200), Triple(4, 4, 3200))) {
                 val streaming = OnlineRecognizer(targetContext.assets, online.config.copy(
                     modelConfig = online.config.modelConfig.copy(numThreads = threads)))
-                val second = try { OfflineRecognizer(targetContext.assets, sense.config.copy(
-                    modelConfig = sense.config.modelConfig.copy(numThreads = secondThreads))) }
+                val secondConfig = checkNotNull(sense).config
+                val second = try { OfflineRecognizer(targetContext.assets, secondConfig.copy(
+                    modelConfig = secondConfig.modelConfig.copy(numThreads = secondThreads))) }
                 catch (error: Throwable) { streaming.release(); throw error }
                 try {
                     repeat(4) { pass ->

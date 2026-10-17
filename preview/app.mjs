@@ -131,44 +131,55 @@ function syncClipboardReference(){
     }
   }
   const wanted=JSON.stringify(matches.map(({text,start,end,weak})=>[text,start,end,weak]));
-  if(wanted!==referenceWanted){clearTimeout(referenceTimer);referenceWanted=wanted;clipReference='';paintClipboardReference();
-    if(!matches.length){referenceMatches=[];paintClipboardReference();}
+  if(wanted!==referenceWanted){clearTimeout(referenceTimer);referenceWanted=wanted;
+    if(!matches.length){referenceMatches=[];clipReference='';paintClipboardReference();}
+    else if(clipReference){referenceMatches=matches;clipReference=matches[0].text;}
     else referenceTimer=setTimeout(()=>{if(candidateContact){referenceWanted='';return;}referenceMatches=matches;clipReference=matches[0].text;paintClipboardReference();},150);
   }
   paintClipboardReference();
 }
-function referenceMarkup(hit){
-  const start=Math.max(0,hit.start-6),end=Math.min(hit.text.length,Math.max(hit.end,start+64));
-  return (start?'…':'')+esc(hit.text.slice(start,hit.start))+`<mark>${esc(hit.text.slice(hit.start,hit.end))}</mark>`+esc(hit.text.slice(hit.end,end))+(end<hit.text.length?'…':'');
+function referenceMarkup(hit,compact=false){
+  const start=compact?hit.start:Math.max(0,hit.start-6),end=Math.min(hit.text.length,Math.max(hit.end,start+64));
+  return (!compact&&start?'…':'')+esc(hit.text.slice(start,hit.start))+`<mark>${esc(hit.text.slice(hit.start,hit.end))}</mark>`+esc(hit.text.slice(hit.end,end))+(!compact&&end<hit.text.length?'…':'');
 }
-function closeReferencePopup(){referencePopup=null;keyboard.querySelector('.clipboard-results')?.remove();keyboard.querySelector('.clipboard-slot')?.classList.remove('reference-open');const count=keyboard.querySelector('.clipboard-count');if(count){count.textContent=referenceMatches.length+' ▾';count.setAttribute('aria-expanded','false');}}
+function paintReferenceCount(count,expanded){
+  count.innerHTML=`<span>${referenceMatches.length}</span><span class="clipboard-count-arrow" aria-hidden="true">${expanded?'▴':'▾'}</span>`;
+  const entry=count.closest('.clipboard-reference');entry.setAttribute('aria-expanded',String(expanded));entry.setAttribute('aria-label',referenceMatches.length+'条剪贴板匹配。点按'+(expanded?'收起':'展开')+'匹配内容');
+}
+function closeReferencePopup(){
+  referencePopup=null;
+  const surface=keyboard.querySelector('.clipboard-surface');
+  if(surface){surface.classList.add('closing');setTimeout(()=>surface.remove(),180);}
+  keyboard.querySelector('.clipboard-slot')?.classList.remove('reference-open');
+  const count=keyboard.querySelector('.clipboard-count');if(count)paintReferenceCount(count,false);
+}
 function paintReferencePopup(){
   const slot=keyboard.querySelector('.clipboard-slot.has-reference');
-  if(!referencePopup||!slot){keyboard.querySelector('.clipboard-results')?.remove();return;}
+  if(!referencePopup||!slot){const surface=keyboard.querySelector('.clipboard-surface:not(.closing)');if(slot)surface?.remove();else if(surface)setTimeout(()=>{if(!surface.closest('.has-reference'))surface.remove();},160);return;}
+  keyboard.querySelector('.clipboard-surface.closing')?.remove();
   let list=keyboard.querySelector('.clipboard-results');const created=!list;
   if(!list){
+    const surface=document.createElement('div');surface.className='clipboard-surface';
+    const tab=document.createElement('div');tab.className='clipboard-surface-tab';tab.setAttribute('aria-hidden','true');surface.append(tab);
     list=document.createElement('div');list.className='clipboard-results';list.setAttribute('role','region');list.setAttribute('aria-label',referencePopup.matches.length+'条剪贴板匹配，上下滑动，点按引用，长按编辑');
     list.innerHTML=referencePopup.matches.map((hit,i)=>button('第'+(i+1)+'条，'+hit.text+'。点按引用，长按编辑','clipboard-result',hit.text,'clipboard-result',`<span class="clipboard-result-index" aria-hidden="true">${i+1}</span><span class="clipboard-result-text">${referenceMarkup(hit)}</span>`)).join('');
-    const session=referencePopup;keyboard.append(list);list.addEventListener('scroll',()=>{if(referencePopup===session&&list.isConnected)session.scroll=list.scrollTop;});
+    const session=referencePopup;surface.append(list);slot.append(surface);list.addEventListener('scroll',()=>{if(referencePopup===session&&list.isConnected)session.scroll=list.scrollTop;});
+    if(!session.shown){surface.classList.add('opening');requestAnimationFrame(()=>{if(surface.isConnected)surface.classList.remove('opening');});session.shown=true;}
   }
-  const kb=keyboard.getBoundingClientRect(),anchor=slot.getBoundingClientRect(),bar=slot.closest('.candidate-bar').getBoundingClientRect();
-  const width=anchor.width,keys=keyboard.querySelector('.key-rows'),last=keys?.lastElementChild?.getBoundingClientRect();
-  list.style.width=width+'px';list.style.left=Math.max(5,Math.min(anchor.left-kb.left,kb.width-width-5))+'px';list.style.top=(bar.bottom-kb.top-1)+'px';
-  list.style.maxHeight=Math.max(100,Math.min(200,(last?.top??bar.bottom+202)-bar.bottom-4))+'px';
+  const anchor=slot.getBoundingClientRect(),bar=slot.closest('.candidate-bar').getBoundingClientRect();
+  const row=slot.parentElement.querySelector('.candidate-visible').getBoundingClientRect(),keys=keyboard.querySelector('.key-rows'),last=keys?.lastElementChild?.getBoundingClientRect();
+  list.style.width=Math.min(210,anchor.right-row.left)+'px';list.style.right='0';list.style.top=(bar.bottom-anchor.top-1)+'px';
+  const tab=list.parentElement.firstElementChild;Object.assign(tab.style,{left:'0',top:'4px',width:anchor.width+'px',height:(bar.bottom-anchor.top-3)+'px'});
+  list.style.maxHeight=Math.max(96,Math.min(144,(last?.top??bar.bottom+148)-bar.bottom-4))+'px';
   if(created)list.scrollTop=referencePopup.scroll;
 }
 function paintClipboardReference(){
   const slot=keyboard.querySelector('.clipboard-slot');if(!slot)return;
-  let active=Boolean(clipReference);const preview=slot.querySelector('.clipboard-reference'),normal=slot.querySelector('.clipboard-normal');
-  if(active)slot.style.minWidth='min(144px,38vw)';
-  if(active){preview.dataset.value=clipReference;preview.setAttribute('aria-label','剪贴板：'+clipReference+'。点按引用，长按编辑');preview.querySelector('span').innerHTML=referenceMatches[0]?.weak?'近似匹配，点开查看':referenceMarkup(referenceMatches[0]);}
-  preview.disabled=!active;preview.setAttribute('aria-hidden',String(!active));normal.disabled=active;normal.setAttribute('aria-hidden',String(active));slot.classList.toggle('has-reference',active);
-  slot.style.minWidth='';
-  const displaced=slot.parentElement.querySelector('.clipboard-displaced');
-  if(active&&!displaced&&normal.tagName==='BUTTON'){const copy=normal.cloneNode(true);copy.classList.remove('clipboard-normal');copy.classList.add('clipboard-displaced');copy.disabled=false;copy.setAttribute('aria-hidden','false');slot.parentElement.append(copy);}
-  else if(!active)displaced?.remove();
+  const active=Boolean(clipReference),preview=slot.querySelector('.clipboard-reference');
+  if(active){preview.dataset.value=clipReference;preview.querySelector('.clipboard-preview').textContent=referenceMatches[0]?.text.slice(referenceMatches[0].start,referenceMatches[0].start+2)||'';}
+  preview.disabled=!active;preview.setAttribute('aria-hidden',String(!active));slot.inert=!active;slot.setAttribute('aria-hidden',String(!active));slot.classList.toggle('has-reference',active);
   slot.classList.toggle('reference-open',active&&Boolean(referencePopup));
-  const count=slot.querySelector('.clipboard-count');count.disabled=!active;count.textContent=referenceMatches.length+' '+(referencePopup?'▴':'▾');count.setAttribute('aria-expanded',String(Boolean(referencePopup)));count.setAttribute('aria-label',referenceMatches.length+'条剪贴板匹配，'+(referencePopup?'收起':'展开'));
+  paintReferenceCount(slot.querySelector('.clipboard-count'),Boolean(referencePopup));
   paintReferencePopup();
 }
 function insertClipboardReference(text){
@@ -187,7 +198,7 @@ function openClipboardEditor(text){
   quoteEditor={comp:state.comp,context,associatedWords,referencePopup,query:state.comp?.raw||'',hit:referenceMatches.find(hit=>hit.text===text)};referencePopup=null;state.comp=null;context='';learningChain=[];associatedWords=[];
   $('snippet-title').textContent='编辑本次引用';$('snippet-content').value=text;$('snippet-error').textContent='';snippetForm.querySelector('.note').hidden=true;snippetForm.querySelector('button[type=submit]').textContent='保存';
   localInput=$('snippet-content');editor=localInput;
-  if(nativeIme){localPanel.append(snippetForm);localPanel.hidden=false;}else snippetDialog.showModal();
+  if(nativeIme)localPanel.append(snippetForm);else snippetDialog.showModal();
   render();localInput.focus({preventScroll:true});const start=quoteEditor.hit?.start||0;localInput.setSelectionRange(start,start);paintReferenceHighlight(true);
 }
 function paintReferenceHighlight(locate=false){
@@ -211,7 +222,7 @@ function finishClipboardEditor(apply){
   const prior=quoteEditor;closeLocalEditor();quoteEditor=null;state.comp=prior.comp;context=prior.context;associatedWords=prior.associatedWords;referencePopup=prior.referencePopup;render();
 }
 try{const saved=JSON.parse(localStorage.getItem('voxfix-keyboard-v1'));if(saved){if(['9','26'].includes(saved.layout))state.layout=saved.layout;if(['zh','en'].includes(saved.language))state.language=saved.language;if(typeof saved.night==='boolean')state.night=saved.night;}}catch{}
-function saveKeyboard(){const preference=clipSearch?(clipSearch.target==='host'?state:clipSearch.inputs.host):fieldPreference||state;try{localStorage.setItem('voxfix-keyboard-v1',JSON.stringify({layout:preference.layout,language:preference.language,night:state.night}));}catch{}}
+function saveKeyboard(){const preference=clipSearch?(clipSearch.target==='host'?state:clipSearch.inputs.host):fieldPreference||state;try{localStorage.setItem('voxfix-keyboard-v1',JSON.stringify({layout:preference.layout,language:preference.language,night:state.night}));return true;}catch{return false;}}
 let clips = ['有没有免费的', 'https://example.com/演示链接', 'obsidian'];
 // 常用语按官方结构分组存放：每个分组有自己的名称和条目。
 let phraseGroups = [{name:'常用语',items:['常用语示例','example@example.com','稍后回复你']}];
@@ -724,10 +735,10 @@ function toolbar() {
 }
 function candidateStrip(words,action='candidate') {
   const referenceSlot=action==='candidate'&&!clipSearch&&state.language==='zh'&&state.layout==='26'&&!localInput&&settings.clipboardMatch;
-  const reference=()=>button('剪贴板引用','clipboard-reference','','clipboard-reference candidate-hold',icon('copy')+'<span></span>','disabled aria-hidden="true"')+button('展开剪贴板匹配','clipboard-results','','clipboard-count','','disabled aria-expanded="false"');
-  const rows=words.map((word,i)=>{const normal=button('候选：'+word,action,word,'candidate-hold'+(referenceSlot&&i===1?' clipboard-normal':''),esc(word));return referenceSlot&&i===1?`<div class="clipboard-slot">${normal}${reference()}</div>`:normal;});
-  if(referenceSlot&&words.length===1)rows.push(`<div class="clipboard-slot"><span class="clipboard-normal"></span>${reference()}</div>`);
-  return `<div class="candidate-visible" tabindex="0" aria-label="候选字，左右滑动浏览" data-query="${esc(state.comp?.raw||words.join(','))}" style="--candidate-count:${settings.candidateCount}">${rows.join('')}</div>`;
+  const rows=words.map(word=>button('候选：'+word,action,word,'candidate-hold',esc(word)));
+  const reference=referenceSlot?`<div class="clipboard-slot" inert aria-hidden="true">${button('展开剪贴板匹配','clipboard-reference','','clipboard-reference','<span class="clipboard-preview"></span><span class="clipboard-count" aria-hidden="true"></span>','disabled aria-hidden="true" aria-expanded="false"')}</div>`:'';
+  return `<div class="candidate-visible${state.language==='zh'&&state.layout==='26'?' natural-candidates':''}" tabindex="0" aria-label="候选字，左右滑动浏览" data-query="${esc(state.comp?.raw||words.join(','))}">${rows.join('')}</div>${reference}`;
+
 }
 function currentCandidates() {
   if(!state.comp)return associatedWords;
@@ -1112,7 +1123,7 @@ const referenceMap = {letters:'keyboard-001.jpg',en:'keyboard-014.jpg',numbers:'
 function render() {
   if(candidateContact&&!quoteEditor&&!privateField&&!document.hidden){candidateRenderPending=true;return;}
   for(const node of keyboard.querySelectorAll('[data-scroll-key]'))scrollPositions.set(node.dataset.scrollKey,node.scrollTop);
-  const previousCandidates=keyboard.querySelector('.candidate-visible');
+  const previousCandidates=keyboard.querySelector('.candidate-visible'),previousReference=keyboard.querySelector('.clipboard-slot');
   const candidateScroll=previousCandidates?.scrollLeft||0;
   // 呼出动效前置采样：「键盘是否刚从收起态回来」「上一帧有没有编辑框」（innerHTML 重建前抓，别放后面）。
   const wasHidden=keyboard.hidden;
@@ -1186,6 +1197,7 @@ function render() {
   }
   const candidates=keyboard.querySelector('.candidate-visible');
   if(candidates && previousCandidates?.dataset.query===candidates.dataset.query)candidates.scrollLeft=candidateScroll;
+  if(previousReference&&!privateField&&!noPersonalizedLearning&&keyboard.querySelector('.clipboard-slot'))keyboard.querySelector('.clipboard-slot').replaceWith(previousReference);
   syncClipboardReference();
   layoutCandidateGrid();
   keyboard.classList.toggle('text-selecting',Boolean(state.cursorDrag?.selecting));syncSelectionFeedback();
@@ -1435,8 +1447,7 @@ function activate(action,value='') {
     }
     case 'paste': insert(value); clipMenu=null; if(!state.clipManage&&!(state.clipTab==='clipboard'&&state.clipLocked))state.page=state.returnPage; break;
     case 'clip-candidate-insert': state.clipCandidate='';insert(value);break;
-    case 'clipboard-results': if(referencePopup)closeReferencePopup();else if(referenceMatches.length){referencePopup={query:state.comp?.raw,matches:referenceMatches,scroll:0};paintClipboardReference();}return;
-    case 'clipboard-reference': if(referenceMatches[0]?.weak){activate('clipboard-results');return;}insertClipboardReference(value);return;
+    case 'clipboard-results': case 'clipboard-reference': if(referencePopup)closeReferencePopup();else if(referenceMatches.length){referencePopup={query:state.comp?.raw,matches:referenceMatches,scroll:0};paintClipboardReference();}return;
     case 'clipboard-result': if(!clips.includes(value)&&latestClipboard!==value){closeReferencePopup();syncClipboardReference();toast('这条内容已移除，请重新选择');return;}insertClipboardReference(value);return;
     case 'clip-candidate-dismiss': state.clipCandidate='';break;
     case 'toolbar-custom': { if(state.toolbarSort)break; const row=settings.customToolbar.find(item=>item.id===value); if(row)insert(row.text); break; }
@@ -1528,7 +1539,7 @@ function paintHoldChoice(choice){
   [...keyboard.querySelectorAll('.key-popup button')].forEach((option,index)=>option.classList.toggle('selected',index===choice));
 }
 keyboard.addEventListener('pointerdown',e=>{if(referencePopup&&!e.target.closest('.clipboard-results,.clipboard-slot')){closeReferencePopup();consumedClick={id:e.pointerId,until:Date.now()+700};e.preventDefault();e.stopImmediatePropagation();}},true);
-keyboard.addEventListener('pointerdown',e=>{if(e.target.closest('.candidate-visible,.clipboard-results')&&e.button===0)candidateContact=e.pointerId;},true);
+keyboard.addEventListener('pointerdown',e=>{if(e.target.closest('.candidate-visible,.clipboard-slot')&&e.button===0)candidateContact=e.pointerId;},true);
 function releaseCandidateContact(e){if(candidateContact!==e.pointerId)return;candidateContact=null;setTimeout(()=>{if(candidateContact!==null)return;if(candidateRenderPending){candidateRenderPending=false;render();}else syncClipboardReference();},0);}
 for(const event of ['pointerup','pointercancel'])document.addEventListener(event,e=>{if(event==='pointercancel'&&e.pointerType==='touch')return;releaseCandidateContact(e);},true);
 for(const event of ['touchend','touchcancel'])document.addEventListener(event,()=>{if(candidateContact!==null)releaseCandidateContact({pointerId:candidateContact});},true);
@@ -1538,7 +1549,8 @@ keyboard.addEventListener('pointerdown',e=>{
   consumedClick=null;
   const row=e.target.closest('.candidate-visible');
   if(row && e.pointerType==='mouse') {
-    e.preventDefault();keyboard.setPointerCapture(e.pointerId);
+    e.preventDefault();if(e.isTrusted)keyboard.setPointerCapture(e.pointerId);
+    row.classList.add('candidate-dragging');
     gesture={id:e.pointerId,action:'candidate-scroll',x:e.clientX,scroll:row.scrollLeft,row,target:row,dragged:false};
     return;
   }
@@ -1702,6 +1714,7 @@ function endGesture(e,cancelled=false) {
     return;
   }
   if(g.action==='candidate-scroll') {
+    g.row.classList.remove('candidate-dragging');
     if(itemHold?.fired)return;
     if(g.dragged || cancelled)candidateSuppressUntil=Date.now()+350;
     else {const target=document.elementFromPoint(e.clientX,e.clientY)?.closest('.candidate-visible button');if(target && g.row.contains(target))activate(target.dataset.action,target.dataset.value);}
@@ -1731,7 +1744,7 @@ keyboard.addEventListener('pointercancel',e=>endGesture(e,true));
 // 兜底自愈：WebView 失焦、页面转后台或指针捕获被抢走时，pointerup 可能永远不来。
 // 残留的按压态与被卡住的 gesture 都要在这一层清掉，否则那一下的颜色会留在屏幕上、
 // 并且之后所有按键都按不动。
-function dropGesture(){if(!gesture)return;if(['cursor-gesture','split-drag'].includes(gesture.action)){endGesture({pointerId:gesture.id},true);return;}consumedClick={id:gesture.id,until:Date.now()+500};clearTimeout(gesture.timer);clearTimeout(gesture.repeatTimer);gesture=null;clearKeyPress();if(state.popup?.type==='key'){state.popup=null;render();}}
+function dropGesture(){if(!gesture)return;if(['cursor-gesture','split-drag'].includes(gesture.action)){endGesture({pointerId:gesture.id},true);return;}if(gesture.action==='candidate-scroll'){gesture.row.classList.remove('candidate-dragging');clearItemHold();}consumedClick={id:gesture.id,until:Date.now()+500};clearTimeout(gesture.timer);clearTimeout(gesture.repeatTimer);gesture=null;clearKeyPress();if(state.popup?.type==='key'){state.popup=null;render();}}
 keyboard.addEventListener('lostpointercapture',e=>{if(gesture&&gesture.id===e.pointerId)dropGesture();});
 // 失焦/转后台只清视觉，不动正在进行的语音或光标手势（它们靠自己的 pointerup 收尾）。
 window.addEventListener('blur',()=>{clearKeyPress();if(gesture&&!(gesture.long&&gesture.action==='space'))dropGesture();});
@@ -1763,13 +1776,13 @@ keyboard.addEventListener('pointerdown',e=>{
   if(e.button!==0)return;
   // 鼠标在候选栏上会先起一个拖动滚动的手势，按住不动时仍然允许长按候选词。
   if(gesture&&gesture.action!=='candidate-scroll')return;
-  const target=e.target.closest('.emoji-hold,[data-action="clipboard-reference"],[data-action="clipboard-result"]');if(!target||target.disabled)return;
+  const target=e.target.closest('.emoji-hold,[data-action="clipboard-result"]');if(!target||target.disabled)return;
   clearItemHold();
   const hold={id:e.pointerId,x:e.clientX,y:e.clientY,target,kind:target.dataset.action.startsWith('clipboard-')?'reference':'emoji',value:target.dataset.value};
   itemHold=hold;
   hold.timer=setTimeout(()=>{
     if(itemHold!==hold)return;
-    hold.fired=true;
+    hold.fired=true;hold.ready=true;
     consumedClick={id:hold.id,until:Date.now()+700};
     if(hold.kind==='emoji'){
       emojiEmit(hold.value);
@@ -1959,6 +1972,7 @@ $('snippet-cancel').onclick=()=>{if(quoteEditor){finishClipboardEditor(false);re
 $('snippet-content').addEventListener('input',()=>paintReferenceHighlight());
 $('snippet-content').addEventListener('scroll',()=>{const layer=$('snippet-content').parentElement.querySelector('.snippet-highlight');if(layer){layer.scrollTop=$('snippet-content').scrollTop;layer.scrollLeft=$('snippet-content').scrollLeft;}});
 new ResizeObserver(()=>paintReferenceHighlight()).observe($('snippet-content'));
+new ResizeObserver(()=>paintClipboardReference()).observe(keyboard);
 $('snippet-split').onclick=()=>{
   if(state.voice)return;
   if(localInput===$('snippet-content')&&state.comp){commit(currentCandidates()[0]||state.comp.raw);if(state.comp)commit(state.comp.raw);}

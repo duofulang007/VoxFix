@@ -12,6 +12,7 @@ import android.os.SystemClock
 import android.text.TextUtils
 import android.view.Gravity
 import android.widget.PopupWindow
+import android.widget.FrameLayout
 import android.widget.TextView
 import android.view.KeyCharacterMap
 import android.content.ClipboardManager
@@ -67,7 +68,7 @@ class VoxFixImeService : InputMethodService() {
     }
     private val releaseVoice = Runnable {
         worker.execute {
-            if (!shown && !busy && !destroyed) {
+            if (!busy && !destroyed && engine != null) {
                 engine?.release(); engine = null
                 Log.i("VoxFix", "IME_MODELS_RELEASED")
             }
@@ -119,37 +120,26 @@ class VoxFixImeService : InputMethodService() {
                 main.post { if (!destroyed) script("globalThis.voxfixPinyinReady?.(true)") }
             }
         }
-        preloadVoice()
-        scheduleVoiceRelease()
-    }
-
-    private fun preloadVoice() {
-        main.removeCallbacks(releaseVoice)
-        worker.execute {
-            if (!destroyed && engine == null) try { engine = SpeechEngine(assets) }
-            catch (error: Throwable) { Log.e("VoxFix", "IME_MODELS_UNAVAILABLE", error) }
-        }
     }
 
     private fun scheduleVoiceRelease() {
         main.removeCallbacks(releaseVoice)
-        if (!destroyed) main.postDelayed(releaseVoice, 5 * 60_000L)
+        if (!destroyed && !busy && engine != null) main.postDelayed(releaseVoice, 30_000L)
     }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= TRIM_MEMORY_BACKGROUND && !shown && !busy) {
+        if (level >= TRIM_MEMORY_BACKGROUND && !busy) {
             main.removeCallbacks(releaseVoice)
             releaseVoice.run()
         }
     }
 
     override fun onCreateInputView(): View {
-        preloadVoice()
         destroyKeyboardView()
-        return WebView(this).apply {
+        keyboardHeightPx = (351 * resources.displayMetrics.density).toInt()
+        val keyboard = WebView(this).apply {
             web = this
-            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (351 * resources.displayMetrics.density).toInt())
             setBackgroundColor(0xffedeff2.toInt())
             isFocusable = false
             settings.javaScriptEnabled = true
@@ -177,6 +167,16 @@ class VoxFixImeService : InputMethodService() {
                 }
             }
             loadUrl("https://voxfix.local/keyboard/index.html")
+        }
+        // 固定 Chromium 画布，只裁切外层：避免窗口扩高时先搬动尚未重绘的旧键盘帧。
+        return object : FrameLayout(this) {
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                super.onMeasure(widthMeasureSpec, View.MeasureSpec.makeMeasureSpec(keyboardHeightPx, View.MeasureSpec.EXACTLY))
+            }
+        }.apply {
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, keyboardHeightPx)
+            addView(keyboard, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                (550 * resources.displayMetrics.density).toInt(), Gravity.BOTTOM))
         }
     }
 
@@ -415,7 +415,6 @@ class VoxFixImeService : InputMethodService() {
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         shown = true
-        preloadVoice()
         startKeyboard(info, restarting)
         val connection = currentInputConnection
         val actual = connection?.getExtractedText(ExtractedTextRequest(), 0)
@@ -771,6 +770,7 @@ class VoxFixImeService : InputMethodService() {
         localVoice = local
         voiceGeneration = inputGeneration
         val targetGeneration = voiceGeneration
+        main.removeCallbacks(releaseVoice)
         busy = true
         val current = session.open()
         ticket = current
@@ -821,7 +821,7 @@ class VoxFixImeService : InputMethodService() {
                         streamedText = ""; selectedBeforeVoice = ""
                     }
                 }
-            } finally { main.post { busy = false; if (!shown) scheduleVoiceRelease() } }
+            } finally { main.post { busy = false; scheduleVoiceRelease() } }
         }
     }
 
@@ -923,13 +923,14 @@ class VoxFixImeService : InputMethodService() {
             main.post { if (web === owner) showClipHint(label) }
         }
         @JavascriptInterface fun copy(value: String) { if (value.length <= 10000) editInput { getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("VoxFix", value)); updateClipboard() } }
-        @JavascriptInterface fun voiceReady() = engine != null
+        @JavascriptInterface fun voiceReady() = !destroyed
         @JavascriptInterface fun resize(height: Int) {
             if (height !in 220..550) return
             main.post { if (web === owner) owner.let { view ->
                 val pixels = (height * resources.displayMetrics.density).toInt()
                 keyboardHeightPx = pixels
-                if (view.layoutParams.height != pixels) view.layoutParams = view.layoutParams.apply { this.height = pixels }
+                val viewport = view.parent as? FrameLayout ?: return@post
+                if (viewport.layoutParams.height != pixels) viewport.layoutParams = viewport.layoutParams.apply { this.height = pixels }
                 annotation.reposition(view, pixels)
                 repositionClipHint()
                 restoreKeyboardVisibility(view)

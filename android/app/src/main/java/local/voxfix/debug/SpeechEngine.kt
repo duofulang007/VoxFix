@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.math.BigInteger
 import java.math.BigDecimal
 import java.util.Locale
+import java.util.concurrent.FutureTask
 import kotlin.math.sqrt
 
 /**
@@ -25,7 +26,7 @@ import kotlin.math.sqrt
  */
 class SpeechEngine(assets: AssetManager) {
     private var online: OnlineRecognizer? = null
-    private var sense: OfflineRecognizer? = null
+    private var secondLoader: FutureTask<OfflineRecognizer>? = null
     private var vad: Vad? = null
     private val recording = AtomicBoolean(false)
 
@@ -43,22 +44,23 @@ class SpeechEngine(assets: AssetManager) {
                     tokens = "streaming/tokens.txt", numThreads = STREAMING_THREADS, modelType = "zipformer"),
                 endpointConfig = EndpointConfig(EndpointRule(false, 1.6f, 0f), EndpointRule(true, 0.8f, 0f), EndpointRule(false, 0f, 20f))))
             loaded("streaming")
-            // SenseVoice is non-autoregressive: one pass returns the final text with its own
-            // punctuation and inverse text normalization, which is why pass 2 can replace the
-            // separate paraformer and punctuation models outright. It also needs a symbol table to
-            // map ids back to text — without tokens it reads an empty asset path and the process
-            // is killed inside native code, not by an exception.
-            sense = OfflineRecognizer(assets, OfflineRecognizerConfig(modelConfig = OfflineModelConfig(
-                senseVoice = OfflineSenseVoiceModelConfig(
-                    "sensevoice/model.int8.onnx", language = "zh", useInverseTextNormalization = true),
-                tokens = "sensevoice/tokens.txt", numThreads = SECOND_PASS_THREADS)))
-            loaded("second")
             // getVadModelConfig(0) is silero-vad; the helper hardcodes the asset name
             // "silero_vad.onnx" and 16 kHz.
             val vadConfig = checkNotNull(getVadModelConfig(VAD_SILERO)) { "silero-vad 配置不可用" }
             vadConfig.numThreads = VAD_THREADS
             vad = Vad(assets, vadConfig)
             loaded("vad")
+            // Start capture without waiting for pass 2; only a completed utterance needs it.
+            // SenseVoice supplies punctuation/ITN; tokens are mandatory to avoid a native crash.
+            secondLoader = FutureTask {
+                val started = System.nanoTime()
+                OfflineRecognizer(assets, OfflineRecognizerConfig(modelConfig = OfflineModelConfig(
+                    senseVoice = OfflineSenseVoiceModelConfig(
+                        "sensevoice/model.int8.onnx", language = "zh", useInverseTextNormalization = true),
+                    tokens = "sensevoice/tokens.txt", numThreads = SECOND_PASS_THREADS))).also {
+                    Log.i("VoxFix", "ASR_MODEL_READY model=second elapsedMs=${(System.nanoTime() - started) / 1_000_000}")
+                }
+            }.also { Thread(it, "VoxFix-second-loader").start() }
         } catch (error: Throwable) { release(); throw error }
     }
 
@@ -123,7 +125,7 @@ class SpeechEngine(assets: AssetManager) {
             utterance.clear()
             utteranceSamples = 0
             if (samples.isEmpty()) return ""
-            val offline = checkNotNull(sense)
+            val offline = secondPass()
             val second = offline.createStream()
             return try {
                 second.acceptWaveform(samples, SAMPLE_RATE)
@@ -193,10 +195,17 @@ class SpeechEngine(assets: AssetManager) {
         }
     }
 
+    internal fun secondPass(): OfflineRecognizer = checkNotNull(secondLoader).get()
+
     fun release() {
         online?.release(); online = null
-        sense?.release(); sense = null
+        // Await an in-flight load so cancellation cannot orphan a native recognizer.
+        try { secondLoader?.get()?.release() }
+        catch (error: java.util.concurrent.ExecutionException) { Log.e("VoxFix", "ASR_SECOND_LOAD_FAILED", error.cause) }
+        finally { secondLoader = null }
         vad?.release(); vad = null
+        // Return freed inference buffers to Android instead of keeping allocator caches resident.
+        if (!NativeMemory.purge()) Log.w("VoxFix", "ASR_NATIVE_PURGE_UNAVAILABLE")
     }
 
     companion object {

@@ -3,6 +3,12 @@
 #include <string>
 #include <vector>
 #include <unistd.h>
+#include <malloc.h>
+
+extern "C" JNIEXPORT jboolean JNICALL Java_local_voxfix_debug_NativeMemory_nativePurge(JNIEnv*, jobject, jboolean all) {
+  if (all && mallopt(M_PURGE_ALL, 0)) return JNI_TRUE;
+  return mallopt(M_PURGE, 0) ? JNI_TRUE : JNI_FALSE;
+}
 
 extern "C" int feelime_rime_initialize(const char*, const char*, const char*);
 extern "C" void feelime_rime_finalize();

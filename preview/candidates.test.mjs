@@ -25,7 +25,8 @@ try{
     words:row.querySelectorAll('[data-action="candidate"]:not(.clipboard-displaced)').length,scrollWidth:row.scrollWidth,width:row.clientWidth,
     buttons:[...row.querySelectorAll('[data-action="candidate"]:not(.clipboard-displaced)')].map(b=>({text:b.textContent,width:b.clientWidth,content:b.scrollWidth,ellipsis:getComputedStyle(b).textOverflow}))
   }));
-  assert(metrics.buttons.every(b=>b.ellipsis!=='ellipsis'&&b.width>=b.content),'candidate text must be fully displayed');
+  assert(metrics.buttons.every(b=>b.ellipsis==='clip'&&b.width>=b.content),'ordinary previews have no ellipsis or partial glyph at the right edge; expanded panel retains full text');
+  assert(Math.max(...metrics.buttons.map(b=>b.width))-Math.min(...metrics.buttons.map(b=>b.width))>40,'natural widths show whole ordinary phrases');
   assert.equal(metrics.words,words.length,'all available candidates must be reachable in the strip');
   assert(metrics.scrollWidth>metrics.width,'long candidate strip must scroll');
   const row=page.locator('.candidate-visible'),box=await row.boundingBox();
@@ -66,8 +67,8 @@ try{
     await page.waitForFunction(()=>document.querySelector('#pinyin-status').textContent.includes('已就绪'));
     await page.locator('#phone').evaluate((el,width)=>el.style.width=width+'px',width);
     await page.locator('#editor').pressSequentially('nin');
-    assert.equal(await row.evaluate(el=>getComputedStyle(el).getPropertyValue('--candidate-count')),'3','Imported density cannot change the fixed layout');
-    assert(await row.locator('button').evaluateAll(buttons=>buttons.every(b=>b.clientWidth>=b.scrollWidth)),'text fits at narrow widths and largest font');
+    assert.equal(await row.evaluate(el=>getComputedStyle(el).getPropertyValue('--candidate-count')),'','Obsolete candidate density is not rendered');
+    assert(await row.locator('[data-action="candidate"]').evaluateAll(buttons=>buttons.every(b=>getComputedStyle(b).textOverflow==='clip')),'long words remain complete without ellipsis');
     await row.evaluate(el=>el.scrollLeft=el.scrollWidth);
     await page.locator('#editor').pressSequentially('h');
     assert.equal(await row.evaluate(el=>el.scrollLeft),0,'new composition resets candidate strip');
@@ -77,7 +78,7 @@ try{
   await page.waitForFunction(()=>document.querySelector('#pinyin-status').textContent.includes('已就绪'));
   await page.locator('#editor').pressSequentially('nin');
   assert(await row.locator('button').count()>5,'bundled version includes later candidates');
-  assert(await row.locator('button').evaluateAll(buttons=>buttons.every(b=>b.clientWidth>=b.scrollWidth)),'bundled candidate text fits');
+  assert(await row.locator('[data-action="candidate"]').evaluateAll(buttons=>buttons.every(b=>getComputedStyle(b).textOverflow==='clip')),'bundle uses fixed slots');
   await page.locator('#editor').fill('');
   await page.locator('#editor').pressSequentially('srf');
   await page.locator('#phone').screenshot({path:new URL('../docs/candidate-scroll.png',import.meta.url).pathname.slice(1)});
@@ -95,7 +96,7 @@ try{
   const type=async raw=>{for(const letter of raw)await native.locator(`[data-action="letter"][data-value="${letter.toUpperCase()}"]`).click();};
   await type('nihaoma');
   assert.equal(await native.locator('.candidate-expand').count(),1,'official strip has one expand control');
-  assert.equal(await native.locator('.candidate-visible button').first().evaluate(el=>getComputedStyle(el).fontSize),'22px');
+  assert.equal(await native.locator('.candidate-visible button').first().evaluate(el=>getComputedStyle(el).fontSize),'20px');
   assert.equal(await native.locator('.candidate-visible button').first().evaluate(el=>getComputedStyle(el).paddingLeft),'17px');
   await native.locator('.candidate-expand').click();
   assert.deepEqual(await native.locator('.pinyin-item').allTextContents(),['nin','niu','bi','ji'],'multi-syllable alternatives match the measured nihao case');
@@ -143,5 +144,5 @@ try{
     assert(await native.locator('.candidate-grid button').evaluateAll(items=>items.every(el=>el.scrollWidth<=el.clientWidth)),'panel candidates remain complete at '+width+'px');
   }
   assert.deepEqual(errors,[]);await native.close();
-  console.log('PASS: complete candidate text, drag/swipe, official typography/geometry, word/character switch, paging boundaries, native partial selection, explicit pinyin boundary and bundled version');
+  console.log('PASS: natural candidate widths with complete phrases, drag/swipe, official typography/geometry, word/character switch, paging boundaries, native partial selection, explicit pinyin boundary and bundled version');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

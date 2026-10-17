@@ -2,7 +2,7 @@ export const toolbarItems = [
   ['menu', '功能菜单'], ['layouts', '键盘选择'], ['night', '夜间模式'],
   ['clipboard', '剪贴板'], ['emoji', '表情'], ['hide', '收起键盘'],
 ];
-export const keyboardGeometry = Object.freeze({height:351,fontSize:22,gap:4,radius:7,background:'#edeff2',candidateCount:3,candidateFont:22});
+export const keyboardGeometry = Object.freeze({height:351,fontSize:22,gap:4,radius:7,background:'#edeff2',candidateCount:3});
 // 66px 的整块触感区域两侧各留 8px，阻尼只能在安全边界内发生。
 export function cursorFeedbackPosition(width, x) {
   const edge=Math.min(41,width/2),soft=Math.min(16,Math.max(0,width/2-edge));

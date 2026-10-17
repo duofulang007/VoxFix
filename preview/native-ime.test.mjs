@@ -172,8 +172,12 @@ try{
   await page.evaluate(()=>voxfixReset());await key('emoji').click();
   const deleted=await page.evaluate(()=>calls.filter(row=>row[0]==='delete').length);await tapTouch('delete',undefined,850);
   assert((await page.evaluate(()=>calls.filter(row=>row[0]==='delete').length))-deleted>=4,'Emoji deletion must repeat');
-  await key('emoji-search').click();for(const letter of 'HUA')await page.locator(`#keyboard [data-action="letter"][data-value="${letter}"]`).click();
+  await key('emoji-search').click();
+  assert.equal(await page.evaluate(()=>calls.filter(row=>row[0]==='resize').at(-1)[1]),395,'Emoji search asks the native host for its 44px editing area');
+  await page.setViewportSize({width:393,height:395});
+  for(const letter of 'HUA')await page.locator(`#keyboard [data-action="letter"][data-value="${letter}"]`).click();
   await page.locator('[data-action="candidate"][data-value="花"]').first().click();await page.locator('#ime-local-editor').getByRole('button',{name:'搜索',exact:true}).click();
+  await page.setViewportSize({width:393,height:351});
   assert(await page.locator('[data-action="insert"][data-value="🌷"]').isVisible(),'All flower emoji must be searchable');
   await page.locator('[data-action="insert"][data-value="🌷"]').click();await page.locator('[data-action="emoji-category"][data-value="常用"]').click();assert.equal(await page.locator('.emoji-grid [data-action="insert"]').first().getAttribute('data-value'),'🌷');
   await page.evaluate(()=>voxfixReset());await key('layouts').click();await page.locator('[data-action="layout"][data-value="en26"]').click();
