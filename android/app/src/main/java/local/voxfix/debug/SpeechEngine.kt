@@ -261,17 +261,20 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             }
             if (isCancelled()) return ""
             finishing = true
+            // 收尾阶段耗时拆开记：补尾 / 提交 / 二遍等待 分别占多少，优化前先看真实分布。
+            val releaseAt = System.nanoTime()
             // Flush trailing audio so the final word is not lost when the user stops mid-syllable.
-            stream.acceptWaveform(FloatArray(8000), SAMPLE_RATE)
+            stream.acceptWaveform(FloatArray(FLUSH_SILENCE_SAMPLES), SAMPLE_RATE)
             stream.inputFinished()
             while (recognizer.isReady(stream)) recognizer.decode(stream)
             detector.flush()
             drainUtterance()
             commitSegment()
             if (isCancelled()) return ""
+            val flushedAt = System.nanoTime()
             // 预算从「补尾完成」之后才起算：补尾 + 补渲本身要 100–250ms，之前把这段时间也算进预算，
             // 长句二遍只剩几十毫秒，粤语因此常常整段停在流式的同音汉字上。
-            val finishDeadline = System.nanoTime() + FINAL_SECOND_PASS_BUDGET_MS * 1_000_000
+            val finishDeadline = flushedAt + FINAL_SECOND_PASS_BUDGET_MS * 1_000_000
             val tail = clean(recognizer.getResult(stream).text)
             // 二遍模型还没加载完就别等：等待期全花在加载上，预算烧满了也拿不到改写。
             // 冷启动第一句（说话短、加载 0.78s）实测正好会这样白等 350ms。
@@ -279,6 +282,8 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             var result = segments.foldIndexed("") { index, text, segment ->
                 join(text, segment.finish(releaseBudget(finishDeadline, index == segments.lastIndex, secondLoaded)))
             }
+            Log.i("VoxFix", "ASR_RELEASE flushMs=${(flushedAt - releaseAt) / 1_000_000} " +
+                "waitMs=${(System.nanoTime() - flushedAt) / 1_000_000} loaded=$secondLoaded")
             if (isCancelled()) return ""
             if (tail.isNotEmpty() && result.isEmpty()) result = tail
             // Learned contexts come from committed text: restore punctuation/numbers before matching them.
@@ -423,6 +428,8 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
          * 并成一段，固定音频混合样本反而从 5/16 掉到 4/16，故不采用更长的合并。
          */
         const val COMMIT_SILENCE_SAMPLES = SAMPLE_RATE / 4
+        /** 松手时补多少静音让解码器把最后一块算完；越小收尾越快，太小会丢尾字。 */
+        const val FLUSH_SILENCE_SAMPLES = 8000
         /** 超过这个长度就不再为「停顿」预跑二遍（见 transcribe 里的 early 分支）。 */
         const val EARLY_SECOND_PASS_LIMIT = SAMPLE_RATE * 8
         const val CAPTURE_BUFFER_CHUNKS = SAMPLE_RATE * 3 / AUDIO_CHUNK_SAMPLES
