@@ -13,22 +13,28 @@ VoxFix 是一个安装后可在系统里独立选择的自有 Android 输入法�
   键盘高度／字号／间距／圆角／背景按官方截图固定，不提供尺寸自定义。
 - **中文拼音走原生 librime 1.17.0**：`PinyinEngine.kt` + `cpp/rime_jni.cpp` → `libvoxfix_rime.so`，
   词库为 luna_pinyin 加个人词条，并保留 speller `algebra` 简拼修复。
-- **语音走 sherpa-onnx 1.13.8**：Zipformer 中英流式（第一遍，边说边进输入框）+ SenseVoice 第二遍
-  （松手后整段补标点与数字格式）+ silero VAD 断句。长按空格 300ms 进入语音，上滑取消、松手结束。
-  普通打字不加载语音，使用后空闲30秒释放；二遍后台加载，详见[语音内存记录](docs/语音按需加载与空闲释放-2026-10-17.md)。
+- **语音走 sherpa-onnx 1.13.8**：Zipformer 中英流式（第一遍，边说边进输入框）+ SenseVoice 通用版第二遍
+  （松手**先上屏实时文字**，二遍回来在 composing 内改写并补标点数字）+ silero VAD（阈值 0.4）断句，
+  另有独立 CT-Transformer 标点在二遍超时退路时补位。长按空格 300ms 进入语音，上滑取消、松手结束。
+  普通打字不加载语音，使用后空闲30秒释放；二遍后台加载，见[语音收尾预算](docs/语音二遍收尾预算与通用模型-2026-10-18.md)。
 - 底部滑轨：碰一下即可拖动光标，离触控点越远走得越快（跟手 / 高速两档）；长按在「起点锁定」与「自由移动」
   之间切换，锁定时把光标钉成起点并呼出右侧编辑框，收起面板不等于解锁。
+- **删除键有独立连删曲线**（90ms 起步到 30ms 封底），与滑轨摇杆分档速度互不影响，见
+  [删除连删速度](docs/删除连删速度-2026-10-18.md)。
+- **工具栏**：长按图标 380ms 直接抬起，拖到别的图标上松手即落位并持久保存；没有排序模式或提示行，
+  见[工具栏长按拖动](docs/工具栏长按拖动排序-2026-10-18.md)。
 - **剪贴板**：离线拆词与连续拖选；最多300条全历史检索，支持字面／全拼／简拼／混拼与受控近似。
   中文26键普通候选为20px自然宽度、可横向滑动；有匹配时在右侧悬浮入口，整入口点击展开210px连体列表，
   点条目引用、长按编辑。引用与剪贴板编辑共用「取消 / 拆词 / 保存」编辑框。
 - **拼音个性化学习**：原生成功选词同步到本地记忆，补齐分段短语、全拼／简拼／混拼共享召回与接续联想；
-  可关闭，不保存日常上屏文本，不联网。
+  全量个人词库默认开启并支持完整备份／通用文本导出与合并导入，不保存日常上屏文本，不联网。
 - **手写已移除**：停用源码、测试与配套许可已删除，可从Git历史追溯；不打包手写模型或运行库。
 - **安卓端 Qwen 本地整理已移除**：手机上不再保留 GGUF 模型，输入法不阻塞上屏、不调用大模型。
+- **电脑端语音服务已移除**：`voice/`、`preview/voice.mjs` 与配套服务脚本于 2026-10-18 删除，
+  语音只在手机原生侧真实运行；删除内容可从Git历史追溯。
 
-最新版本的真人长按/取消、跨App与真实麦克风响应仍待确认；本轮9组网页检查通过，仍不能代替K60真人验收。
-验收记录在 [docs/USB真机验收.md](docs/USB真机验收.md)，未解决项在
-[docs/现有功能问题清单.md](docs/现有功能问题清单.md)。
+真人长按/取消、跨App与真实麦克风响应仍需在 K60 上逐场景确认。验收记录在
+[docs/USB真机验收.md](docs/USB真机验收.md)，未解决项在 [docs/现有功能问题清单.md](docs/现有功能问题清单.md)。
 
 ## 目录结构
 
@@ -36,7 +42,6 @@ VoxFix 是一个安装后可在系统里独立选择的自有 Android 输入法�
 |---|---|
 | `android/` | 原生输入法工程：Kotlin 源码、librime JNI、拼音 schema、许可与测试 |
 | `preview/` | 键盘前端源码（同时是浏览器原型）、交互测试、官方参考截图 |
-| `voice/` | 电脑端离线语音与整理服务，仅用于桌面原型 |
 | `tools/` | 构建、模型与词库准备、APK 检查等脚本 |
 | `docs/` | 当前文档；历史材料在 `docs/archive/`（索引见其 README） |
 
@@ -57,14 +62,19 @@ pwsh -ExecutionPolicy Bypass -File tools/build_android.ps1
 
 ## 网页交互检查
 
-网页检查是改动后的第一道回归，**不等于原生通过**。
+网页检查是改动后的第一道回归，**不等于原生通过**。每个 `preview/*.test.mjs` 都是独立脚本，用 Node 直接跑：
 
 ```bash
-node preview/native-ime.test.mjs      # 以及 ime-regressions / candidates / fixed-layout / key-press /
-                                      # focus-ring / interaction-transitions / pinyin / english / learning /
-                                      # split / clipboard-* / selection-* / letter-hold / voice* / core
-                                      # 各自同名 *.test.mjs
+node preview/core.test.mjs
 ```
+
+| 分组 | 脚本 |
+|---|---|
+| 布局与按压 | `fixed-layout`、`key-press`、`focus-ring`、`interaction-transitions`、`candidates`、`letter-hold`、`toolbar-drag` |
+| 滑轨与编辑框 | `selection-lock`、`selection-drag`、`selection-direction`、`selection-editor`、`selection-delete`、`selection-pad` |
+| 剪贴板与词库 | `clipboard-search`、`clipboard-match-ime`、`clipboard-reference`、`clipboard-panel-search`、`split`、`learning`、`learning-ime`、`lexicon`、`lexicon-browser` |
+| 拼音与英文 | `pinyin`、`english` |
+| 原生桥与语音 | `native-ime`、`voice-orb`、`system-audit`、`ime-regressions` |
 
 真机脚本（`preview/*-device.test.mjs`）需要先用 `adb forward` 把 IME WebView 的 devtools 端口转到本机，
 并且手机操作要由使用者实际完成。
@@ -77,7 +87,6 @@ node preview/native-ime.test.mjs      # 以及 ime-regressions / candidates / fi
 
 - 单文件试用页：`python tools/build_preview.py` 生成根目录 `键盘试用页.html`（生成物，不入库），
   双击即可打开，无需起服务。
-- `voice/` 与 `preview/voice.mjs` 只作为历史桌面模块保留，页面不再引用；手机上的 `127.0.0.1` 也访问不到 `voice/server.py`。
 - 网页词库（非 librime 路径）：`tools\setup_lexicon.py` → `tools\build_pinyin.py`，
   生成 `preview/pinyin-data.json` 与 `preview/pinyin-lite.json`（生成物，不入库）。
 
