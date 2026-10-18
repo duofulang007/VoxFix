@@ -58,7 +58,9 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
                     tokens = "streaming/tokens.txt", numThreads = STREAMING_THREADS, modelType = "zipformer",
                     modelingUnit = "cjkchar+bpe", bpeVocab = "streaming/bpe.vocab"),
                 decodingMethod = if (usesPersonalDecoder) "modified_beam_search" else "greedy_search",
-                // Four paths regressed a mixed-English fixture on K60; two retains the term benefit.
+                // 79 条固定音频在电脑上 beam 4 路比 2 路好（混说 14.74% vs 18.16%），但 K60 上只差
+                // 1 个点（17.80% vs 18.79%）而解码耗时翻倍（混说样本 1189ms vs 574ms/条）⇒ 取 2 路。
+                // 混说真正的杠杆是热词：同一批把术语放进热词表，2 路就能从 18.16% 降到 16.49%。
                 maxActivePaths = 2,
                 endpointConfig = EndpointConfig(EndpointRule(false, 1.6f, 0f), EndpointRule(true, 0.8f, 0f), EndpointRule(false, 0f, 20f))))
             loaded("streaming")

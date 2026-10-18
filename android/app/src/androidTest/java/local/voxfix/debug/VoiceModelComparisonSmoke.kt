@@ -12,12 +12,22 @@ import java.nio.ByteOrder
 /** Public/synthetic fixtures and isolated candidate files only; never records or edits user text. */
 internal object VoiceModelComparisonSmoke {
     fun run(context: Context, label: String): String {
-        check(label in setOf("current", "zip2025", "para3", "sense2025", "sense2024", "sense2024opt"))
+        check(label in setOf("current", "zip2025", "para3", "sense2025", "sense2024", "sense2024opt",
+            "stream-greedy", "stream-beam2", "stream-beam4", "stream-beam8"))
         val folder = context.cacheDir.resolve("voice-quality-20261018")
         val cases = JSONArray(folder.resolve("cases.json").readText())
         check(cases.length() in 1..100)
         val started = SystemClock.elapsedRealtime()
         val online = when (label) {
+            // 同一份流式权重只换解码策略：中英混说该用几路 beam，必须由手机而不是电脑决定。
+            "stream-greedy", "stream-beam2", "stream-beam4", "stream-beam8" -> OnlineRecognizer(context.assets, OnlineRecognizerConfig(
+                modelConfig = OnlineModelConfig(transducer = OnlineTransducerModelConfig(
+                    "streaming/encoder.int8.onnx", "streaming/decoder.onnx", "streaming/joiner.int8.onnx"),
+                    tokens = "streaming/tokens.txt", numThreads = SpeechEngine.STREAMING_THREADS, modelType = "zipformer",
+                    modelingUnit = "cjkchar+bpe", bpeVocab = "streaming/bpe.vocab"),
+                decodingMethod = if (label == "stream-greedy") "greedy_search" else "modified_beam_search",
+                maxActivePaths = when (label) { "stream-beam2" -> 2; "stream-beam8" -> 8; else -> 4 },
+                enableEndpoint = false))
             "current" -> OnlineRecognizer(context.assets, OnlineRecognizerConfig(
                 modelConfig = OnlineModelConfig(transducer = OnlineTransducerModelConfig(
                     "streaming/encoder.int8.onnx", "streaming/decoder.onnx", "streaming/joiner.int8.onnx"),
