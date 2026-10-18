@@ -66,6 +66,11 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             // "silero_vad.onnx" and 16 kHz.
             val vadConfig = checkNotNull(getVadModelConfig(VAD_SILERO)) { "silero-vad 配置不可用" }
             vadConfig.numThreads = VAD_THREADS
+            // 默认阈值 0.5 会把句首轻声判成静音：79 条固定音频里有 11 条的首段起点晚于真实语音
+            // 150ms 以上，二遍因此只拿到后半句（`这个bug已经修好了` → `已经修好了`）。0.4 把这批
+            // 混说错误率从 11.7% 压到 8.8%、丢句首 11 条降到 9 条；纯白噪 0.01–0.05 RMS 与
+            // 10–15 dB 加噪语音的分段结果不变。
+            vadConfig.sileroVadModelConfig.threshold = VAD_THRESHOLD
             vad = Vad(assets, vadConfig)
             loaded("vad")
             // 术语判定用的英文词表（包内 rime-ice 词表）：后台读一次，不占出字路径。
@@ -386,6 +391,8 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
          */
         const val SECOND_PASS_LANGUAGE = "auto"
         const val VAD_THREADS = 1
+        /** silero 判人声的概率阈值；0.5（上游默认）会吞掉句首轻声，见 init 里的实测。 */
+        const val VAD_THRESHOLD = 0.4f
         const val AUDIO_CHUNK_SAMPLES = 320
         /**
          * VAD 报出停顿后还要等多久才真的切段。
