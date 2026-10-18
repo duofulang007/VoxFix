@@ -230,9 +230,9 @@ class SpeechEngineTest {
         assertEquals("안녕하세요.", SpeechEngine.refine("安宁哈塞哟", "안녕하세요.", "<|ko|>"))
     }
 
-    /** 标签必须被正文自证；LID 在噪声上会乱报，乱报时不能绕开所有闸门。 */
+    /** 日语仍需假名；普通话及未知标签继续保守比较。 */
     @Test fun ignoresALanguageLabelTheTextDoesNotSupport() {
-        assertEquals("今天天气不错", SpeechEngine.refine("今天天气不错", "今天天气很好", "<|yue|>"))
+        assertEquals("今天天气不错", SpeechEngine.refine("今天天气不错", "今天天气很好", ""))
         assertEquals("今天天气不错", SpeechEngine.refine("今天天气不错", "今天天气很好", "<|ja|>"))
         // 中文标签走原路：这条只是确认新增分支没把 zh 也放进「整句采用」。
         assertEquals("今天天气不错", SpeechEngine.refine("今天天气不错", "今天天气很好", "<|zh|>"))
@@ -243,14 +243,31 @@ class SpeechEngineTest {
         assertEquals("你好", SpeechEngine.refine("你好", "唔哋".repeat(150), "<|yue|>"))
     }
 
+    /** 公开音频真实复现：粤语不一定含多个专用字，双语流式的同音字不可当真值。 */
+    @Test fun adoptsGeneralModelCantoneseWithoutRequiringSpecialCharacters() {
+        for ((raw, correct) in listOf(
+            "隆家输给我都要夜色" to "两只小企鹅都有嘢食",
+            "某人连他一圈养猫哥又卡" to "无论你提出任何嘅要求",
+            "姚某人自己都忘记我都还挺会干" to "有无人知道湾仔活道系点去")) {
+            assertEquals(correct, SpeechEngine.refine(raw, correct, "<|yue|>"))
+            assertEquals(raw, SpeechEngine.refine(raw, correct, ""))
+        }
+    }
+
     /**
-     * 这条权重上 LID 恒报 `<|yue|>`（普通话、英文都报，实测 9/9），所以标签不能单独当证据：
-     * 长句必须有两个以上不同的粤语字，一个「哋」不够。
+     * 松手预算只给「最后一句 + 二遍已加载」。
+     *
+     * 冷启动第一句实测：模型还在加载（0.78s），松手却等满了 350ms，文本一字未改。
      */
-    @Test fun aSingleCantoneseCharIsNotEnoughForALongSentence() {
-        val raw = "我们明天上午十点在公司开会记得带材料"
-        assertEquals(raw, SpeechEngine.refine(raw, "我哋明日上昼十点公司开会", "<|yue|>"))
-        assertEquals("我哋明日上昼十点喺公司开会",
-            SpeechEngine.refine(raw, "我哋明日上昼十点喺公司开会", "<|yue|>"))
+    @Test fun releaseBudgetOnlyAppliesToTheLastSegmentWithALoadedSecondPass() {
+        val deadline = 10_000_000_000L
+        // 最后一句且模型已就绪：按剩余时间给预算。
+        assertEquals(350L, SpeechEngine.releaseBudget(deadline, true, true, now = deadline - 350_000_000L))
+        // 模型还在加载：一秒都不等，否则白等。
+        assertEquals(0L, SpeechEngine.releaseBudget(deadline, true, false, now = deadline - 350_000_000L))
+        // 不是最后一句：前面几句不再追加等待。
+        assertEquals(0L, SpeechEngine.releaseBudget(deadline, false, true, now = deadline - 350_000_000L))
+        // 预算已经过期：不再等。
+        assertEquals(0L, SpeechEngine.releaseBudget(deadline, true, true, now = deadline + 1_000_000L))
     }
 }

@@ -30,6 +30,7 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
     private var personalPaths = 0
     private var voiceWorkflow = false
     private var voiceCycle = false
+    private var modelCompare = ""
     override fun onCreate(arguments: Bundle?) {
         pinyin = arguments?.getString("pinyin") == "true"
         benchmark = arguments?.getString("benchmark") == "true"
@@ -46,6 +47,7 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
         personalPaths = arguments?.getString("personalPaths")?.toIntOrNull() ?: 0
         voiceWorkflow = arguments?.getString("voiceWorkflow") == "true"
         voiceCycle = arguments?.getString("voiceCycle") == "true"
+        modelCompare = arguments?.getString("modelCompare") ?: ""
         super.onCreate(arguments); start()
     }
     override fun onStart() {
@@ -85,6 +87,12 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
             }
             if (benchmark) {
                 output.putString("result", benchmarkVoice())
+                finish(Activity.RESULT_OK, output)
+                return
+            }
+            if (modelCompare.isNotEmpty()) {
+                output.putString("result", if (modelCompare.startsWith("pipeline-")) VoicePipelineComparisonSmoke.run(targetContext, modelCompare)
+                    else VoiceModelComparisonSmoke.run(targetContext, modelCompare))
                 finish(Activity.RESULT_OK, output)
                 return
             }

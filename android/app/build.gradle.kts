@@ -32,6 +32,8 @@ val optimizeStreamingModels by tasks.registering(Exec::class) {
         inputs.file("../../models/streaming/$it")
         outputs.file("../../.android/streaming-optimized/$it")
     }
+    inputs.file("../../models/sensevoice/model.int8.onnx")
+    outputs.file("../../.android/streaming-optimized/model.int8.onnx")
     outputs.file("../../.android/streaming-optimized/receipt.json")
 }
 val stageModels by tasks.registering(Sync::class) {
@@ -42,8 +44,9 @@ val stageModels by tasks.registering(Sync::class) {
         val digest = MessageDigest.getInstance("SHA-256").digest(vocab.readBytes()).joinToString("") { "%02x".format(it) }
         check(digest == "d0b642f3a2eacd5fadefdeff9e0e1358cab729647cbb7fe58cf738e1f7407029") { "Hotword vocabulary checksum mismatch" }
     }
-    from("../../models") { include("streaming/**", "vad/**", "sensevoice/**", "punctuation/*.onnx"); exclude("streaming/*.onnx") }
+    from("../../models") { include("streaming/**", "vad/**", "sensevoice/**", "punctuation/*.onnx"); exclude("streaming/*.onnx", "sensevoice/*.onnx") }
     from("../../.android/streaming-optimized") { include(streamingModelFiles); into("streaming") }
+    from("../../.android/streaming-optimized") { include("model.int8.onnx"); into("sensevoice") }
     // getVadModelConfig hardcodes the asset name "silero_vad.onnx", so the VAD model has to sit at
     // the assets root instead of under vad/. Keeping the source under vad/ stays tidy on disk.
     from("../../models/vad") { include("*.onnx") }

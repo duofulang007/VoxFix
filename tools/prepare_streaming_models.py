@@ -1,10 +1,10 @@
-"""Pre-optimize the pinned streaming graphs on the build machine, not at microphone startup."""
+"""Pre-optimize pinned streaming and second-pass graphs before microphone startup."""
 import hashlib
 import json
 from pathlib import Path
 
 import onnxruntime as ort
-from setup_voice import FILES
+from setup_voice import FILES, SENSEVOICE_MODEL
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / '.android/streaming-optimized'
@@ -20,13 +20,15 @@ def main():
     if ort.__version__ != VERSION:
         raise RuntimeError('Build requires .venv onnxruntime==' + VERSION + '; install tools/streaming-optimization-requirements.txt')
     sources = {}
-    for destination, expected in FILES['sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20-mobile'].values():
+    records = list(FILES['sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20-mobile'].values())
+    records.append(FILES[SENSEVOICE_MODEL]['model.int8.onnx'])
+    for destination, expected in records:
         if not destination.endswith('.onnx'):
             continue
         source = ROOT / 'models' / destination
         if digest(source) != expected:
             raise ValueError('Streaming source checksum mismatch: ' + destination)
-        sources[source.name] = expected
+        sources[source.name] = {'path': destination, 'sha256': expected}
     config = {'onnxruntime': VERSION, 'optimization': 'EXTENDED_CPU_NO_LAYOUT',
               'scriptSha256': digest(Path(__file__)), 'sources': sources}
     receipt = OUT / 'receipt.json'
@@ -46,7 +48,7 @@ def main():
         # Layout optimizations can embed desktop CPU assumptions; ARM64 uses only these graph fusions.
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
         options.optimized_model_filepath = str(scratch)
-        original = ort.InferenceSession(str(ROOT / 'models/streaming' / name), options, providers=['CPUExecutionProvider'])
+        original = ort.InferenceSession(str(ROOT / 'models' / sources[name]['path']), options, providers=['CPUExecutionProvider'])
         options.optimized_model_filepath = ''
         optimized = ort.InferenceSession(str(scratch), options, providers=['CPUExecutionProvider'])
         assert original.get_modelmeta().custom_metadata_map == optimized.get_modelmeta().custom_metadata_map, name

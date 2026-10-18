@@ -3,6 +3,8 @@ package local.voxfix.debug
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Future
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * 二遍结果：文本 + SenseVoice 内建 LID 报出的语种标签（`<|zh|>`/`<|yue|>` 这类首 token）。
@@ -12,7 +14,7 @@ import java.util.concurrent.Future
  */
 internal class SecondPass(val text: String, val lang: String)
 
-/** A second pass may improve a segment, but must never hold up live text or release. */
+/** Live text never waits; final release may give the last segment a bounded correction budget. */
 internal class SpeechSegment(private var text: String, private var second: Future<SecondPass>?,
     private val choose: (String, SecondPass) -> String = { raw, candidate -> SpeechEngine.refine(raw, candidate.text, candidate.lang) }) {
     fun current(): String {
@@ -25,7 +27,14 @@ internal class SpeechSegment(private var text: String, private var second: Futur
         return text
     }
 
-    fun finish(): String {
+    fun finish(waitMs: Long = 0): String {
+        if (waitMs > 0) {
+            try { second?.get(waitMs, TimeUnit.MILLISECONDS) }
+            catch (_: TimeoutException) { /* Keep streaming text when the budget expires. */ }
+            catch (_: ExecutionException) { /* current() applies the existing fallback. */ }
+            catch (_: CancellationException) { /* current() applies the existing fallback. */ }
+            catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+        }
         val result = current()
         second?.cancel(false)
         second = null

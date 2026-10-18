@@ -24,7 +24,7 @@ import kotlin.math.sqrt
  *
  * Pass 1 is a streaming Zipformer fed in 20 ms chunks, so the caller can
  * show text while the user is still talking. Pass 2 refines completed utterances in the
- * background; release uses only corrections already available and never waits for pass 2.
+ * background; release gives the last utterance a bounded correction budget.
  *
  * Silence is detected by silero-vad rather than an RMS threshold. RMS cannot tell a quiet
  * speaker from a noisy room, which previously made whole segments fall back to the streaming
@@ -74,7 +74,7 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
                 catch (error: Throwable) { Log.w("VoxFix", "ASR_VOCAB_UNAVAILABLE", error) }
             }, "VoxFix-vocab").apply { isDaemon = true; start() }
             // Defer pass 2 until live text has started, so cold streaming gets the CPU first.
-            // SenseVoice supplies punctuation/ITN; tokens are mandatory to avoid a native crash.
+            // General SenseVoice supplies LID/ITN; tokens are mandatory to avoid a native crash.
             secondLoader = FutureTask {
                 val started = System.nanoTime()
                 OfflineRecognizer(assets, OfflineRecognizerConfig(modelConfig = OfflineModelConfig(
@@ -168,7 +168,7 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             val streaming = clean(recognizer.getResult(stream).text)
             // 既没有 VAD 音频、也没有流式文字时才真的没有东西可提交。
             if (streaming.isBlank() && utterance.isEmpty() && !streamingOnly) return
-            val samples = if (!streamingOnly && !finishing && isRecording() && !isCancelled()) concat(utterance) else FloatArray(0)
+            val samples = if (!streamingOnly && !isCancelled()) concat(utterance) else FloatArray(0)
             val merged = utteranceSegments
             // Diagnostic only: fixed-audio runs need the segment's audio range and live text.
             Log.i("VoxFix", "ASR_SEG n=${segments.size + 1} fedMs=${fedSamples / 16} audioMs=${utteranceSamples / 16} text=$streaming")
@@ -179,8 +179,6 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             utteranceSegments = 0
             // Keep live decoding ahead of optional corrections rather than building a backlog.
             val pending = when {
-                // 松手不新开二遍任务，但暂停时已经提交、且没有新语音并入的那份仍然用它。
-                finishing -> early?.takeIf { earlySegments == merged }
                 early != null && earlySegments == merged -> early
                 samples.isEmpty() -> null
                 else -> try { secondWorker.submit<SecondPass> { decodeSecondPass(samples) } }
@@ -240,6 +238,7 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             }
             if (isCancelled()) return ""
             finishing = true
+            val finishDeadline = System.nanoTime() + FINAL_SECOND_PASS_BUDGET_MS * 1_000_000
             // Flush trailing audio so the final word is not lost when the user stops mid-syllable.
             stream.acceptWaveform(FloatArray(8000), SAMPLE_RATE)
             stream.inputFinished()
@@ -249,7 +248,13 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             commitSegment()
             if (isCancelled()) return ""
             val tail = clean(recognizer.getResult(stream).text)
-            var result = segments.fold("") { text, segment -> join(text, segment.finish()) }
+            // 二遍模型还没加载完就别等：等待期全花在加载上，预算烧满了也拿不到改写。
+            // 冷启动第一句（说话短、加载 0.78s）实测正好会这样白等 350ms。
+            val secondLoaded = secondLoader?.isDone == true
+            var result = segments.foldIndexed("") { index, text, segment ->
+                join(text, segment.finish(releaseBudget(finishDeadline, index == segments.lastIndex, secondLoaded)))
+            }
+            if (isCancelled()) return ""
             if (tail.isNotEmpty() && result.isEmpty()) result = tail
             // Learned contexts come from committed text: restore punctuation/numbers before matching them.
             if (result.isNotEmpty()) result = dictionary.correct(restorePunctuation(result), VoiceLanguage::phonetic, VoiceLanguage::boundaries)
@@ -364,6 +369,16 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
         // K60 fixed-audio comparisons favor two streaming threads; tune each model separately.
         const val STREAMING_THREADS = 2
         const val SECOND_PASS_THREADS = 4
+        /** 只给最后一句一次预算，包含流式补尾耗时；超时退回实时文字。 */
+        const val FINAL_SECOND_PASS_BUDGET_MS = 350L
+        /**
+         * 松手时最后一句还能等多久。
+         *
+         * 只有「最后一句 + 二遍模型已经加载完」才给预算：模型没加载完时 `decodeSecondPass` 会先
+         * 阻塞在加载上（K60 冷启动实测 0.78–0.84s），预算只会白烧，用户白等一次松手。
+         */
+        internal fun releaseBudget(deadline: Long, isLast: Boolean, secondLoaded: Boolean, now: Long = System.nanoTime()): Long =
+            if (isLast && secondLoaded) ((deadline - now) / 1_000_000).coerceAtLeast(0) else 0
         /**
          * 二遍语种。`auto` 是 SenseVoice 自己的 LID 档（模型元数据里有 `lang_auto` 这个 token id，
          * sherpa 只是在 `lang2id` 里查表），不是额外的推理开销：语种 token 本来就由模型自己吐。
@@ -411,8 +426,6 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
         private val HAN = Regex("[\\u4e00-\\u9fff]")
         private val KANA = Regex("[\\u3040-\\u30ff\\u31f0-\\u31ff]")
         private val HANGUL = Regex("[\\u1100-\\u11ff\\uac00-\\ud7af]")
-        /** 粤语书面专用字：出现任意一个，就说明这句不是普通话的同音汉字。 */
-        private val CANTONESE = Regex("[嘅咗喺唔哋冇嘢乜睇佢嚟啲噉咁咩嘞嗰畀揾諗嘥嚿㗎]")
         /** 片段类收尾符号：后面接这些说明还没说完，不补句号。 */
         val CLOSERS = "）)】》」』〉〕”’…~～".toSet()
         fun rms(samples: FloatArray) = sqrt(samples.sumOf { (it * it).toDouble() } / samples.size)
@@ -576,22 +589,18 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             return if (length > 0 && 1.0 - previous[b.length].toDouble() / length >= 0.85) candidate else raw
         }
         /**
-         * 语种自适应的采用判据：**报告的语种必须被正文自证**。
+         * 通用SenseVoice的粤语LID可用；日/韩再由正文脚本确认。
          *
          * 流式基座（bilingual zh-en）产不出粤/日/韩，所以这三种语种下流式文本没有比较价值，
-         * 相似度门只会把二遍的正确结果判成「改写过多」而退回同音汉字。但 LID 也会在噪声、
-         * 口音上乱报，所以还要正文对得上：日文有假名、韩文有谚文、粤语有粤语专用字。
-         * 对不上就落回原来的严格比较 —— 宁可保守，也不要让一个乱报的标签绕开所有闸门。
+         * 相似度门会拒绝正确结果。粤语可能没有专用字，不能以字形否决语种。
+         * 此契约依赖构建校验的2024通用权重，不适用于LID恒报yue的2025微调权重。
          */
         private fun adoptsForeign(raw: String, candidate: String, lang: String): Boolean {
             val tag = lang.trim().removePrefix("<|").removeSuffix("|>").lowercase(Locale.ROOT)
             val corroborated = when (tag) {
                 "ja" -> KANA.containsMatchIn(candidate)
                 "ko" -> HANGUL.containsMatchIn(candidate)
-                // 这条 int8 权重的 LID 头在普通话、英文上同样报 `<|yue|>`（实测 9/9），标签本身
-                // 没有分辨力，只能靠正文：长句要求两个以上不同的粤语字，短句一个即可。
-                "yue" -> CANTONESE.findAll(candidate).map { it.value }.distinct().count() >=
-                    if (candidate.length >= 8) 2 else 1
+                "yue" -> candidate.any { it in '\u3400'..'\u9fff' }
                 else -> false
             }
             return corroborated && saneLength(raw, candidate)

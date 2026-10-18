@@ -17,10 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * 离线标点恢复。
  *
- * 为什么不靠二遍：这条 SenseVoice int8 权重实测不产标点 —— 固定音频在
- * language=zh/auto × useInverseTextNormalization=true/false 四种组合下输出完全一致，
- * 中英文都没有任何标点（疑问句亦然）。tokens.txt 里虽然有「，。？」这些 token，
- * 但推理结果里从不出现。所以标点必须由独立模型补，二遍有没有跑完都不影响。
+ * 通用SenseVoice本身支持标点；二遍超时退回流式文字时仍需要独立补标点。
  *
  * 这个模型只吃文本、不需要音频，因此尾段直接松手、二遍尚未完成时同样能补标点，
  * 不必等慢速二遍。
@@ -49,7 +46,7 @@ internal class Punctuator(private val assets: AssetManager) {
 
     /**
      * 取标点结果；模型在 [budgetMs] 内没准备好就返回 null，调用方退回流式文本。
-     * 松手后不等二遍，同样不等这个模型 —— 补标点是收尾的尽力而为，不是前置条件。
+     * 此预算只约束加载等待，不包含已就绪模型的同步推理时间。
      */
     fun add(text: String, budgetMs: Long = RELEASE_BUDGET_MS): String? {
         if (text.isBlank()) return null
@@ -90,8 +87,7 @@ internal class Punctuator(private val assets: AssetManager) {
         /** 标点模型不吃音频，单线程足够；开多线程只会和流式识别抢 CPU。 */
         const val THREADS = 1
         /**
-         * 松手后补标点的等待上限。超过就放弃、用流式文本，
-         * 保证「松手立即出字」不被标点模型拖住。
+         * 松手后标点模型加载等待上限；超时使用已有文本。
          */
         const val RELEASE_BUDGET_MS = 150L
         private val WORKER = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, java.util.concurrent.ArrayBlockingQueue(2), { task ->
