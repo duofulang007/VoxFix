@@ -1,3 +1,5 @@
+import java.security.MessageDigest
+
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 android {
     namespace = "local.voxfix.debug"
@@ -34,6 +36,12 @@ val optimizeStreamingModels by tasks.registering(Exec::class) {
 }
 val stageModels by tasks.registering(Sync::class) {
     dependsOn(optimizeStreamingModels)
+    doFirst {
+        val vocab = file("../../models/streaming/bpe.vocab")
+        check(vocab.isFile) { "Missing hotword vocabulary; run tools/setup_voice.py" }
+        val digest = MessageDigest.getInstance("SHA-256").digest(vocab.readBytes()).joinToString("") { "%02x".format(it) }
+        check(digest == "d0b642f3a2eacd5fadefdeff9e0e1358cab729647cbb7fe58cf738e1f7407029") { "Hotword vocabulary checksum mismatch" }
+    }
     from("../../models") { include("streaming/**", "vad/**", "sensevoice/**", "punctuation/*.onnx"); exclude("streaming/*.onnx") }
     from("../../.android/streaming-optimized") { include(streamingModelFiles); into("streaming") }
     // getVadModelConfig hardcodes the asset name "silero_vad.onnx", so the VAD model has to sit at

@@ -30,7 +30,10 @@ import kotlin.math.sqrt
  * speaker from a noisy room, which previously made whole segments fall back to the streaming
  * text and, on some inputs, made a model hallucinate text with no speech at all.
  */
-class SpeechEngine(assets: AssetManager) {
+class SpeechEngine internal constructor(assets: AssetManager, private var personal: VoiceLexicon = VoiceLexicon()) {
+    internal val usesPersonalDecoder = personal.words.isNotEmpty()
+    private val personalTokens by lazy { assets.open("streaming/tokens.txt").bufferedReader().useLines { lines -> lines.map { it.substringBefore(' ') }.toSet() } }
+    internal fun personalize(value: VoiceLexicon) { personal = value }
     private var online: OnlineRecognizer? = null
     private var secondLoader: FutureTask<OfflineRecognizer>? = null
     private var vad: Vad? = null
@@ -52,7 +55,11 @@ class SpeechEngine(assets: AssetManager) {
                 modelConfig = OnlineModelConfig(
                     transducer = OnlineTransducerModelConfig(
                         "streaming/encoder.int8.onnx", "streaming/decoder.onnx", "streaming/joiner.int8.onnx"),
-                    tokens = "streaming/tokens.txt", numThreads = STREAMING_THREADS, modelType = "zipformer"),
+                    tokens = "streaming/tokens.txt", numThreads = STREAMING_THREADS, modelType = "zipformer",
+                    modelingUnit = "cjkchar+bpe", bpeVocab = "streaming/bpe.vocab"),
+                decodingMethod = if (usesPersonalDecoder) "modified_beam_search" else "greedy_search",
+                // Four paths regressed a mixed-English fixture on K60; two retains the term benefit.
+                maxActivePaths = 2,
                 endpointConfig = EndpointConfig(EndpointRule(false, 1.6f, 0f), EndpointRule(true, 0.8f, 0f), EndpointRule(false, 0f, 20f))))
             loaded("streaming")
             // getVadModelConfig(0) is silero-vad; the helper hardcodes the asset name
@@ -61,13 +68,20 @@ class SpeechEngine(assets: AssetManager) {
             vadConfig.numThreads = VAD_THREADS
             vad = Vad(assets, vadConfig)
             loaded("vad")
+            // 术语判定用的英文词表（包内 rime-ice 词表）：后台读一次，不占出字路径。
+            Thread({
+                try { EnglishVocabulary.load(assets) }
+                catch (error: Throwable) { Log.w("VoxFix", "ASR_VOCAB_UNAVAILABLE", error) }
+            }, "VoxFix-vocab").apply { isDaemon = true; start() }
             // Defer pass 2 until live text has started, so cold streaming gets the CPU first.
             // SenseVoice supplies punctuation/ITN; tokens are mandatory to avoid a native crash.
             secondLoader = FutureTask {
                 val started = System.nanoTime()
                 OfflineRecognizer(assets, OfflineRecognizerConfig(modelConfig = OfflineModelConfig(
+                    // 语种交给 SenseVoice 内建 LID 自己判，不写死 zh：写死时粤/日/韩只会被强行按
+                    // 中文解码。结果首 token 就是 `<|zh|>`/`<|yue|>` 这类标签，见 SecondPass.lang。
                     senseVoice = OfflineSenseVoiceModelConfig(
-                        "sensevoice/model.int8.onnx", language = "zh", useInverseTextNormalization = true),
+                        "sensevoice/model.int8.onnx", language = SECOND_PASS_LANGUAGE, useInverseTextNormalization = true),
                     tokens = "sensevoice/tokens.txt", numThreads = SECOND_PASS_THREADS))).also {
                     Log.i("VoxFix", "ASR_MODEL_READY model=second elapsedMs=${(System.nanoTime() - started) / 1_000_000}")
                 }
@@ -81,14 +95,19 @@ class SpeechEngine(assets: AssetManager) {
                             isRecording: () -> Boolean = { true }): String {
         val recognizer = checkNotNull(online)
         val detector = checkNotNull(vad)
-        val stream = recognizer.createStream()
+        val dictionary = personal
+        val stream = recognizer.createStream(if (usesPersonalDecoder) dictionary.hotwords(personalTokens) else "")
         val segments = mutableListOf<SpeechSegment>()
         var finishing = false
         fun complete() = segments.fold("") { text, segment -> join(text, segment.current()) }
         var previousText = ""
+        var previousRaw = ""
         val started = System.nanoTime()
-        fun emit(rawText: String) {
-            val text = formatNumbers(rawText)
+        fun emit(rawText: String, corrected: Boolean = false) {
+            if (rawText == previousRaw) return
+            previousRaw = rawText
+            val formatted = formatNumbers(rawText)
+            val text = if (corrected) formatted else dictionary.correct(formatted, VoiceLanguage::phonetic, VoiceLanguage::boundaries)
             if (text.isNotBlank() && text != previousText && !isCancelled()) {
                 if (previousText.isEmpty()) {
                     Log.i("VoxFix", "ASR_FIRST_TEXT elapsedMs=${(System.nanoTime() - started) / 1_000_000}")
@@ -113,16 +132,17 @@ class SpeechEngine(assets: AssetManager) {
         var utteranceSegments = 0
         // Pass 2 may start at the pause so it is more likely finished by release; it is only reused
         // when no further speech joined the utterance.
-        var early: Future<String>? = null
+        var early: Future<SecondPass>? = null
         var earlySegments = -1
 
-        fun decodeSecondPass(samples: FloatArray): String {
+        fun decodeSecondPass(samples: FloatArray): SecondPass {
             val offline = secondPass()
             val second = offline.createStream()
             return try {
                 second.acceptWaveform(samples, SAMPLE_RATE)
                 offline.decode(second)
-                clean(offline.getResult(second).text)
+                val result = offline.getResult(second)
+                SecondPass(clean(result.text), result.lang)
             } finally { second.release() }
         }
 
@@ -163,12 +183,15 @@ class SpeechEngine(assets: AssetManager) {
                 finishing -> early?.takeIf { earlySegments == merged }
                 early != null && earlySegments == merged -> early
                 samples.isEmpty() -> null
-                else -> try { secondWorker.submit<String> { decodeSecondPass(samples) } }
+                else -> try { secondWorker.submit<SecondPass> { decodeSecondPass(samples) } }
                     catch (_: RejectedExecutionException) { null }
             }
             early = null
             earlySegments = -1
-            segments.add(SpeechSegment(streaming, pending))
+            segments.add(SpeechSegment(streaming, pending) { raw, second ->
+                val refined = refine(raw, second.text, second.lang)
+                dictionary.protect(raw, refined, VoiceLanguage::phonetic)
+            })
             recognizer.reset(stream)
         }
 
@@ -206,7 +229,7 @@ class SpeechEngine(assets: AssetManager) {
                         early = null
                         val paused = concat(utterance)
                         if (paused.isNotEmpty()) {
-                            early = try { secondWorker.submit<String> { decodeSecondPass(paused) } }
+                            early = try { secondWorker.submit<SecondPass> { decodeSecondPass(paused) } }
                                 catch (_: RejectedExecutionException) { null }
                         }
                     }
@@ -228,8 +251,9 @@ class SpeechEngine(assets: AssetManager) {
             val tail = clean(recognizer.getResult(stream).text)
             var result = segments.fold("") { text, segment -> join(text, segment.finish()) }
             if (tail.isNotEmpty() && result.isEmpty()) result = tail
-            if (result.isNotEmpty()) result = restorePunctuation(result)
-            emit(result)
+            // Learned contexts come from committed text: restore punctuation/numbers before matching them.
+            if (result.isNotEmpty()) result = dictionary.correct(restorePunctuation(result), VoiceLanguage::phonetic, VoiceLanguage::boundaries)
+            emit(result, corrected = true)
             // Diagnostic only: which text each committed segment finally contributed.
             segments.forEachIndexed { index, segment ->
                 Log.i("VoxFix", "ASR_SEG_FINAL n=${index + 1} text=${segment.current()}")
@@ -340,6 +364,12 @@ class SpeechEngine(assets: AssetManager) {
         // K60 fixed-audio comparisons favor two streaming threads; tune each model separately.
         const val STREAMING_THREADS = 2
         const val SECOND_PASS_THREADS = 4
+        /**
+         * 二遍语种。`auto` 是 SenseVoice 自己的 LID 档（模型元数据里有 `lang_auto` 这个 token id，
+         * sherpa 只是在 `lang2id` 里查表），不是额外的推理开销：语种 token 本来就由模型自己吐。
+         * 可选值只有 auto/zh/en/ja/ko/yue，写别的会被原生层吞掉并退回 0（即 auto）。
+         */
+        const val SECOND_PASS_LANGUAGE = "auto"
         const val VAD_THREADS = 1
         const val AUDIO_CHUNK_SAMPLES = 320
         /**
@@ -370,6 +400,8 @@ class SpeechEngine(assets: AssetManager) {
         private val ENGLISH_WORD = Regex("[A-Za-z]+(?:['’][A-Za-z]+)?")
         // shortcut: all-caps speech loses name casing; extend this list when a specific acronym needs preserving.
         private val ACRONYMS = setOf("I", "AI", "USB", "CPU", "GPU", "API", "GPS", "HTTP", "HTTPS", "HTML", "CSS", "JSON", "XML", "URL", "PDF", "SQL", "PC", "OK")
+        /** 「中文谐音换术语」时允许二遍顺手少掉的中文字数。再多就是改写，不是换术语。 */
+        private const val MAX_TERM_DROPS = 3
         private val SPACE_BEFORE_PUNCTUATION = Regex("[ \\t]+(?=[，。！？；：、）】》”’])")
         private val SPACE_AFTER_PUNCTUATION = Regex("(?<=[，。！？；：、（【《“‘])[ \\t]+")
         private val SPACE_BETWEEN_CHINESE = Regex("(?<=[\\u4e00-\\u9fff])[ \\t]+(?=[\\u4e00-\\u9fff])")
@@ -377,6 +409,10 @@ class SpeechEngine(assets: AssetManager) {
         /** 不在两个 ASCII 字母数字之间的空格没有比较意义；英文词之间的空格要留。 */
         private val LOOSE_SPACE = Regex(" (?![A-Za-z0-9])|(?<![A-Za-z0-9]) ")
         private val HAN = Regex("[\\u4e00-\\u9fff]")
+        private val KANA = Regex("[\\u3040-\\u30ff\\u31f0-\\u31ff]")
+        private val HANGUL = Regex("[\\u1100-\\u11ff\\uac00-\\ud7af]")
+        /** 粤语书面专用字：出现任意一个，就说明这句不是普通话的同音汉字。 */
+        private val CANTONESE = Regex("[嘅咗喺唔哋冇嘢乜睇佢嚟啲噉咁咩嘞嗰畀揾諗嘥嚿㗎]")
         /** 片段类收尾符号：后面接这些说明还没说完，不补句号。 */
         val CLOSERS = "）)】》」』〉〕”’…~～".toSet()
         fun rms(samples: FloatArray) = sqrt(samples.sumOf { (it * it).toDouble() } / samples.size)
@@ -503,16 +539,25 @@ class SpeechEngine(assets: AssetManager) {
          *
          * 关键点三：英文一旦有差异默认退回流式，因为二遍确实会改错（`PDF→PF`、`computer→MPUTER`、
          * `API→APPI`）。只有两种能自证的情形放行，见 [hearsEnglishOnly] 与 [rewritesEnglishLetters]。
+         *
+         * 关键点四：**语种不同时这套阈值不适用**。二遍报出粤/日/韩，说明流式基座（只有中英）
+         * 那串必然是同音汉字，相似度天然极低；此时按 [adoptsForeign] 走整句采用，不比较相似度。
+         * [lang] 为空表示调用方没拿到标签（旧调用、单元测试），行为与只比文本时完全一致。
          */
-        fun refine(raw: String, candidate: String): String {
+        fun refine(raw: String, candidate: String, lang: String = ""): String {
             if (candidate.isEmpty()) return raw
             if (raw.isEmpty()) return candidate
-            // 数值按归一后的形态比，「十点」与「10点」应当等价。
-            if (numericTokens(raw) != numericTokens(candidate)) return raw
+            if (adoptsForeign(raw, candidate, lang)) return candidate
             val said = englishWords(raw)
             val heard = englishWords(candidate)
+            // 术语替换会顺手少掉中文字（`一笑` 里的 `一` 会被 NUMBER_RUN 当成数字），
+            // 所以这一种情形单独用数字子序列判断，其余仍按归一形态严格比。
+            val term = said != heard && prefersKnownEnglish(raw, candidate, said, heard)
+            // 数值按归一后的形态比，「十点」与「10点」应当等价。
+            if (!term && numericTokens(raw) != numericTokens(candidate)) return raw
             if (said != heard) {
-                if (!hearsEnglishOnly(raw, candidate, said, heard) && !rewritesEnglishLetters(raw, candidate, said, heard)) return raw
+                if (!term && !hearsEnglishOnly(raw, candidate, said, heard) &&
+                    !rewritesEnglishLetters(raw, candidate, said, heard)) return raw
                 return candidate
             }
             val a = comparable(raw)
@@ -529,6 +574,35 @@ class SpeechEngine(assets: AssetManager) {
             }
             val length = maxOf(a.length, b.length)
             return if (length > 0 && 1.0 - previous[b.length].toDouble() / length >= 0.85) candidate else raw
+        }
+        /**
+         * 语种自适应的采用判据：**报告的语种必须被正文自证**。
+         *
+         * 流式基座（bilingual zh-en）产不出粤/日/韩，所以这三种语种下流式文本没有比较价值，
+         * 相似度门只会把二遍的正确结果判成「改写过多」而退回同音汉字。但 LID 也会在噪声、
+         * 口音上乱报，所以还要正文对得上：日文有假名、韩文有谚文、粤语有粤语专用字。
+         * 对不上就落回原来的严格比较 —— 宁可保守，也不要让一个乱报的标签绕开所有闸门。
+         */
+        private fun adoptsForeign(raw: String, candidate: String, lang: String): Boolean {
+            val tag = lang.trim().removePrefix("<|").removeSuffix("|>").lowercase(Locale.ROOT)
+            val corroborated = when (tag) {
+                "ja" -> KANA.containsMatchIn(candidate)
+                "ko" -> HANGUL.containsMatchIn(candidate)
+                // 这条 int8 权重的 LID 头在普通话、英文上同样报 `<|yue|>`（实测 9/9），标签本身
+                // 没有分辨力，只能靠正文：长句要求两个以上不同的粤语字，短句一个即可。
+                "yue" -> CANTONESE.findAll(candidate).map { it.value }.distinct().count() >=
+                    if (candidate.length >= 8) 2 else 1
+                else -> false
+            }
+            return corroborated && saneLength(raw, candidate)
+        }
+        /** 噪声上二遍会把一个字复读成整句；这里只挡数量级异常，正常句子的比值都在 1 附近。 */
+        private fun saneLength(raw: String, candidate: String): Boolean {
+            val heard = candidate.count { it.isLetterOrDigit() }
+            if (heard == 0) return false
+            val said = raw.count { it.isLetterOrDigit() }
+            if (said == 0) return heard <= 40
+            return heard.toDouble() / said in 0.35..2.8
         }
         /**
          * 比较用的折叠文本：剥标点、折数字，但保留英文词之间的空格。
@@ -556,6 +630,40 @@ class SpeechEngine(assets: AssetManager) {
         private fun hearsEnglishOnly(raw: String, candidate: String, said: List<String>, heard: List<String>) =
             said.isEmpty() && heard.isNotEmpty() && HAN.containsMatchIn(raw) && hanOf(raw) == hanOf(candidate) &&
                 heard.all { word -> word.count { it in 'a'..'z' } >= 3 || word.uppercase(Locale.ROOT) in ACRONYMS }
+        /**
+         * 二遍给出的英文是**真词**、流式给出的不是（或流式根本没听出英文）时，采用二遍。
+         *
+         * 中文用户读英文术语时，流式常按中文谐音出字（`Excel → 一笑`）或吐出半截字母
+         * （`EXA`、`XL`、`EXHALE`），二遍反而听得出术语。反过来，二遍也会把真词改错
+         * （`PDF → PF`、`computer → MPUTER`），所以只有「二遍全是真词、流式不是全真词」才放行。
+         *
+         * 中文侧仍受保护：要么一字不动（纯补英文），要么二遍的中文是流式的子序列且最多少 3 个字
+         * （允许顺手修掉流式的重复字），且数字只能少不能改。
+         */
+        private fun prefersKnownEnglish(raw: String, candidate: String, said: List<String>, heard: List<String>): Boolean {
+            if (heard.isEmpty() || !heard.all { isKnownEnglishTerm(it) }) return false
+            if (said.isNotEmpty() && said.all { isKnownEnglishTerm(it) }) return false
+            val before = hanOf(raw)
+            val after = hanOf(candidate)
+            if (before.isEmpty() && after.isEmpty()) return true
+            if (before.isEmpty() || after.isEmpty()) return false
+            if (after.length > before.length || before.length - after.length > MAX_TERM_DROPS) return false
+            if (!isSubsequence(after, before)) return false
+            return isSubsequence(numericTokens(candidate), numericTokens(raw))
+        }
+        /** 词表里的完整英文词，或工程/缩写表里的词。表外的长串（`BU`、`PYHO`、`XCEL`）不算术语。 */
+        private fun isKnownEnglishTerm(word: String) =
+            word.uppercase(Locale.ROOT) in ACRONYMS || EnglishVocabulary.contains(word)
+        private fun isSubsequence(short: String, long: String): Boolean {
+            var i = 0
+            for (ch in long) if (i < short.length && ch == short[i]) i++
+            return i == short.length
+        }
+        private fun isSubsequence(short: List<String>, long: List<String>): Boolean {
+            var i = 0
+            for (value in long) if (i < short.size && value == short[i]) i++
+            return i == short.size
+        }
         /**
          * 纯英文内容、且二遍没改字母总数：只可能是把同一个读音重新切分或换成同长度的写法
          * （`ARE FINE → OFFLINE`）。字母数一变就说明二遍漏字或多字（`MPUTER`、`PF`、`APPI`），
@@ -612,4 +720,31 @@ class SpeechEngine(assets: AssetManager) {
         private val SENTENCE_MARKS = Regex("[，。？！；：、…,?!;]")
         private val REPEATED_MARK = Regex("([，。？！；：、])\\1+")
     }
+}
+
+/**
+ * 英文词表：包内 `keyboard/english-words.txt`（rime-ice，21197 词，许可随包）。
+ *
+ * 只用来判断二遍给出的英文是不是一个真词：`EXCEL` 在表里，`PF`/`MPUTER`/`APPI` 不在。
+ * 在后台线程加载；还没加载完时一律返回 false，判定退化成「不放行」，不会误改文本。
+ */
+internal object EnglishVocabulary {
+    @Volatile private var table: Set<String>? = null
+
+    fun load(assets: AssetManager) {
+        if (table != null) return
+        val words = assets.open(ASSET).bufferedReader().useLines { lines ->
+            lines.map { it.trim().lowercase(Locale.ROOT) }.filter { it.isNotEmpty() }.toHashSet()
+        }
+        table = words
+    }
+
+    /** 测试注入用：固定词集不需要读资产。 */
+    fun install(words: Set<String>) {
+        table = words.map { it.lowercase(Locale.ROOT) }.toHashSet()
+    }
+
+    fun contains(word: String): Boolean = table?.contains(word.lowercase(Locale.ROOT)) ?: false
+
+    private const val ASSET = "keyboard/english-words.txt"
 }

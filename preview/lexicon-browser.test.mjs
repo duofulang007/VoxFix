@@ -28,9 +28,14 @@ try{
   value=JSON.parse(await download('#lexicon-backup'));assert.equal(value.entries.length,10003);assert.equal(value.entries.find(row=>row.word==='明天').hits,12);assert.equal(value.entries.find(row=>row.word==='你').hits,7);
   await upload('明天\tming tian\t-1');assert.match(await page.locator('#toast').textContent(),/未导入/);assert.equal(JSON.parse(await download('#lexicon-backup')).entries.length,10003);
   const text=await download('#lexicon-text');assert(text.includes('明天\tming tian\t12'));assert(!text.includes('historical source'));
+  const voice={words:[{word:'张玥',code:'zhang yue',manual:true,hits:3},{word:'Excel',code:'',manual:true,hits:1},{word:'Word',code:'',manual:false,hits:2},{word:'sherpa-onnx',code:'',manual:false,hits:2}],corrections:[{heard:'张月',word:'张玥',left:'联系',right:'确认',hits:2},{heard:'EX CELL',word:'Excel',left:'请用',right:'打开表格',hits:1},{heard:'沃',word:'Word',left:'我的',right:'文档',hits:2},{heard:'sherpa-onn',word:'sherpa-onnx',left:'use',right:'now',hits:2}]};
+  await upload(JSON.stringify({format:'voxfix-personal-lexicon',version:2,entries:[],legacy:{},voice}));
+  await upload(JSON.stringify({format:'voxfix-personal-lexicon',version:2,entries:[],legacy:{},voice}));
+  assert.deepEqual(JSON.parse(await download('#lexicon-backup')).voice,voice);
   await page.reload();await page.waitForFunction(()=>document.querySelector('#pinyin-status').textContent.includes('已就绪'));
   await page.locator('[data-tab="custom"]').click();await page.locator('#personal-lexicon').click();
   value=JSON.parse(await download('#lexicon-backup'));assert.equal(value.entries.length,10003);assert.equal(value.legacy['rime:voxfix.tsv'],'historical source');
+  assert.equal(value.version,2);assert.deepEqual(value.voice,voice,'Voice evidence survives browser import, duplicate merge and restart');
   // UI candidate recall must use the imported persistent store after reload.
   await page.locator('[data-tab="try"]').click();
   for(const c of 'mingtian')await page.locator(`#keyboard [data-action="letter"][data-value="${c.toUpperCase()}"]`).first().click();

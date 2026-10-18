@@ -143,7 +143,7 @@ try{
   await page.evaluate(()=>window.voxfixClipboard('测试剪贴板'));await key('clipboard').click();
   assert(await page.locator('#keyboard').textContent().then(text=>text.includes('测试剪贴板')));
   await page.evaluate(()=>window.voxfixReset());
-  await key('menu').click();await key('custom').click();assert(await page.locator('dialog[open] #custom-panel').isVisible());await page.getByRole('button',{name:'返回键盘',exact:true}).last().click();
+  await key('menu').click();await key('custom').click();assert(await page.locator('dialog[open] #custom-panel').isVisible());await page.locator('dialog[open] .settings-back').click();
   await page.evaluate(()=>window.voxfixReset());
   assert.equal(await page.locator('.composer').isVisible(),false);
   assert.equal(await page.locator('.controls').isVisible(),false);

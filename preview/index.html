@@ -5,34 +5,27 @@
   <title>VoxFix · 键盘试用页</title><link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header class="page-header"><a class="brand" href="#"><span class="brand-mark">V</span>VoxFix<span class="brand-detail">键盘试用页</span></a><span class="version">录屏还原 · 第一版</span></header>
+  <header class="page-header"><a class="brand" href="#"><span class="brand-mark">V</span>VoxFix<span class="brand-detail">键盘试用页</span></a><span class="version">对齐手机版 · 2026-10-18</span></header>
   <main class="workspace">
     <aside class="controls">
-      <h1>先试手感，再做减法。</h1><p class="intro">按你当前的讯飞小米版布局还原。点击按键，或长按空格试试语音操作。</p>
-      <div class="control-tabs" role="tablist" aria-label="工作模式"><button role="tab" aria-selected="true" data-tab="try">试用与对照</button><button role="tab" aria-selected="false" data-tab="custom">键盘设置</button></div>
+      <h1>先试手感，再做减法。</h1><p class="intro">这份键盘就是手机 APK 里的前端源码。点击按键试用；语音在本页只演示交互，真实识别在手机本地。</p>
+      <div class="control-tabs" role="tablist" aria-label="工作模式"><button role="tab" aria-selected="true" data-tab="try">试用说明</button><button role="tab" aria-selected="false" data-tab="custom">键盘设置</button></div>
       <section id="try-panel">
         <h2>快速打开</h2><div id="quick-pages" class="quick-pages"></div>
-        <div class="instructions"><p><b>点一下空格</b>输入空格；<b>长按空格</b>进入语音。</p><p>语音时<b>上滑取消</b>，松手结束；识别中点击空白取消。</p><p>字母键长按可选上标符号，向上滑动直接输入上标。</p></div>
-        <p class="gesture-note">长按底部两个图标之间的空白处，左右拖动移动光标。</p>
-        <h2>真实离线语音</h2><p id="speech-status" class="speech-status" role="status">正在检查本机语音服务…</p>
-        <button id="enable-mic" class="enable-mic" disabled>启用麦克风</button>
-        <div class="small-actions"><button id="long-voice" disabled>开始长语音</button><button id="pause-voice" disabled>暂停</button><button id="finish-voice" disabled>结束</button><button id="cancel-voice" disabled>取消</button></div>
-        <p class="note">首次使用点上方按钮并允许录音，再长按空格说话。声音只送到这台电脑，停顿后补全标点和识别结果。</p>
-        <details><summary>个人语音热词</summary><label class="field">每行一个中文人名或术语<textarea id="voice-hotwords" rows="4" maxlength="3100" placeholder="留空保持当前识别方式"></textarea></label><p class="note">只保存到当前浏览器，开始录音时送到本机。添加热词会启用较复杂的解码，可能增加延迟。</p></details>
-        <label class="demo-toggle"><input type="checkbox" id="demo-voice">仅演示交互，不录音</label>
-        <div id="demo-fields" hidden><label class="field">语音演示结果<input id="voice-text" maxlength="100" value="你好。"></label></div>
+        <div class="instructions"><p><b>点一下空格</b>输入空格；<b>长按空格</b>进入语音，上滑取消，松手结束。</p><p>长按底部滑轨空白<b>左右拖动</b>移光标；<b>长按滑轨</b>在锁定与自由之间切换，锁定时呼出选字编辑框。</p><p>字母键长按可选上标符号，向上滑动直接输入上标；候选栏可横向滑动。</p></div>
+        <h2>语音演示</h2><p class="note">长按空格或底部麦克风进入，松手后输入一段示例文字，<b>不录音</b>。手机上的识别由本机 sherpa-onnx 完成：边说边出字，松手二遍整理，标点由独立离线模型补。</p>
         <p class="note" id="pinyin-status">正在加载本地拼音词库…</p>
-        <details><summary>长句与领域词库</summary><div id="phrase-options" class="feature-toggles"></div><label class="field">搜索常用语与已启用长句<input id="phrase-search" maxlength="100" placeholder="例如：千里之行"></label><div id="phrase-results" class="quick-pages"></div></details>
-        <h2>离线整理文字</h2><p id="polish-status" class="note" role="status">正在检查离线润色模型…</p><div class="small-actions"><button id="polish-text" disabled>整理口语</button><button id="undo-polish" disabled>撤销润色</button></div><p class="note">保留原意和语气，整理重复、标点与段落。先预览，再选择替换；不会自动改写流式识别。</p>
-        <div class="small-actions"><button id="clear-input">清空试用文字</button><button id="compare-toggle" aria-pressed="false">对照录屏</button></div>
-        <details class="coverage"><summary>本版功能范围</summary><p>9 键拼音、26 键拼音、离线语音；数字、符号、剪贴板／常用语、表情与颜文字、文字编辑和布局设置。</p><p>完整讯飞设置页与在线表情商店不在当前范围。</p></details>
+        <h2>手机上都在键盘里</h2>
+        <p class="note">剪贴板拆词与最多 300 条全历史检索、候选栏右侧剪贴板入口、滑轨选字编辑框、个人词库都在键盘内完成；「功能菜单 → 键盘设置」只有剪贴板开关、个人词库迁移与功能设置导入导出。</p>
+        <div class="small-actions"><button id="clear-input">清空试用文字</button></div>
+        <details class="coverage"><summary>本版功能范围</summary><p>26 键中英文与 9 键拼音、数字、符号、表情、键盘选择、夜间模式；原生 librime 拼音与长期个人词库；离线语音（流式上屏 + 二遍整理 + 独立标点）；滑轨锁定与选字编辑框；剪贴板拆词、引用与全历史检索；拼音个性化学习。</p><p>不含手写、安卓端本地润色与词库尺寸自定义。</p></details>
       </section>
       <section id="custom-panel" hidden>
         <h2>剪贴板</h2><div id="clipboard-toggles"></div>
         <h2>个人词库</h2><button id="personal-lexicon">个人词库与迁移</button><div id="lexicon-actions" class="config-actions" hidden><button id="lexicon-backup">导出完整备份</button><button id="lexicon-text">导出通用词库</button><button id="lexicon-import">合并导入词库</button><input id="lexicon-file" type="file" accept=".json,.tsv,.txt" hidden><p class="note">默认在本机长期保存。通用文本只含读音明确的词条，完整备份保留全部记录。</p></div>
         <div class="config-actions"><button id="export">导出功能设置</button><button id="import">导入功能设置</button><input type="file" id="config-file" accept=".json,application/json" hidden><button id="reset">恢复默认功能设置</button></div>
       </section>
-      <p id="feedback" class="feedback" role="status" aria-live="polite">默认布局保留了录屏中的重复入口。</p>
+      <p id="feedback" class="feedback" role="status" aria-live="polite">键盘布局按讯飞小米版固定。</p>
     </aside>
     <section class="preview-area" aria-label="键盘交互预览">
       <div class="preview-top"><span id="page-label">26 键中文</span><span class="dimension">360 × 800 参考画幅</span></div>
@@ -40,20 +33,16 @@
         <div class="status-bar"><span>17:45</span><span class="status-icons">▮▮▮ &nbsp;◔ &nbsp;▰</span></div>
         <div class="host-header"><span class="host-menu">☰</span><div class="host-tabs"><span class="active">聊天</span><span>工作</span></div><span class="host-ring">◌</span></div>
         <div class="host-body"><div class="preview-watermark">输入试用</div><div id="sent-messages" class="messages"></div><div class="host-hints"><span>在这里对照键位和操作</span><span>文字只留在当前页面</span></div></div>
-        <div class="composer"><button id="host-plus" aria-label="试用说明">＋</button><textarea id="editor" aria-label="试用输入框" placeholder="问问 ChatGPT" inputmode="none" rows="1" spellcheck="false"></textarea><button id="host-mic" aria-label="聊天应用的语音按钮"></button><button id="send" aria-label="发送试用文字"></button></div>
+        <div class="composer"><button id="host-plus" aria-label="试用说明">＋</button><textarea id="editor" aria-label="试用输入框" placeholder="在这里输入" inputmode="none" rows="1" spellcheck="false"></textarea><button id="host-mic" aria-label="聊天应用的语音按钮"></button><button id="send" aria-label="发送试用文字"></button></div>
         <div id="keyboard" class="keyboard" aria-label="仿讯飞键盘"></div>
         <button id="reopen" class="reopen" hidden>展开键盘</button>
       </div>
-      <p class="preview-caption">键盘试用 · 本地拼音候选 · 真实离线语音</p>
+      <p class="preview-caption">键盘试用 · 本地拼音候选 · 语音在手机本地运行</p>
     </section>
-    <aside id="comparison" class="comparison" hidden><h2>录屏原画面</h2><p class="note">切换页面时同步展示对应画面。</p><img id="reference-image" alt="对应页面的录屏截图"><p id="reference-label" class="note"></p></aside>
   </main>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <dialog id="snippet-dialog" class="snippet-dialog">
     <form id="snippet-form"><h2 id="snippet-title">添加剪贴板内容</h2><div class="snippet-frame"><label class="field">内容<textarea id="snippet-content" aria-labelledby="snippet-title" rows="5" maxlength="10000" required></textarea></label><div class="dialog-actions"><button type="button" id="snippet-cancel">取消</button><button type="button" id="snippet-split">拆词</button><button type="submit">保存</button></div></div><p class="note">保存到当前浏览器，可随时编辑或删除。</p><p id="snippet-error" role="alert"></p></form>
-  </dialog>
-  <dialog id="polish-dialog" class="snippet-dialog">
-    <h2>离线整理 · 原文与结果</h2><label class="field">原文<textarea id="polish-original" rows="5" readonly></textarea></label><label class="field">整理结果<textarea id="polish-preview" rows="7" readonly></textarea></label><p id="polish-message" role="status"></p><div class="dialog-actions"><button id="polish-close">关闭</button><button id="polish-apply" disabled>使用整理结果</button></div>
   </dialog>
   <link rel="stylesheet" href="native-ime.css">
   <script type="module" src="app.mjs"></script>

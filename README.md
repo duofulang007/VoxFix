@@ -69,15 +69,15 @@ node preview/native-ime.test.mjs      # 以及 ime-regressions / candidates / fi
 真机脚本（`preview/*-device.test.mjs`）需要先用 `adb forward` 把 IME WebView 的 devtools 端口转到本机，
 并且手机操作要由使用者实际完成。
 
-## 电脑端原型（非当前主线）
+## 网页试用页（与手机功能面对齐）
 
-`preview/` + `voice/` 保留了一套完整的电脑网页试用版：真实录音、流式出字、本地整理。
-它曾是主要开发方式，现在只用于网页侧试验，**不代表手机原生能力**。
+`preview/index.html` + `preview/app.mjs` 既是浏览器原型，也是 APK 内的键盘前端。试用页只保留手机端真实存在的功能：
+快速翻页、手势说明、语音交互演示（不录音）、剪贴板与个人词库设置。**电脑端语音服务、离线整理（Qwen 润色）、
+个人语音热词、长句与领域词库、录屏对照已从页面和相关代码移除**，语音只在手机原生侧真实运行。
 
-- `voice/server.py`：本机语音服务，端口 `127.0.0.1:18743`，只监听本机。手机上的 `127.0.0.1` 访问不到它。
-- 模型准备：`.venv\Scripts\python.exe tools\setup_voice.py`（语音）。
 - 单文件试用页：`python tools/build_preview.py` 生成根目录 `键盘试用页.html`（生成物，不入库），
   双击即可打开，无需起服务。
+- `voice/` 与 `preview/voice.mjs` 只作为历史桌面模块保留，页面不再引用；手机上的 `127.0.0.1` 也访问不到 `voice/server.py`。
 - 网页词库（非 librime 路径）：`tools\setup_lexicon.py` → `tools\build_pinyin.py`，
   生成 `preview/pinyin-data.json` 与 `preview/pinyin-lite.json`（生成物，不入库）。
 

@@ -5,6 +5,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class SpeechEngineTest {
+    /** 真实词表来自包内 english-words.txt；单元测试注入固定词集，避免读 Android 资产。 */
+    @org.junit.Before fun installEnglishVocabulary() {
+        EnglishVocabulary.install(setOf("excel", "word", "ppt", "wifi", "api", "bug", "offline", "computer", "recognition"))
+    }
+
     @Test fun formatsSpokenNumbersByDefaultWithoutChangingOrdinaryWords() {
         for ((spoken, written) in listOf(
             "下午三点半" to "下午3点半", "跑了十公里" to "跑了10公里",
@@ -187,5 +192,65 @@ class SpeechEngineTest {
         }
         // 带中文的句子不走这条放行：PDF→PF 仍按英文内容变化拒绝。
         assertEquals("把文件保存成 PDF格式", SpeechEngine.refine("把文件保存成 PDF格式", "把文件保存成 PF 格式"))
+    }
+
+    /**
+     * 中文用户读英文术语时，流式按谐音出字（`Excel → 一笑`），二遍反而听得出术语。
+     * 真机样本：说「用Excel做一个表格」，流式给出「用一笑做个一个表格」。
+     */
+    @Test fun takesTheTermTheSecondPassHeardInsteadOfChineseHomophones() {
+        assertEquals("用 EXCEL 做一个表格", SpeechEngine.refine("用一笑做个一个表格", "用 EXCEL 做一个表格"))
+        // 流式把术语听成半截字母，二遍是真词：采用。
+        assertEquals("请帮我打开 EXCEL", SpeechEngine.refine("请帮我打开 EXA", "请帮我打开 EXCEL"))
+        assertEquals("EXCEL", SpeechEngine.refine("EXHALE", "EXCEL"))
+        // 表外长串不是术语：不能借「换术语」把中文删掉。
+        assertEquals("用一笑做个一个表格", SpeechEngine.refine("用一笑做个一个表格", "用 PYHO 做一个表格"))
+        // 中文少太多，是改写而不是换术语。
+        assertEquals("用一笑做个一个表格", SpeechEngine.refine("用一笑做个一个表格", "用 EXCEL 做"))
+        // 流式本来就听对了真词时，二遍改错一律拒绝（PDF→PF、COMPUTER→MPUTER、VOX FIX→OX FIX）。
+        assertEquals("请把Excel发给我", SpeechEngine.refine("请把Excel发给我", "请把Word发给我"))
+        assertEquals("COMPUTER", SpeechEngine.refine("COMPUTER", "MPUTER"))
+        assertEquals("VOX FIX", SpeechEngine.refine("VOX FIX", "OX FIX"))
+    }
+
+    /**
+     * 语种自适应：二遍用 `language = "auto"`，语种由 SenseVoice 内建 LID 自己报。
+     *
+     * 流式基座只有中英，说粤/日/韩时它吐的是同音汉字，与正确文本相似度天然极低；
+     * 再用 0.85 门判，等于把唯一能给出正确结果的那一路丢掉。
+     */
+    @Test fun adoptsNonMandarinSecondPassWhenTheLabelIsCorroboratedByTheText() {
+        // 粤语：流式把「我哋今日唔使返工」听成普通话同音字。
+        assertEquals("我哋今日唔使返工。",
+            SpeechEngine.refine("我们今日不是返工", "我哋今日唔使返工。", "<|yue|>"))
+        // 日文：二遍带假名才是真的。
+        assertEquals("これはテストです。",
+            SpeechEngine.refine("这个是测试", "これはテストです。", "<|ja|>"))
+        // 韩文：同理。
+        assertEquals("안녕하세요.", SpeechEngine.refine("安宁哈塞哟", "안녕하세요.", "<|ko|>"))
+    }
+
+    /** 标签必须被正文自证；LID 在噪声上会乱报，乱报时不能绕开所有闸门。 */
+    @Test fun ignoresALanguageLabelTheTextDoesNotSupport() {
+        assertEquals("今天天气不错", SpeechEngine.refine("今天天气不错", "今天天气很好", "<|yue|>"))
+        assertEquals("今天天气不错", SpeechEngine.refine("今天天气不错", "今天天气很好", "<|ja|>"))
+        // 中文标签走原路：这条只是确认新增分支没把 zh 也放进「整句采用」。
+        assertEquals("今天天气不错", SpeechEngine.refine("今天天气不错", "今天天气很好", "<|zh|>"))
+    }
+
+    /** 噪声上二遍爱把一个字复读成整句；数量级异常时不采信。 */
+    @Test fun rejectsForeignAdoptionWhenTheLengthIsImplausible() {
+        assertEquals("你好", SpeechEngine.refine("你好", "唔哋".repeat(150), "<|yue|>"))
+    }
+
+    /**
+     * 这条权重上 LID 恒报 `<|yue|>`（普通话、英文都报，实测 9/9），所以标签不能单独当证据：
+     * 长句必须有两个以上不同的粤语字，一个「哋」不够。
+     */
+    @Test fun aSingleCantoneseCharIsNotEnoughForALongSentence() {
+        val raw = "我们明天上午十点在公司开会记得带材料"
+        assertEquals(raw, SpeechEngine.refine(raw, "我哋明日上昼十点公司开会", "<|yue|>"))
+        assertEquals("我哋明日上昼十点喺公司开会",
+            SpeechEngine.refine(raw, "我哋明日上昼十点喺公司开会", "<|yue|>"))
     }
 }

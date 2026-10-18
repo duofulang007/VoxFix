@@ -25,6 +25,11 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
     private var lexicon = false
     private var english = false
     private var punctuation = false
+    private var personalVoice = false
+    private var personalGrowth = false
+    private var personalPaths = 0
+    private var voiceWorkflow = false
+    private var voiceCycle = false
     override fun onCreate(arguments: Bundle?) {
         pinyin = arguments?.getString("pinyin") == "true"
         benchmark = arguments?.getString("benchmark") == "true"
@@ -36,11 +41,20 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
         lexicon = arguments?.getString("lexicon") == "true"
         english = arguments?.getString("english") == "true"
         punctuation = arguments?.getString("punct") == "true"
+        personalVoice = arguments?.getString("personalVoice") == "true"
+        personalGrowth = arguments?.getString("personalGrowth") == "true"
+        personalPaths = arguments?.getString("personalPaths")?.toIntOrNull() ?: 0
+        voiceWorkflow = arguments?.getString("voiceWorkflow") == "true"
+        voiceCycle = arguments?.getString("voiceCycle") == "true"
         super.onCreate(arguments); start()
     }
     override fun onStart() {
         val output = Bundle()
         try {
+            if (voiceCycle) { output.putString("result", VoiceLearningCycleSmoke.run(targetContext)); finish(Activity.RESULT_OK, output); return }
+            if (voiceWorkflow) { output.putString("result", VoiceLearningWorkflowSmoke.run(this)); finish(Activity.RESULT_OK, output); return }
+            if (personalGrowth) { output.putString("result", VoicePersonalSmoke.growth(targetContext)); finish(Activity.RESULT_OK, output); return }
+            if (personalVoice) { output.putString("result", VoicePersonalSmoke.run(targetContext, personalPaths)); finish(Activity.RESULT_OK, output); return }
             if (english) { output.putString("result", VoiceEnglishSmoke.run(targetContext)); finish(Activity.RESULT_OK, output); return }
             if (punctuation) { output.putString("result", VoicePunctuationSmoke.run(targetContext)); finish(Activity.RESULT_OK, output); return }
             if (lexicon) { output.putString("result", PersonalLexiconSmoke.run(targetContext)); finish(Activity.RESULT_OK, output); return }

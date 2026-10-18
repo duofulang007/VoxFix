@@ -6,7 +6,7 @@ import java.util.concurrent.FutureTask
 
 class SpeechSegmentTest {
     @Test fun liveTextAndReleaseNeverWaitForAnUnfinishedSecondPass() {
-        val pending = FutureTask { "10点。" }
+        val pending = FutureTask { SecondPass("10点。", "<|zh|>") }
         val segment = SpeechSegment("十点", pending)
         assertEquals("十点", segment.current())
         assertEquals("十点", segment.finish())
@@ -16,13 +16,25 @@ class SpeechSegmentTest {
 
     @Test fun completedCorrectionsKeepTheExistingContentProtection() {
         for ((second, expected) in listOf("10点。" to "10点。", "15点。" to "十点")) {
-            val pending = FutureTask { second }.apply { run() }
+            val pending = FutureTask { SecondPass(second, "<|zh|>") }.apply { run() }
             assertEquals(expected, SpeechSegment("十点", pending).finish())
         }
     }
 
     @Test fun secondPassFailureKeepsTheStreamingText() {
-        val pending = FutureTask<String> { error("decode failed") }.apply { run() }
+        val pending = FutureTask<SecondPass> { error("decode failed") }.apply { run() }
         assertEquals("原文", SpeechSegment("原文", pending).finish())
+    }
+
+    /** 粤语整句替换：流式那串普通话同音汉字没有比较价值，语种标签才是指挥棒。 */
+    @Test fun cantoneseSecondPassReplacesMandarinHomophones() {
+        val pending = FutureTask { SecondPass("我哋今日唔使返工。", "<|yue|>") }.apply { run() }
+        assertEquals("我哋今日唔使返工。", SpeechSegment("我们今日不是返工", pending).finish())
+    }
+
+    /** 标签是 yue，但正文全是普通汉字、又和流式差很多时，仍然退回保守判定。 */
+    @Test fun foreignLabelWithoutEvidenceStillFallsBack() {
+        val pending = FutureTask { SecondPass("今天天气很好", "<|yue|>") }.apply { run() }
+        assertEquals("今天天气不错", SpeechSegment("今天天气不错", pending).finish())
     }
 }

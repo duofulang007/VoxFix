@@ -379,12 +379,17 @@ class VoxFixImeService : InputMethodService() {
         script("globalThis.voxfixInputType?.(${currentInputEditorInfo?.inputType ?: 1})")
     }
     private fun clearComposition(keepEnglish: Boolean = false) { if (!keepEnglish) composingStart = null; script("globalThis.voxfixClearComposition?.($keepEnglish)") }
-    private fun commitInputText(value: String): Boolean {
+    private fun commitInputText(value: String, voiceEdit: Boolean = false): Boolean {
         val connection = currentInputConnection ?: return false
         if (searchInputActive) ownSelectionUntil = SystemClock.uptimeMillis() + 250
         val extracted = connection.getExtractedText(ExtractedTextRequest().apply { hintMaxChars = 1 }, 0)
         val end = composingStart?.plus(value.length) ?: extracted?.let { it.startOffset + minOf(it.selectionStart, it.selectionEnd) + value.length }
         if (!connection.commitText(value, 1)) return false
+        if (voiceLearning.active() && value.length <= 64) {
+            voiceLearningComposing = false; voiceLearningEdited = true
+            voiceLearningConfirmed = voiceEdit || value.any { it.isWhitespace() || it in ".,!?，。！？" }
+            queueVoiceLearning()
+        }
         selectionDrag.clear(); selectionLockedAnchor = -1; annotation.hide()
         composingStart = null
         if (end != null) { if (ownSelections.size >= 100) ownSelections.clear(); ownSelections.add(end) }
@@ -416,6 +421,7 @@ class VoxFixImeService : InputMethodService() {
 
     override fun onStartInput(info: EditorInfo, restarting: Boolean) {
         super.onStartInput(info, restarting)
+        if (!restarting || !VoiceCorrectionTracker.allowed(info.inputType, info.imeOptions)) resetVoiceLearning()
         clipboardSplit = null
         if (!restarting) {
             setSearchInputActive(false)
@@ -617,6 +623,8 @@ class VoxFixImeService : InputMethodService() {
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        flushVoiceLearning()
+        resetVoiceLearning()
         setSearchInputActive(false)
         finishClipboardSplit()
         hiddenSelection.cancel()
@@ -633,6 +641,8 @@ class VoxFixImeService : InputMethodService() {
     }
 
     override fun onFinishInput() {
+        flushVoiceLearning()
+        resetVoiceLearning()
         setSearchInputActive(false)
         finishClipboardSplit()
         hiddenSelection.cancel()
@@ -649,6 +659,9 @@ class VoxFixImeService : InputMethodService() {
 
     override fun onUpdateSelection(oldSelStart: Int, oldSelEnd: Int, newSelStart: Int, newSelEnd: Int, candidatesStart: Int, candidatesEnd: Int) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        voiceLearningComposing = candidatesStart >= 0
+        if (!busy && voiceLearning.active()) voiceLearningEdited = true
+        queueVoiceLearning()
         selectionStart = newSelStart
         selectionEnd = newSelEnd
         if (shown && searchInputActive && candidatesStart < 0 && newSelStart >= 0 && newSelEnd >= 0 &&
@@ -775,6 +788,8 @@ class VoxFixImeService : InputMethodService() {
 
     private fun beginVoice(local: Boolean = false) {
         if (busy) { voiceDone("上一段语音正在结束，请稍后再试"); return }
+        flushVoiceLearning()
+        resetVoiceLearning()
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             voiceDone("请打开 VoxFix，允许麦克风权限后再使用语音")
             return
@@ -808,7 +823,9 @@ class VoxFixImeService : InputMethodService() {
             try {
                 if (capturing.get() && session.accepts(current)) {
                     received = SpeechEngine.record({
-                        engine ?: SpeechEngine(assets).also { engine = it }
+                        val dictionary = if (allowsVoiceLearning() && !local) runCatching { lexicon.voiceSnapshot() }.getOrElse { VoiceLexicon() } else VoiceLexicon()
+                        if (engine?.usesPersonalDecoder != dictionary.words.isNotEmpty()) { engine?.release(); engine = null }
+                        (engine ?: SpeechEngine(assets, dictionary).also { engine = it }).also { it.personalize(dictionary) }
                     }, { text ->
                         received = text
                         if (text.isNotBlank()) main.post {
@@ -835,6 +852,7 @@ class VoxFixImeService : InputMethodService() {
                         if (result.isNotBlank()) {
                             val written = if (local) { script("globalThis.voxfixVoiceText?.(${JSONObject.quote(result)})"); true }
                             else currentInputConnection?.commitText(result, 1) == true
+                            if (written && !local) armVoiceLearning(result)
                             Log.i("VoxFix", "IME_STREAM_FINISHED updates=$updates characters=${result.length} committed=$written")
                             voiceDone(if (written) "" else "当前输入框未接受文字")
                         } else voiceDone("没有识别到文字")
@@ -911,7 +929,7 @@ class VoxFixImeService : InputMethodService() {
             catch (error: Exception) { Log.e("VoxFix", "IME_PINYIN_QUERY_FAILED", error); "{}" }
         @JavascriptInterface fun pinyinChoose(value: String, word: String, learn: Boolean): String {
             if (!value.matches(Regex("[a-z']{1,100}")) || word.isEmpty() || word.length > 200) return "{}"
-            return inputReply { pinyin?.choose(value, word, ::commitInputText) ?: "{}" }
+            return inputReply { pinyin?.choose(value, word, { commitInputText(it, true) }) ?: "{}" }
         }
         @JavascriptInterface fun pinyinChooseLocal(value: String, word: String): String {
             if (web !== owner || !value.matches(Regex("[a-z']{1,100}")) || word.isEmpty() || word.length > 200) return "{}"
@@ -919,7 +937,7 @@ class VoxFixImeService : InputMethodService() {
             catch (error: Exception) { Log.e("VoxFix", "IME_LOCAL_PINYIN_CHOOSE_FAILED", error); "{}" }
         }
         @JavascriptInterface fun commitAccepted(value: String): String = if (value.length > 10000) "{}"
-            else inputReply { JSONObject().put("committed", commitInputText(value)).toString() }
+            else inputReply { JSONObject().put("committed", commitInputText(value, true)).toString() }
         @JavascriptInterface fun splitBegin(): String = inputReply {
             val connection = currentInputConnection ?: return@inputReply "{}"
             finishClipboardSplit()
@@ -1006,7 +1024,10 @@ class VoxFixImeService : InputMethodService() {
                 val connection = currentInputConnection ?: return@editInput
                 if (connection.getTextBeforeCursor(prefix.length, 0)?.toString() != prefix || !connection.getSelectedText(0).isNullOrEmpty()) return@editInput
                 connection.beginBatchEdit()
-                try { connection.deleteSurroundingText(prefix.length, 0); connection.commitText(word, 1) }
+                try {
+                    connection.deleteSurroundingText(prefix.length, 0)
+                    if (connection.commitText(word, 1)) { voiceLearningComposing = false; voiceLearningEdited = true; voiceLearningConfirmed = true; queueVoiceLearning() }
+                }
                 finally { connection.endBatchEdit() }
             }
         }
@@ -1025,6 +1046,7 @@ class VoxFixImeService : InputMethodService() {
             }
         }
         @JavascriptInterface fun enter() = editInput {
+            flushVoiceLearning()
             selectionDrag.clear(); selectionLockedAnchor = -1; annotation.hide()
             val info = currentInputEditorInfo ?: return@editInput
             val action = info.imeOptions and EditorInfo.IME_MASK_ACTION
@@ -1283,6 +1305,7 @@ class VoxFixImeService : InputMethodService() {
     }
 
     override fun onDestroy() {
+        resetVoiceLearning()
         setSearchInputActive(false)
         destroyed = true
         getSystemService(ClipboardManager::class.java).removePrimaryClipChangedListener(clipboardListener)
@@ -1292,10 +1315,59 @@ class VoxFixImeService : InputMethodService() {
         cancelRecording()
         destroyKeyboardView()
         pinyin?.close(); pinyin = null
-        pinyinLoader.execute { lexicon.close() }
+        pinyinLoader.execute {
+            worker.execute { engine?.release(); lexicon.close() }
+            worker.shutdown()
+        }
         pinyinLoader.shutdown()
-        worker.execute { engine?.release() }
-        worker.shutdown()
         super.onDestroy()
+    }
+
+    // Only confirmed local edits of the last voice insertion feed personal learning.
+    private val voiceLearning = VoiceCorrectionTracker()
+    private var voiceLearningEdited = false
+    private var voiceLearningComposing = false
+    private var voiceLearningConfirmed = false
+    private val learnVoiceEdit = Runnable {
+        if (!shown || busy || !voiceLearningEdited || voiceLearningComposing || !allowsVoiceLearning()) return@Runnable
+        val surrounding = VoiceEditorSnapshot.read(currentInputConnection) ?: return@Runnable
+        val rules = voiceLearning.observeAll(surrounding.text, surrounding.offset, inputGeneration,
+            SystemClock.uptimeMillis(), false, VoiceLanguage::phonetic, VoiceLanguage::wordRange, voiceLearningConfirmed)
+        if (rules.isNotEmpty()) {
+            voiceLearningEdited = false; voiceLearningConfirmed = false
+            worker.execute {
+                try { lexicon.learnVoice(rules) }
+                catch (_: Exception) { main.post { android.widget.Toast.makeText(this@VoxFixImeService, "语音纠正未保存，请稍后重试", android.widget.Toast.LENGTH_SHORT).show() } }
+            }
+        }
+    }
+    private fun allowsVoiceLearning(): Boolean {
+        val info = currentInputEditorInfo ?: return false
+        return !searchInputActive && VoiceCorrectionTracker.allowed(info.inputType, info.imeOptions)
+    }
+    private fun resetVoiceLearning() {
+        main.removeCallbacks(learnVoiceEdit); main.removeCallbacks(expireVoiceLearning)
+        voiceLearning.clear(); voiceLearningEdited = false; voiceLearningComposing = false; voiceLearningConfirmed = false
+    }
+    private fun armVoiceLearning(result: String) {
+        if (!allowsVoiceLearning()) return
+        val surrounding = VoiceEditorSnapshot.read(currentInputConnection) ?: return
+        val known = runCatching { lexicon.voiceWords(96).filter { it.manual }.map { it.word }.toSet() }.getOrDefault(emptySet())
+        voiceLearning.arm(surrounding.text, surrounding.offset, voiceStart, result, inputGeneration, SystemClock.uptimeMillis(), known)
+        runCatching { currentInputConnection?.getExtractedText(ExtractedTextRequest().apply { token = 7311; hintMaxChars = 1280 }, InputConnection.GET_EXTRACTED_TEXT_MONITOR) }
+        main.postDelayed(expireVoiceLearning, 120_000)
+    }
+    private fun queueVoiceLearning() {
+        main.removeCallbacks(learnVoiceEdit)
+        if (voiceLearning.active() && voiceLearningEdited) main.postDelayed(learnVoiceEdit, if (voiceLearningConfirmed) 0 else 1200)
+    }
+    private val expireVoiceLearning = Runnable { resetVoiceLearning() }
+    private fun flushVoiceLearning() {
+        if (voiceLearning.active()) voiceLearningEdited = true
+        voiceLearningConfirmed = true; learnVoiceEdit.run()
+    }
+    override fun onUpdateExtractedText(token: Int, text: android.view.inputmethod.ExtractedText?) {
+        super.onUpdateExtractedText(token, text)
+        if (token == 7311 && !busy && voiceLearning.active()) { voiceLearningEdited = true; queueVoiceLearning() }
     }
 }

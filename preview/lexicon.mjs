@@ -2,12 +2,35 @@ import {validateLearning} from './core.mjs';
 
 export const lexiconMaxBytes=32*1024*1024;
 export const lexiconId=row=>`${row.code?'p:'+row.code.replaceAll(' ',''):row.key}\0${row.word}`;
+export function validateVoiceLexicon(value){
+  if(!value||!Array.isArray(value.words)||!Array.isArray(value.corrections))throw Error('语音词典格式无效');
+  const count=n=>Number.isInteger(n)&&n>=1&&n<=1000000;
+  const term=/^[\u3400-\u9fffA-Za-z0-9]+(?:[ '-][\u3400-\u9fffA-Za-z0-9]+)*$/;
+  const sourceTerm=/^[\u3400-\u9fffA-Za-z0-9]+(?:[ '-][\u3400-\u9fffA-Za-z0-9]+)*[.。]?$/;
+  const digits=text=>text.replace(/[^0-9]/g,'');
+  const negatives=text=>(text.match(/[不没别勿未非]|(?<![A-Za-z])(?:no|not|never)(?![A-Za-z])/gi)||[]).map(word=>word.toLowerCase()).join('\0');
+  for(const row of value.words){
+    if(!row||typeof row.word!=='string'||row.word.length<2||row.word.length>60||row.word!==row.word.trim()||!/[\u3400-\u9fffA-Za-z]/.test(row.word)||!/^[\u3400-\u9fffA-Za-z0-9 '-]+$/.test(row.word)||typeof row.manual!=='boolean'||typeof row.code!=='string'||!count(row.hits))throw Error('语音词条无效');
+    if(row.code)validateLearning([{key:'p:'+row.code.replaceAll(' ',''),word:row.word,code:row.code,hits:1}]);
+  }
+  const targets=new Set(value.words.map(row=>row.word));
+  for(const row of value.corrections){
+    if(!row||typeof row.heard!=='string'||typeof row.word!=='string')throw Error('语音纠正记录无效');
+    if(row.heard.length<1||row.heard.length>32||row.word.length<2||row.word.length>32||!sourceTerm.test(row.heard)||!term.test(row.word)||!/[\u3400-\u9fffA-Za-z]/.test(row.word)||digits(row.heard)!==digits(row.word)||negatives(row.heard)!==negatives(row.word)||row.heard===row.word||typeof row.left!=='string'||typeof row.right!=='string'||row.left.length>4||row.right.length>4||/[\x00-\x1f\x7f-\x9f]/.test(row.left+row.right)||!count(row.hits)||!targets.has(row.word))throw Error('语音纠正记录无效');
+  }
+  return value;
+}
+function mergeVoiceLexicon(old={words:[],corrections:[]},next){
+  const merge=(a,b,key)=>{const rows=new Map(a.map(row=>[key(row),row]));for(const row of b){const id=key(row),prior=rows.get(id);rows.set(id,{...prior,...row,hits:Math.max(prior?.hits||0,row.hits),...(Object.hasOwn(row,'manual')?{manual:!!prior?.manual||row.manual,code:prior?.code||row.code}:{})});}return [...rows.values()];};
+  return {words:merge(old.words,next.words,row=>row.word),corrections:merge(old.corrections,next.corrections,row=>JSON.stringify([row.heard,row.word,row.left,row.right]))};
+}
 export function parseLexicon(text){
   if(new TextEncoder().encode(text).length>lexiconMaxBytes)throw Error('词库文件超过32MiB，请分批导入');
   text=text.replace(/^\uFEFF/,'');
   if(text.trimStart().startsWith('{')){
     const value=JSON.parse(text);
-    if(value.format!=='voxfix-personal-lexicon'||value.version!==1)throw Error('不支持的词库备份版本');
+    if(value.format!=='voxfix-personal-lexicon'||![1,2].includes(value.version))throw Error('不支持的词库备份版本');
+    if(value.version===2)validateVoiceLexicon(value.voice);
     validateLearning(value.entries);
     const legacy=value.legacy??{};
     if(!legacy||typeof legacy!=='object'||Array.isArray(legacy)||Object.entries(legacy).some(([key,text])=>!(/^(rime:[a-zA-Z0-9_.-]+\.tsv|personal-dictionary|personal-english)$/.test(key))||typeof text!=='string'))throw Error('词库附加数据无效');
@@ -31,7 +54,7 @@ export function lexiconTsv(records){
 export function createPersonalLexicon(nativeIme,onError){
   const native=typeof nativeIme?.lexiconLookup==='function';
   const entries=new Map(),buckets=new Map(),words=new Map();
-  let db,legacy={},revision=0,ready=false,cacheRevision='',cache=new Map(),pending=Promise.resolve();
+  let db,legacy={},voice,revision=0,ready=false,cacheRevision='',cache=new Map(),pending=Promise.resolve();
   const reply=(method,...args)=>{const value=JSON.parse(nativeIme[method](...args));if(value.error)throw Error(value.error);return value;};
   function put(row,increment=false){
     const id=lexiconId(row),old=entries.get(id),next={...old,...row,key:id.split('\0')[0],hits:Math.min(1000000,increment?(old?.hits||0)+row.hits:Math.max(old?.hits||0,row.hits))};
@@ -47,10 +70,11 @@ export function createPersonalLexicon(nativeIme,onError){
     const tx=db.transaction(stores,mode);tx.oncomplete=()=>resolve();tx.onabort=tx.onerror=()=>reject(tx.error||Error('词库保存失败'));
     try{run(tx);}catch(error){tx.abort();reject(error);}
   });
-  function queueSave(rows,meta){
+  function queueSave(rows,meta,voiceData){
     pending=pending.catch(()=>{}).then(()=>transaction(['entries','metadata'],'readwrite',tx=>{
       const store=tx.objectStore('entries');for(const row of rows)store.put(row,lexiconId(row));
       if(meta)tx.objectStore('metadata').put(meta,'legacy');
+      if(voiceData)tx.objectStore('metadata').put(voiceData,'voice');
     }));
     pending.catch(onError);return pending;
   }
@@ -63,6 +87,7 @@ export function createPersonalLexicon(nativeIme,onError){
     await transaction(['entries','metadata'],'readonly',tx=>{
       tx.objectStore('entries').getAll().onsuccess=e=>{for(const row of e.target.result)put(row);};
       tx.objectStore('metadata').get('legacy').onsuccess=e=>{legacy=e.target.result||{};};
+      tx.objectStore('metadata').get('voice').onsuccess=e=>{voice=e.target.result;};
       tx.objectStore('metadata').get('web-v1').onsuccess=e=>{migrated=!!e.target.result;};
     });
     if(!migrated||old.length){
@@ -92,9 +117,9 @@ export function createPersonalLexicon(nativeIme,onError){
     async import(text){await initialized;await pending;const value=parseLexicon(text);
       // Commit the complete merge before changing the active in-memory index.
       const unique=new Map();for(const row of value.entries){const id=lexiconId(row),old=unique.get(id)||entries.get(id);const next={...old,...row,key:id.split('\0')[0],hits:Math.max(old?.hits||0,row.hits)};if(old?.pinned)next.pinned=true;unique.set(id,next);}const merged=[...unique.values()];
-      const extra={...value.legacy,...legacy};await queueSave(merged,extra);for(const row of merged)put(row);legacy=extra;revision++;
+      const extra={...value.legacy,...legacy},nextVoice=value.voice?mergeVoiceLexicon(voice,value.voice):voice;await queueSave(merged,extra,nextVoice);for(const row of merged)put(row);legacy=extra;voice=nextVoice;revision++;
     },
-    async backup(){await initialized;await pending;return JSON.stringify({format:'voxfix-personal-lexicon',version:1,entries:[...entries.values()],legacy});},
+    async backup(){await initialized;await pending;return JSON.stringify({format:'voxfix-personal-lexicon',version:voice?2:1,entries:[...entries.values()],legacy,...(voice?{voice}:{})});},
     async tsv(){await initialized;await pending;return lexiconTsv([...entries.values()]);},
     get ready(){return ready;},get revision(){return native?nativeIme.lexiconRevision():revision;},
   };

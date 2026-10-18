@@ -21,3 +21,13 @@ assert(learnedCandidates('64648426',[row]).includes('明天'),'26-key records al
 console.log('PASS: lossless backup, TSV roundtrip, malformed input rejection, 10000+ retention and nine-key recall');
 
 assert(learnedCandidates('mingtian',[{...row,hits:1,pinned:true}]).includes('明天'));
+
+const voice={words:[{word:'张玥',code:'zhang yue',manual:true,hits:3}],corrections:[{heard:'张月',word:'张玥',left:'联系',right:'确认',hits:2}]};
+assert.deepEqual(parseLexicon(JSON.stringify({...value,version:2,voice})).voice,voice);
+const englishVoice={words:[...voice.words,{word:'Excel',code:'',manual:true,hits:1}],corrections:[...voice.corrections,...['AXCEL','EX CELL','艾克塞尔'].map(heard=>({heard,word:'Excel',left:'请用',right:'打开表格',hits:1}))]};
+assert.deepEqual(parseLexicon(JSON.stringify({...value,version:2,voice:englishVoice})).voice,englishVoice);
+const growingVoice={words:[{word:'Word',code:'',manual:false,hits:2},{word:'sherpa-onnx',code:'',manual:false,hits:2}],corrections:[{heard:'沃',word:'Word',left:'我的',right:'文档',hits:1},{heard:'卧',word:'Word',left:'我的',right:'文档',hits:1},{heard:'sherpa-onn',word:'sherpa-onnx',left:'use',right:'today'.slice(0,4),hits:2},{heard:'Xia.',word:'Word',left:'',right:'',hits:2}]};
+assert.deepEqual(parseLexicon(JSON.stringify({...value,version:2,voice:growingVoice})).voice,growingVoice);
+for(const [heard,word] of [['100元','900元'],['不要','需要'],['not','now']])assert.throws(()=>parseLexicon(JSON.stringify({...value,version:2,voice:{words:[{word,code:'',manual:false,hits:2}],corrections:[{heard,word,left:'',right:'',hits:2}]}})));
+for(const heard of ['转账100','AXCEL!',' AXCEL','AXCEL '])assert.throws(()=>parseLexicon(JSON.stringify({...value,version:2,voice:{...englishVoice,corrections:[{heard,word:'Excel',left:'',right:'',hits:1}]}})));
+for(const invalid of [{...voice,words:[{...voice.words[0],word:'词/非法'}]},{...voice,corrections:[{...voice.corrections[0],hits:1.5}]},{...voice,words:[]}])assert.throws(()=>parseLexicon(JSON.stringify({...value,version:2,voice:invalid})));

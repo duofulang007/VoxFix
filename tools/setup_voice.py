@@ -57,6 +57,8 @@ FILES = {
 
 # Fetched individually because GitHub release objects are large and often unavailable.
 SINGLES = [
+    ('streaming/bpe.vocab', 'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/98590b7/bpe.vocab',
+     'd0b642f3a2eacd5fadefdeff9e0e1358cab729647cbb7fe58cf738e1f7407029'),
     ('vad/silero_vad.onnx', f'{GITHUB}/asr-models/silero_vad.onnx',
      '9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6'),
 ]

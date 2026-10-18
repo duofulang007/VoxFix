@@ -1,8 +1,7 @@
 import {createPersonalLexicon,lexiconMaxBytes} from './lexicon.mjs';
 import { repeatDelay, joystickHoldRate, defaults, keyboardGeometry, cursorFeedbackPosition, joystick, joystickLevel, joystickRadii, joystickRho, toolbarItems, settingsFrom, replaceRange, erase, moveCursor, voiceResult, validateSnippets, addSnippet, validateLearning, learnWord, learnSelection, rankLearned, snippetLimit, phraseItemLimit, phraseLengthLimit, phraseGroupLimit, flattenPhrases, migratePhraseGroups } from './core.mjs';
-import { LocalVoice, voiceStatus, enableMicrophone } from './voice.mjs';
 import { createVoiceOrb } from './voice-orb.mjs';
-import { loadPinyin, pinyinCandidates, nineCandidates, setPhraseOptions, phraseCandidates, phraseSearch, associationCandidates, pinyinConsumed, hasPinyinMatch, isSyllable, selectionCode, learnedCandidates, learnedAssociations, clipboardMatches } from './pinyin.mjs';
+import { loadPinyin, pinyinCandidates, nineCandidates, setPhraseOptions, phraseCandidates, associationCandidates, pinyinConsumed, hasPinyinMatch, isSyllable, selectionCode, learnedCandidates, learnedAssociations, clipboardMatches } from './pinyin.mjs';
 import { loadEnglish,loadPersonalEnglish,englishCandidates,hasEnglishWord } from './english.mjs';
 import { loadClipboardSplitter } from './split.mjs';
 
@@ -246,7 +245,7 @@ let clipMenu=null,clipHold=null,clipSuppressUntil=0,learningChain=[];
 const personalLexicon=createPersonalLexicon(nativeIme,error=>toast('个人词库保存失败：'+error.message));
 personalLexicon.initialized.then(()=>{refreshAssociations();render();}).catch(error=>toast('个人词库加载失败，已有记录保留：'+error.message));
 let emojiQuery='',emojiSearchOpen=false;
-let gesture = null, candidateSuppressUntil=0, toastTimer, speechReady = false, nativeComposition = false;
+let gesture = null, candidateSuppressUntil=0, toastTimer, nativeComposition = false;
 // 底部滑轨每一格对应的像素：越小越"无极"（每滑一小段就动一个字），同时大于触摸抖动阈值。
 const cursorStep = 11, cursorHoldDelay = 350;
 let cursorFeedback={clientX:0,visible:false,selecting:false};
@@ -475,9 +474,6 @@ function recordChoice(raw,word,preedit=''){
 }
 const scrollPositions=new Map(),nightShade=document.createElement('div');
 nightShade.id='night-shade';nightShade.className='night-shade';nightShade.hidden=true;$('phone').append(nightShade);
-let polishReady=false,polishBusy=false,polishDraft=null,polishUndo=null;
-let hotwords=[];
-try{const saved=JSON.parse(localStorage.getItem('voxfix-hotwords-v1'));if(Array.isArray(saved)&&saved.length<=100&&saved.every(word=>typeof word==='string'&&/^[\u3400-\u9fff]{1,30}$/.test(word)))hotwords=saved;}catch{}
 const icons = {
   close:'<path d="m6 6 12 12M18 6 6 18"/>',
   'split-back':'<path d="m9 4-5 5 5 5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
@@ -1032,7 +1028,7 @@ const VOICE_ARM=55;               // 上滑到这个距离就进入取消区
 let voicePanelFresh=false;        // 本次 render 是否播进场；一次会话只播一次
 const voiceReduced=matchMedia('(prefers-reduced-motion: reduce)');
 let voiceRenderer=null;
-function voiceHint(phase){return state.voice?.long&&phase==='listening'?'说完后点结束':VOICE_HINTS[phase]||'';}
+function voiceHint(phase){return VOICE_HINTS[phase]||'';}
 function voiceStage(phase) {
   return `<div class="voice-stage ${phase}" aria-hidden="true"><div class="voice-follow"><div class="voice-orb"><span class="voice-red"></span><canvas class="voice-texture" hidden></canvas></div></div></div>`;
 }
@@ -1124,10 +1120,9 @@ function popup() {
 }
 function pageLabel() {
   if(state.page==='clipboard-split')return '剪贴板拆词';
-  if(state.voice) return `${state.voice.long?'长语音':'长按空格语音'} · ${state.voice.phase==='loading'?'开启麦克风':state.voice.phase==='paused'?'已暂停':state.voice.phase==='recognizing'?'识别中':state.voice.phase==='cancel'?'上滑取消':'倾听中'}${state.voice.demo?'（演示）':''}`;
+  if(state.voice) return `长按空格语音 · ${state.voice.phase==='loading'?'开启麦克风':state.voice.phase==='paused'?'已暂停':state.voice.phase==='recognizing'?'识别中':state.voice.phase==='cancel'?'上滑取消':'倾听中'}${state.voice.demo?'（演示）':''}`;
   return {letters:state.layout==='9'?'9键中文':state.language==='zh'?'26键中文':'26键英文',candidates:'全部候选',numbers:'数字键盘',symbols:`${state.symbol}符号`,clipboard:state.clipTab==='clipboard'?'剪贴板':'常用语',layouts:'键盘选择',emoji:'表情',menu:'功能菜单 · 补充试用',edit:'编辑文字 · 补充试用'}[state.page] || '键盘';
 }
-const referenceMap = {letters:'keyboard-001.jpg',en:'keyboard-014.jpg',numbers:'keyboard-022.jpg','常用':'keyboard-026.jpg','中文':'keyboard-028.jpg','英文':'keyboard-027.jpg','网址':'keyboard-029.jpg',clipboard:'clipboard.jpg',phrases:'phrases.jpg',layouts:'keyboard-042.jpg',emoji:'keyboard-050.jpg',switcher:'keyboard-055.jpg',voice:'voice.jpg',cancel:'voice-cancel.jpg',recognizing:'voice-recognizing.jpg'};
 function render() {
   if(candidateContact&&!quoteEditor&&!privateField&&!document.hidden){candidateRenderPending=true;return;}
   for(const node of keyboard.querySelectorAll('[data-scroll-key]'))scrollPositions.set(node.dataset.scrollKey,node.scrollTop);
@@ -1146,12 +1141,6 @@ function render() {
   $('send').disabled=Boolean(state.voice);
   snippetForm.querySelector('button[type=submit]').disabled=Boolean(state.voice)||Boolean(quoteEditor&&!editor.value.trim());
   $('snippet-split').disabled=Boolean(state.voice)||!$('snippet-content').value.trim();
-  $('long-voice').disabled=Boolean(state.voice)||!speechReady;
-  $('pause-voice').disabled=!state.voice?.long||state.voice.demo||!['listening','paused'].includes(state.voice.phase);
-  $('pause-voice').textContent=state.voice?.phase==='paused'?'继续':'暂停';
-  $('finish-voice').disabled=!state.voice?.long||!['listening','paused'].includes(state.voice.phase);
-  $('cancel-voice').disabled=!state.voice;
-  $('polish-text').disabled=!polishReady||polishBusy||Boolean(state.voice);
   const localEditing=Boolean(clipSearch)||localInput&&state.page!=='clipboard-split';
   const searchIdle=clipSearch&&state.page==='letters'&&!state.comp&&!(clipSearch.target==='host'&&(associatedWords.length||englishPrefix));
   keyboard.className=`keyboard${state.night?' night':''}${localEditing?' local-edit':''}${state.page==='clipboard-split'?' clip-split-page':''}${clipSearch?' clip-search-mode':''}`;
@@ -1238,9 +1227,6 @@ function render() {
   nightShade.style.height=($('phone').getBoundingClientRect().bottom-keyboard.getBoundingClientRect().top)+'px';
   nativeSettings?.classList.toggle('night',state.night);
   document.querySelectorAll('#quick-pages button').forEach(b=>b.setAttribute('aria-pressed', b.dataset.value===state.page));
-  let ref=state.voice?(state.voice.phase==='cancel'?'cancel':state.voice.phase==='recognizing'?'recognizing':'voice'):state.popup==='switcher'?'switcher':state.page==='symbols'?state.symbol:state.page==='clipboard'?state.clipTab:state.page==='letters'&&state.language==='en'?'en':state.page;
-  $('reference-image').src='reference/'+(referenceMap[ref]||referenceMap.letters);
-  $('reference-label').textContent=['menu','edit','candidates'].includes(state.page)?'此页面未在录屏中展开；当前展示全键盘参考。':state.layout==='9'&&state.page==='letters'?'录屏只展示了九宫格入口，未展示九宫格画面。':'截自你提供的录屏；个人剪贴板和常用语内容已隐藏。';
 }
 function feedback(message) { $('feedback').textContent=message; }
 function toast(message) { clearTimeout(toastTimer); $('toast').textContent=message; $('toast').hidden=false; toastTimer=setTimeout(()=>$('toast').hidden=true,2600); feedback(message); }
@@ -1313,29 +1299,11 @@ function startVoice(long=false) {
   learningChain=[];
   englishPrefix='';
   if(nativeIme){if(!nativeIme.voiceReady()){toast('语音正在准备，请稍后再试。');return;}if(state.comp)commit(state.comp.raw);state.popup=null;state.voice={phase:'loading',micReady:false,long:false,local:localInput,snapshot:localInput?{text:editor.value,start:editor.selectionStart,end:editor.selectionEnd}:null};beginVoiceBall();voicePanelFresh=true;if(localInput)nativeIme.startLocalVoice();else nativeIme.startVoice();render();startVoiceLoop();return;}
-  const demo=$('demo-voice').checked;
-  if(!demo && !speechReady){toast('离线语音尚未就绪，请先检查左侧的语音状态。');return;}
+  // 网页端不再连接电脑语音服务：真实识别只在手机原生侧，本页固定走交互演示。
   state.comp=null; state.popup=null;
   const snapshot={text:editor.value,start:editor.selectionStart,end:editor.selectionEnd};
-  beginVoiceBall();state.voice={phase:demo?'listening':'loading',snapshot,demo,long}; voicePanelFresh=true; render(); startVoiceLoop();
-  if(!demo) {
-    const session=state.voice;
-    session.controller=new LocalVoice(text=>{
-      if(state.voice!==session)return;
-      session.text=text;
-      if(text && session.phase!=='cancel')applyText(voiceResult(snapshot,text));
-    },error=>{
-      if(state.voice!==session)return;
-      preserveVoice(session);
-      toast(error.name==='NotAllowedError'?'麦克风未获授权，请点击“启用麦克风”后允许录音。':(error.message||'录音失败')+'；已保留收到的识别文字。');
-    },hotwords,level=>{if(state.voice===session)setVoiceLevel(level);});
-    session.controller.start().then(()=>{
-      if(state.voice!==session)return;
-      session.phase=gesture?.cancel?'cancel':'listening';render();feedback(session.long?'正在本机离线识别。点击暂停或结束，结束后补全标点。':'正在本机离线识别。上滑取消，松手后补全标点。');
-    }).catch(()=>{});
-    return;
-  }
-  feedback('语音交互演示：没有录音，松手后输入你设置的演示文字。');
+  beginVoiceBall();state.voice={phase:'listening',snapshot,demo:true,long:false}; voicePanelFresh=true; render(); startVoiceLoop();
+  feedback('语音交互演示：不录音，松手后输入示例文字。真实识别与标点在手机上运行。');
   const session=state.voice, units=[...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(settings.voiceText)].map(s=>s.segment);
   let count=0;
   state.voiceTimer=setInterval(()=>{ if(state.voice!==session) return; if(session.phase==='listening') { count=Math.min(units.length,count+1); applyText(voiceResult(snapshot,units.slice(0,count).join(''))); } },550);
@@ -1354,14 +1322,6 @@ function finishVoice(cancelled) {
   clearInterval(state.voiceTimer);
   if(cancelled) { cancelVoice(); return; }
   const session=state.voice; session.phase='recognizing'; render();
-  if(session.controller){
-    session.controller.finish().then(text=>{
-      if(state.voice!==session)return;
-      if(text)applyText(voiceResult(session.snapshot,text));else applyText(voiceResult(session.snapshot,'',true),session.snapshot.end);
-      exitVoice();feedback(text?'离线识别完成，已做整句识别和标点恢复。':'没有识别到语音，原文字保持不变。');
-    }).catch(error=>{if(state.voice!==session)return;preserveVoice(session);toast((error.message||'本地识别失败')+'；已保留收到的识别文字。');});
-    return;
-  }
   setTimeout(()=>{ if(state.voice!==session) return; applyText(voiceResult(session.snapshot,settings.voiceText)); exitVoice(); feedback('语音演示结束；本页未使用真实语音识别。'); },900);
 }
 function activate(action,value='') {
@@ -1937,17 +1897,14 @@ document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>showTab(b.datas
 const quick=[['letters','全键盘'],['numbers','数字'],['symbols','符号'],['clipboard','剪贴板'],['layouts','键盘选择'],['emoji','表情']];
 $('quick-pages').innerHTML=quick.map(([id,label])=>button(label,'quick',id)).join('');
 $('quick-pages').onclick=e=>{const b=e.target.closest('button');if(b){if(b.dataset.value==='letters'){state.layout='26';state.language='zh';}showPage(b.dataset.value);}};
-$('compare-toggle').onclick=()=>{ const show=$('comparison').hidden; $('comparison').hidden=!show;$('compare-toggle').setAttribute('aria-pressed',show); };
 function syncControls() {
   $('clipboard-toggles').innerHTML=[['clipboardHistory','保存剪贴板记录','保留复制内容，方便找回'],['clipboardMatch','输入时引用剪贴板','拼音匹配时显示可引用的内容']].map(([id,label,hint])=>`<label class="settings-row"><span><b>${label}</b><small>${hint}</small></span><input type="checkbox" role="switch" data-setting="${id}" ${settings[id]?'checked':''}></label>`).join('');
-  $('voice-text').value=settings.voiceText;
 }
 $('clipboard-toggles').onchange=e=>applyToggleChange(e.target);
 function applyToggleChange(input){
   if(input.dataset.setting)settings[input.dataset.setting]=input.checked;
   persist();render();feedback('功能设置已保存，键盘尺寸保持固定。');
 }
-$('voice-text').oninput=e=>{if(!e.target.value)return;settings.voiceText=e.target.value;persist();render();};
 function downloadLexicon(text,name,type){const url=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 $('personal-lexicon').onclick=()=>{
   if(nativeIme?.openLexicon){nativeIme.openLexicon();return;}
@@ -2005,60 +1962,10 @@ $('snippet-form').onsubmit=e=>{
 };
 window.addEventListener('storage',e=>{if(e.key!=='voxfix-snippets-v1'||!e.newValue)return;try{const saved=JSON.parse(e.newValue);clips=validateSnippets(saved.clips);phraseGroups=migratePhraseGroups(saved.phrases);snippetUndo=null;state.clipGroup=Math.min(state.clipGroup,phraseGroups.length-1);updatePhraseOptions();if(state.page==='clipboard')render();else syncClipboardReference();}catch{/* Invalid cross-tab data is ignored. */}});
 syncControls();render();
-loadPinyin(hasNativePinyin).then(()=>{updatePhraseOptions();if(state.comp)render();$('pinyin-status').textContent='全拼、简拼和混输已就绪：wzdl 找“我知道了”、mtj 找“明天见”。';}).catch(()=>$('pinyin-status').textContent='拼音词库未能加载，请刷新页面或重新生成词库。');
+loadPinyin(hasNativePinyin).then(()=>{updatePhraseOptions();if(state.comp)render();$('pinyin-status').textContent='本地拼音词库已就绪。';}).catch(()=>$('pinyin-status').textContent='拼音词库未能加载，请刷新页面或重新生成词库。');
 loadEnglish().then(async()=>{if(hasNativePinyin)await loadPersonalEnglish();if(englishPrefix||state.comp)render();}).catch(()=>{});
-async function updateVoiceStatus(){
-  if(nativeIme){speechReady=true;return;}
-  const status=await voiceStatus();speechReady=Boolean(status.ready);
-  $('speech-status').textContent=speechReady?'已就绪 · 电脑本地离线':status.error||'正在加载离线模型…';
-  $('enable-mic').disabled=!speechReady;
-  $('long-voice').disabled=!speechReady||Boolean(state.voice);
-  if(location.protocol!=='file:')setTimeout(updateVoiceStatus,speechReady?15000:5000);
-}
-$('enable-mic').onclick=async()=>{try{await enableMicrophone();}catch(error){toast(error.name==='NotAllowedError'?'请在浏览器中允许这个本机页面使用麦克风。':error.message);}};
-$('demo-voice').onchange=()=>{if(state.voice)cancelVoice();$('demo-fields').hidden=!$('demo-voice').checked;feedback($('demo-voice').checked?'已切换为交互演示，不录音。':'已切换为真实本地离线语音。');};
-updateVoiceStatus();
-function updatePhraseOptions(){setPhraseOptions(allPhrases(),settings.phrasePacks);for(const input of $('phrase-options').querySelectorAll('input'))input.checked=settings.phrasePacks.includes(input.value);const query=$('phrase-search').value.trim();$('phrase-results').innerHTML=query?phraseSearch(query).slice(0,20).map(text=>button(text,'phrase-result',text)).join(''):'';}
-$('phrase-options').innerHTML=[['quotes','古典名句'],['technology','科技词语'],['running','跑步词语']].map(([name,label])=>`<label><input type="checkbox" value="${name}" ${settings.phrasePacks.includes(name)?'checked':''}>${label}</label>`).join('');
-$('phrase-options').onchange=()=>{settings.phrasePacks=[...$('phrase-options').querySelectorAll('input:checked')].map(input=>input.value);updatePhraseOptions();persist();if(state.comp)render();};
-$('phrase-search').oninput=updatePhraseOptions;
-$('phrase-results').onclick=event=>{const target=event.target.closest('button');if(target&&!state.voice){insert(target.dataset.value);render();}};
-$('long-voice').onclick=()=>startVoice(true);
-$('finish-voice').onclick=()=>finishVoice(false);
-$('cancel-voice').onclick=()=>finishVoice(true);
-$('pause-voice').onclick=async()=>{const session=state.voice;if(!session?.controller)return;$('pause-voice').disabled=true;try{const resume=session.phase==='paused';await session.controller[resume?'resume':'pause']();if(state.voice===session){session.phase=resume?'listening':'paused';render();}}catch(error){if(state.voice===session){preserveVoice(session);toast(error.message);}}};
-async function updatePolishStatus(){
-  if(nativeIme)return;
-  try{const response=await fetch('/api/polish/status');if(!response.ok)throw Error();const status=await response.json();polishReady=Boolean(status.installed);$('polish-status').textContent=polishReady?'Qwen3.5-2B Q4_K_M · 本地离线 · 按需加载':'离线润色模型尚未安装。';}
-  catch{polishReady=false;$('polish-status').textContent='离线润色需打开本机服务版试用页。';}
-  $('polish-text').disabled=!polishReady||polishBusy||Boolean(state.voice);
-  if(location.protocol!=='file:')setTimeout(updatePolishStatus,15000);
-}
-$('polish-text').onclick=async()=>{
-  if(state.voice||polishBusy||!editor.value.trim())return;
-  if(state.comp){toast('请先选词或结束拼音输入。');return;}
-  const draft={original:editor.value,text:''};polishDraft=draft;polishBusy=true;
-  $('polish-original').value=draft.original;$('polish-preview').value='';$('polish-apply').disabled=true;$('polish-message').textContent='正在本机加载并整理，原文保留。';$('polish-dialog').showModal();render();
-  try{
-    const response=await fetch('/api/polish',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:draft.original}),signal:AbortSignal.timeout(300000)});
-    const result=await response.json();if(!response.ok)throw Error(result.error||'离线润色失败');
-    if(polishDraft!==draft)return;draft.text=result.text;$('polish-preview').value=result.text;$('polish-apply').disabled=false;
-    $('polish-message').textContent=`整理完成，用时 ${result.seconds} 秒。${result.rejectedSegments?'部分段落触发保护，保留原文。':''}请核对人名、数字和原意。`;
-  }catch(error){if(polishDraft===draft)$('polish-message').textContent=(error.message||'离线润色失败')+'；原文未修改。';}
-  finally{polishBusy=false;render();}
-};
-$('polish-close').onclick=()=>{$('polish-dialog').close();};
-$('polish-apply').onclick=()=>{
-  const draft=polishDraft;if(!draft?.text)return;
-  if(editor.value!==draft.original||state.voice||state.comp){$('polish-message').textContent='输入文字已改变，请重新整理，避免覆盖新内容。';return;}
-  polishUndo={original:draft.original,text:draft.text};applyText({text:draft.text,cursor:draft.text.length});$('undo-polish').disabled=false;$('polish-dialog').close();render();
-};
-$('undo-polish').onclick=()=>{
-  if(!polishUndo)return;
-  if(editor.value!==polishUndo.text||state.voice||state.comp){toast('文字已继续编辑，不能覆盖新内容；原文仍可在润色预览中查看。');return;}
-  applyText({text:polishUndo.original,cursor:polishUndo.original.length});polishUndo=null;$('undo-polish').disabled=true;render();
-};
-updatePolishStatus();
+// 网页端语音固定为交互演示，不再检测或连接电脑语音服务。
+function updatePhraseOptions(){setPhraseOptions(allPhrases());}
 globalThis.voxfixHostFocus=(selectionChanged=false)=>{if(clipSearch)setClipSearchTarget('host',Boolean(selectionChanged));};
 if(nativeIme){
   globalThis.voxfixSplitInvalidated=()=>{if(clipboardSplit){clipboardSplit=null;splitRequest++;state.page='clipboard';render();toast('输入位置已变化，本次拆词已结束');}};
@@ -2127,5 +2034,3 @@ if(nativeIme){
   };
   nativeIme.ready();
 }
-$('voice-hotwords').value=hotwords.join('\n');
-$('voice-hotwords').onchange=()=>{const words=[...new Set($('voice-hotwords').value.split('\n').map(word=>word.trim()).filter(Boolean))];if(words.length>100||words.some(word=>!/^[\u3400-\u9fff]{1,30}$/.test(word))){toast('热词最多 100 条，每条 1–30 个汉字；请修改后再保存。');return;}hotwords=words;try{localStorage.setItem('voxfix-hotwords-v1',JSON.stringify(words));feedback('热词已保存，下次录音生效。');}catch{toast('热词仅在当前页面保留。');}};
