@@ -27,7 +27,7 @@ internal class SpeechSegment(private var text: String, private var second: Futur
         return text
     }
 
-    fun finish(waitMs: Long = 0): String {
+    fun finish(waitMs: Long = 0, cancel: Boolean = true): String {
         if (waitMs > 0) {
             try { second?.get(waitMs, TimeUnit.MILLISECONDS) }
             catch (_: TimeoutException) { /* Keep streaming text when the budget expires. */ }
@@ -36,8 +36,25 @@ internal class SpeechSegment(private var text: String, private var second: Futur
             catch (_: InterruptedException) { Thread.currentThread().interrupt() }
         }
         val result = current()
-        second?.cancel(false)
-        second = null
+        if (cancel) second?.cancel(false)
+        if (cancel) second = null
         return result
+    }
+
+    /** 松手时还没跑完的二遍：调用方可以让它继续跑，稍后取结果改写。 */
+    fun pending(): Boolean = second?.let { !it.isDone } ?: false
+
+    /** 等二遍跑完再给出这段话的最终文本；超时或失败返回 null（调用方保持原样）。 */
+    fun awaitRefined(ms: Long): String? {
+        val waiting = second ?: return null
+        return try {
+            val result = choose(text, waiting.get(ms, TimeUnit.MILLISECONDS))
+            text = result
+            second = null
+            result
+        } catch (_: TimeoutException) { null }
+        catch (_: ExecutionException) { null }
+        catch (_: CancellationException) { null }
+        catch (_: InterruptedException) { Thread.currentThread().interrupt(); null }
     }
 }

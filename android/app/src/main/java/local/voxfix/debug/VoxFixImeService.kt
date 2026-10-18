@@ -81,6 +81,23 @@ class VoxFixImeService : InputMethodService() {
     private var voiceStart = 0
     private var selectedBeforeVoice = ""
     private var streamedText = ""
+    /** 「先上屏、后改写」：松手立刻结束录音，composing 区域留一小段窗口等二遍回来。 */
+    private var voiceFinalText = ""
+    private var voiceRefineArmed = false
+    private val finishVoiceComposition = Runnable {
+        if (!voiceRefineArmed) return@Runnable
+        voiceRefineArmed = false
+        val text = voiceFinalText
+        voiceFinalText = ""
+        val connection = currentInputConnection
+        if (text.isNotBlank() && connection != null) {
+            val kept = connection.getTextBeforeCursor(text.length, 0)?.toString() == text
+            connection.finishComposingText()
+            if (kept && !localVoice) armVoiceLearning(text)
+        }
+        streamedText = ""
+        selectedBeforeVoice = ""
+    }
     private var localVoice = false
     private var searchInputActive = false
     private val ownSelections = mutableSetOf<Int>()
@@ -306,6 +323,8 @@ class VoxFixImeService : InputMethodService() {
     }
 
     private companion object {
+        /** 松手后 composing 区域还能被二遍改写多久；超时就按实时文字定稿。 */
+        private const val VOICE_REFINE_WINDOW_MS = 420L
         /**
          * K60 实测官方标签：可见 126.3×28.86 CSS。
          * 19.4 是从官方墨迹反推的：官方 ink 宽 94.57、高 17.14 CSS，我们 20sp 量到 97.43/17.71，
@@ -788,6 +807,9 @@ class VoxFixImeService : InputMethodService() {
 
     private fun beginVoice(local: Boolean = false) {
         if (busy) { voiceDone("上一段语音正在结束，请稍后再试"); return }
+        // 上一段可能还在 420ms 的改写窗口里：先把它结清，避免两段文字抢同一个 composing 区域。
+        main.removeCallbacks(finishVoiceComposition)
+        if (voiceRefineArmed) finishVoiceComposition.run()
         flushVoiceLearning()
         resetVoiceLearning()
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -843,20 +865,47 @@ class VoxFixImeService : InputMethodService() {
                     } }, { capture ->
                         microphoneCapture = capture
                         if (!capturing.get()) capture?.stop()
-                    })
+                    }, { refined -> main.post {
+                        // 二遍在窗口内跑完：只改还没离开 composing 的那段文字；用户已打字或换框就不动。
+                        if (shown && voiceRefineArmed && !localVoice && inputGeneration == targetGeneration &&
+                            refined.isNotBlank() && refined != voiceFinalText) {
+                            val connection = currentInputConnection
+                            val untouched = connection?.getTextBeforeCursor(voiceFinalText.length, 0)?.toString() == voiceFinalText
+                            if (untouched && connection?.setComposingText(refined, 1) == true) {
+                                voiceFinalText = refined
+                                streamedText = refined
+                                Log.i("VoxFix", "IME_REFINE_APPLIED characters=${refined.length}")
+                            } else Log.i("VoxFix", "IME_REFINE_SKIPPED")
+                        }
+                    } })
                 }
                 capturing.set(false)
                 val result = received
                 main.post {
                     if (shown && inputGeneration == targetGeneration && session.consume(current)) {
                         if (result.isNotBlank()) {
-                            val written = if (local) { script("globalThis.voxfixVoiceText?.(${JSONObject.quote(result)})"); true }
-                            else currentInputConnection?.commitText(result, 1) == true
-                            if (written && !local) armVoiceLearning(result)
-                            Log.i("VoxFix", "IME_STREAM_FINISHED updates=$updates characters=${result.length} committed=$written")
-                            voiceDone(if (written) "" else "当前输入框未接受文字")
-                        } else voiceDone("没有识别到文字")
-                        streamedText = ""; selectedBeforeVoice = ""
+                            if (local) {
+                                script("globalThis.voxfixVoiceText?.(${JSONObject.quote(result)})")
+                                Log.i("VoxFix", "IME_STREAM_FINISHED updates=$updates characters=${result.length}")
+                                voiceDone("")
+                                streamedText = ""; selectedBeforeVoice = ""
+                            } else {
+                                // 先上屏：实时文字原地留在 composing 里，二遍回来再改写（最多 420ms）。
+                                val written = currentInputConnection?.setComposingText(result, 1) == true
+                                if (written) {
+                                    voiceFinalText = result
+                                    streamedText = result
+                                    voiceRefineArmed = true
+                                    main.removeCallbacks(finishVoiceComposition)
+                                    main.postDelayed(finishVoiceComposition, VOICE_REFINE_WINDOW_MS)
+                                    Log.i("VoxFix", "IME_STREAM_FINISHED updates=$updates characters=${result.length} committed=true")
+                                }
+                                voiceDone(if (written) "" else "当前输入框未接受文字")
+                            }
+                        } else {
+                            voiceDone("没有识别到文字")
+                            streamedText = ""; selectedBeforeVoice = ""
+                        }
                     }
                 }
             } catch (error: Throwable) {

@@ -114,16 +114,23 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
         } catch (error: Throwable) { release(); throw error }
     }
 
-    /** Also accepts fixed upstream audio for native regression without recording user speech. */
+    /**
+     * Also accepts fixed upstream audio for native regression without recording user speech.
+     *
+     * [onRefined] 不为空时走「先上屏、后改写」：松手不等二遍，直接把实时文字返回，二遍在这之后跑完
+     * （最长等 [LATE_REFINE_WINDOW_MS]）再回调一次完整文本，由输入法决定要不要替换还在 composing 的文字。
+     */
     internal fun transcribe(nextChunk: () -> FloatArray?, onText: (String) -> Unit,
                             isCancelled: () -> Boolean = { false },
-                            isRecording: () -> Boolean = { true }): String {
+                            isRecording: () -> Boolean = { true },
+                            onRefined: ((String) -> Unit)? = null): String {
         val recognizer = checkNotNull(online)
         val detector = checkNotNull(vad)
         val dictionary = personal
         val stream = recognizer.createStream(if (usesPersonalDecoder) dictionary.hotwords(personalTokens) else "")
         val segments = mutableListOf<SpeechSegment>()
         var finishing = false
+        var lateSegment: SpeechSegment? = null
         fun complete() = segments.fold("") { text, segment -> join(text, segment.current()) }
         var previousText = ""
         var previousRaw = ""
@@ -279,8 +286,10 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             // 二遍模型还没加载完就别等：等待期全花在加载上，预算烧满了也拿不到改写。
             // 冷启动第一句（说话短、加载 0.78s）实测正好会这样白等 350ms。
             val secondLoaded = secondLoader?.isDone == true
+            val waitForSecond = onRefined == null
             var result = segments.foldIndexed("") { index, text, segment ->
-                join(text, segment.finish(releaseBudget(finishDeadline, index == segments.lastIndex, secondLoaded)))
+                join(text, segment.finish(releaseBudget(finishDeadline, index == segments.lastIndex && waitForSecond, secondLoaded),
+                    cancel = waitForSecond))
             }
             Log.i("VoxFix", "ASR_RELEASE flushMs=${(flushedAt - releaseAt) / 1_000_000} " +
                 "waitMs=${(System.nanoTime() - flushedAt) / 1_000_000} loaded=$secondLoaded")
@@ -294,9 +303,24 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
                 Log.i("VoxFix", "ASR_SEG_FINAL n=${index + 1} text=${segment.current()}")
             }
             Log.i("VoxFix", "ASR_DECODE_FINISHED elapsedMs=${(System.nanoTime() - started) / 1_000_000}")
+            if (onRefined != null) {
+                val last = segments.lastOrNull()
+                if (last != null && last.pending()) {
+                    lateSegment = last
+                    val prefix = segments.dropLast(1).fold("") { text, segment -> join(text, segment.current()) }
+                    Thread({
+                        val refined = last.awaitRefined(LATE_REFINE_WINDOW_MS) ?: return@Thread
+                        val merged = if (prefix.isEmpty()) refined else join(prefix, refined)
+                        val text = dictionary.correct(restorePunctuation(merged), VoiceLanguage::phonetic, VoiceLanguage::boundaries)
+                        Log.i("VoxFix", "ASR_LATE_REFINE applied=${text != result}")
+                        if (text.isNotBlank()) onRefined(text)
+                    }, "VoxFix-late-refine").start()
+                }
+            }
             return result
         } finally {
-            segments.forEach { it.finish() }
+            // 走了「先上屏」的路线时，最后一段的二遍要留给 late-refine 线程，不能被这里取消掉。
+            segments.forEach { if (it !== lateSegment) it.finish() }
             stream.release()
             detector.reset()
         }
@@ -345,7 +369,8 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
     companion object {
         internal fun record(engine: () -> SpeechEngine, onText: (String) -> Unit, onLevel: (Int) -> Unit,
                    shouldContinue: () -> Boolean = { true }, isCancelled: () -> Boolean = { false },
-                   onReady: () -> Unit = {}, onCapture: (PcmCapture?) -> Unit = {}): String {
+                   onReady: () -> Unit = {}, onCapture: (PcmCapture?) -> Unit = {},
+                   onRefined: ((String) -> Unit)? = null): String {
             val started = System.nanoTime()
             val minimum = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             check(minimum > 0) { "设备不支持 16kHz 单声道录音：$minimum" }
@@ -386,7 +411,7 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
                 onCapture(capture)
                 // Capture keeps the opening audio while the cold models load.
                 if (isCancelled()) return ""
-                return engine().transcribe({ capture.next() }, onText, isCancelled, shouldContinue)
+                return engine().transcribe({ capture.next() }, onText, isCancelled, shouldContinue, onRefined)
             } finally {
                 onCapture(null)
                 try { capture?.close() } finally { microphone.release() }
@@ -401,6 +426,8 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
         const val SECOND_PASS_THREADS = 4
         /** 只给最后一句一次预算，包含流式补尾耗时；超时退回实时文字。 */
         const val FINAL_SECOND_PASS_BUDGET_MS = 350L
+        /** 「先上屏、后改写」时，二遍最多在松手后再跑这么久；输入法的 composing 窗口比它短。 */
+        const val LATE_REFINE_WINDOW_MS = 600L
         /**
          * 松手时最后一句还能等多久。
          *

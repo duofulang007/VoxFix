@@ -46,6 +46,24 @@ class SpeechSegmentTest {
         } finally { worker.join() }
     }
 
+    /** 「先上屏、后改写」：松手不取消二遍，晚到的结果能改名这块文字。 */
+    @Test(timeout = 2000) fun lateRefineReplacesTextWhenTheSecondPassArrivesAfterRelease() {
+        val pending = FutureTask { SecondPass("两只小企鹅都有嘢食。", "<|yue|>") }
+        val segment = SpeechSegment("隆家输给我都要夜色", pending)
+        org.junit.Assert.assertTrue(segment.pending())
+        assertEquals("隆家输给我都要夜色", segment.finish(0, cancel = false))
+        val worker = Thread { Thread.sleep(10); pending.run() }.apply { start() }
+        try { assertEquals("两只小企鹅都有嘢食。", segment.awaitRefined(1000)) } finally { worker.join() }
+    }
+
+    /** 二遍一直没回来时，晚到改写返回 null，调用方按实时文字定稿。 */
+    @Test(timeout = 2000) fun lateRefineGivesUpWhenTheSecondPassIsTooSlow() {
+        val pending = FutureTask { SecondPass("两只小企鹅都有嘢食。", "<|yue|>") }
+        val segment = SpeechSegment("隆家输给我都要夜色", pending)
+        assertEquals("隆家输给我都要夜色", segment.finish(0, cancel = false))
+        org.junit.Assert.assertNull(segment.awaitRefined(10))
+    }
+
     @Test(timeout = 2000) fun finalBudgetTimesOutAndCancelsWithoutLosingStreamingText() {
         val pending = FutureTask { SecondPass("二遍", "<|zh|>") }
         assertEquals("原文", SpeechSegment("原文", pending).finish(10))

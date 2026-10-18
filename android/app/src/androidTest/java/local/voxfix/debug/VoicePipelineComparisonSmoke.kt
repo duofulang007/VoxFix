@@ -12,11 +12,14 @@ import java.util.concurrent.FutureTask
 /** Replays public/synthetic audio through the actual paced production pipeline. */
 internal object VoicePipelineComparisonSmoke {
     fun run(context: Context, label: String): String {
-        check(label in setOf("pipeline-current", "pipeline-sense2024", "pipeline-sense2024opt", "pipeline-cold"))
+        check(label in setOf("pipeline-current", "pipeline-sense2024", "pipeline-sense2024opt", "pipeline-cold", "pipeline-async"))
         val cold = label == "pipeline-cold"
+        // 「先上屏、后改写」：松手立刻返回实时文字，二遍通过回调补一次改写。
+        val async = label == "pipeline-async"
         val folder = context.cacheDir.resolve("voice-quality-20261018")
         val cases = JSONArray(folder.resolve("cases.json").readText())
-        val ids = if (cold) setOf("word-0", "word-1", "public-yue-0", "plain-zh-0") else
+        val ids = if (cold) setOf("word-0", "word-1", "public-yue-0", "plain-zh-0") else if (async)
+            setOf("public-yue-0", "public-yue-11", "public-para-yue", "public-yue-long", "plain-zh-0") else
             setOf("public-yue-0", "public-yue-11", "public-para-yue", "public-yue-long",
                 "mix-huihui-1", "mix-huihui-5", "mix-huihui-6", "sentence-0", "sentence-1", "plain-zh-0", "plain-zh-7")
         val rows = JSONArray()
@@ -52,6 +55,11 @@ internal object VoicePipelineComparisonSmoke {
                     val started = SystemClock.elapsedRealtime()
                     val active = engine ?: SpeechEngine(context.assets)
                     var doneAt = 0L
+                    var refinedText = ""
+                    var refineMs = -1L
+                    val refine: ((String) -> Unit)? = if (async) { value ->
+                        if (refinedText.isEmpty()) { refinedText = value; refineMs = SystemClock.elapsedRealtime() - releaseAt }
+                    } else null
                     val text = try { active.transcribe({
                         if (offset == samples.size) {
                             releaseAt = SystemClock.elapsedRealtime()
@@ -62,11 +70,15 @@ internal object VoicePipelineComparisonSmoke {
                             if (wait > 0) SystemClock.sleep(wait)
                             samples.copyOfRange(offset, until).also { offset = until }
                         }
-                    }, { if (firstTextMs < 0) firstTextMs = SystemClock.elapsedRealtime() - started }, { false }, { offset < samples.size })
+                    }, { if (firstTextMs < 0) firstTextMs = SystemClock.elapsedRealtime() - started }, { false }, { offset < samples.size }, refine)
                         .also { doneAt = SystemClock.elapsedRealtime() }
-                    } finally { if (cold) active.release() }
+                    } finally {
+                        if (async) SystemClock.sleep(600)
+                        if (cold) active.release()
+                    }
                     rows.put(JSONObject().put("id", id).put("pauseMs", pauseMs).put("text", text)
-                        .put("firstTextMs", firstTextMs).put("releaseMs", doneAt - releaseAt))
+                        .put("firstTextMs", firstTextMs).put("releaseMs", doneAt - releaseAt)
+                        .put("refinedText", refinedText).put("refineMs", refineMs))
                     folder.resolve("$label.json").writeText(JSONObject().put("rows", rows).toString(2))
                 }
             }
