@@ -17,7 +17,8 @@ internal object VoicePipelineComparisonSmoke {
         val folder = context.cacheDir.resolve("voice-quality-20261018")
         val cases = JSONArray(folder.resolve("cases.json").readText())
         val ids = if (cold) setOf("word-0", "word-1", "public-yue-0", "plain-zh-0") else
-            setOf("public-yue-0", "public-yue-11", "public-para-yue", "mix-huihui-1", "mix-huihui-5", "sentence-0", "plain-zh-0", "plain-zh-7")
+            setOf("public-yue-0", "public-yue-11", "public-para-yue", "public-yue-long",
+                "mix-huihui-1", "mix-huihui-5", "sentence-0", "plain-zh-0", "plain-zh-7")
         val rows = JSONArray()
         val engine = if (cold) null else SpeechEngine(context.assets)
         try {

@@ -44,6 +44,24 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
         Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "VoxFix-second-pass")
     })
 
+    /**
+     * 提交二遍任务；队列只有一格，满了就给最新这段让位。
+     *
+     * 队列满时旧行为是直接放弃（`RejectedExecutionException` → null），而「最新这段」正是用户刚说完、
+     * 正在盯着看的那一句：K60 上 11.7s 粤语长句因此只有前两段被改写、最后一段停在流式同音汉字。
+     * 这里丢掉还没开始跑的旧任务（它所属片段自动退回实时文字），把位置让给最新这段。
+     */
+    private fun submitSecond(block: () -> SecondPass): Future<SecondPass>? {
+        val task = FutureTask(block)
+        return try {
+            secondWorker.submit(task); task
+        } catch (_: RejectedExecutionException) {
+            // 容量只有一格：摘掉还在排队的那一个（它所属片段会退回实时文字），把位置让给最新这段。
+            (secondWorker.queue.poll() as? Future<*>)?.cancel(false)
+            try { secondWorker.submit(task); task } catch (_: RejectedExecutionException) { null }
+        }
+    }
+
     init {
         var loadedAt = System.nanoTime()
         fun loaded(model: String) {
@@ -188,8 +206,7 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             val pending = when {
                 early != null && earlySegments == merged -> early
                 samples.isEmpty() -> null
-                else -> try { secondWorker.submit<SecondPass> { decodeSecondPass(samples) } }
-                    catch (_: RejectedExecutionException) { null }
+                else -> submitSecond { decodeSecondPass(samples) }
             }
             early = null
             earlySegments = -1
@@ -227,16 +244,15 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
                 drainUtterance()
                 if (!detector.isSpeechDetected() && (utterance.isNotEmpty() || streamingOnly)) {
                     // 停顿先提交一次整理（松手前尽量拿到结果），但要停顿够久才真的切段。
+                    // 长句不再预跑：8s 以上的音频二遍要 400ms 以上，结果还没用上就被下一段顶掉，
+                    // 反而把唯一的工作线程占住，让松手时最后一段排不上队。
                     if (!streamingOnly && !finishing && isRecording() && !isCancelled() &&
-                        earlySegments != utteranceSegments) {
+                        earlySegments != utteranceSegments && utteranceSamples <= EARLY_SECOND_PASS_LIMIT) {
                         // 每一代只试一次：队列满时不必每 20ms 重复抛一次拒绝异常。
                         earlySegments = utteranceSegments
                         early = null
                         val paused = concat(utterance)
-                        if (paused.isNotEmpty()) {
-                            early = try { secondWorker.submit<SecondPass> { decodeSecondPass(paused) } }
-                                catch (_: RejectedExecutionException) { null }
-                        }
+                        if (paused.isNotEmpty()) early = submitSecond { decodeSecondPass(paused) }
                     }
                     silenceSamples += samples.size
                     if (silenceSamples >= COMMIT_SILENCE_SAMPLES) commitSegment()
@@ -245,7 +261,6 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             }
             if (isCancelled()) return ""
             finishing = true
-            val finishDeadline = System.nanoTime() + FINAL_SECOND_PASS_BUDGET_MS * 1_000_000
             // Flush trailing audio so the final word is not lost when the user stops mid-syllable.
             stream.acceptWaveform(FloatArray(8000), SAMPLE_RATE)
             stream.inputFinished()
@@ -254,6 +269,9 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             drainUtterance()
             commitSegment()
             if (isCancelled()) return ""
+            // 预算从「补尾完成」之后才起算：补尾 + 补渲本身要 100–250ms，之前把这段时间也算进预算，
+            // 长句二遍只剩几十毫秒，粤语因此常常整段停在流式的同音汉字上。
+            val finishDeadline = System.nanoTime() + FINAL_SECOND_PASS_BUDGET_MS * 1_000_000
             val tail = clean(recognizer.getResult(stream).text)
             // 二遍模型还没加载完就别等：等待期全花在加载上，预算烧满了也拿不到改写。
             // 冷启动第一句（说话短、加载 0.78s）实测正好会这样白等 350ms。
@@ -405,6 +423,8 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
          * 并成一段，固定音频混合样本反而从 5/16 掉到 4/16，故不采用更长的合并。
          */
         const val COMMIT_SILENCE_SAMPLES = SAMPLE_RATE / 4
+        /** 超过这个长度就不再为「停顿」预跑二遍（见 transcribe 里的 early 分支）。 */
+        const val EARLY_SECOND_PASS_LIMIT = SAMPLE_RATE * 8
         const val CAPTURE_BUFFER_CHUNKS = SAMPLE_RATE * 3 / AUDIO_CHUNK_SAMPLES
         /** 句段终止符，用于判断 SenseVoice 是否已给出落点、以及拼接时是否要去掉叠加的标点。 */
         val SENTENCE_END = charArrayOf('。', '！', '？', '.', '!', '?', '…')
