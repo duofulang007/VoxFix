@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {repeatDelay,joystickHoldRate,cursorFeedbackPosition,joystick,joystickLevel,joystickRadii,joystickRho} from './core.mjs';
+import {repeatDelay,deleteRepeatDelay,joystickHoldRate,cursorFeedbackPosition,joystick,joystickLevel,joystickRadii,joystickRho} from './core.mjs';
 // 量「形状」用一组各向同性半径（a=b），这样斜推衰减只剩 n=3 本身带来的那部分；
 // 若 a≠b，衰减里会混进椭圆的各向异性，那是设计使然、不是形状的锅。
 const R={a:150,bUp:150,bDown:150};
@@ -125,3 +125,9 @@ assert.equal(repeatDelay(20),35);
 assert.equal(joystickHoldRate(0),1000/110);
 assert(joystickHoldRate(550)>joystickHoldRate(0));
 assert.equal(joystickHoldRate(5000),24);
+// 删除连删必须比摇杆快：起步 90ms、封底 30ms，且始终单调更快。
+assert.equal(deleteRepeatDelay(0),90);
+assert.equal(deleteRepeatDelay(50),30);
+assert(deleteRepeatDelay(0)<repeatDelay(0),'连删起步快于摇杆');
+assert(deleteRepeatDelay(50)<repeatDelay(50),'连删封底快于摇杆');
+for(let step=1;step<=10;step++)assert(deleteRepeatDelay(step)<=deleteRepeatDelay(step-1),'连删间隔只能变短');

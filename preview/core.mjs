@@ -189,6 +189,9 @@ export function rankLearned(words,records,key){
   return [...new Set([...learned,...words])];
 }
 
-// 删除和摇杆共用按住加速曲线；持续方向计时，转向或松手重新起步。
+// 摇杆按住加速曲线；持续方向计时，转向或松手重新起步。
 export function repeatDelay(step){return Math.max(35,110-Math.max(0,step)*8);}
 export function joystickHoldRate(elapsed){return Math.min(24,1000/repeatDelay(Math.floor(Math.max(0,elapsed)/110)));}
+// 删除键连删单独一档：比摇杆更快（起步 90ms ≈ 11 字/秒，每 tick 减 10ms，30ms 封底 ≈ 33 字/秒）。
+// 删字比移光标更容易被感知成"卡"，所以不跟摇杆共用曲线。
+export function deleteRepeatDelay(step){return Math.max(30,90-Math.max(0,step)*10);}

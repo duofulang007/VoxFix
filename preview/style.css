@@ -226,14 +226,14 @@
 .clip-candidate .clip-hint{font-size:11px;color:var(--danger);flex-shrink:0}
 .clip-candidate .toolbar-done{flex:0 0 auto;font-size:13px;color:var(--accent);padding:0 12px;white-space:nowrap}
 
-/* 工具栏排序与自定义项。 */
-.toolbar-sort{background:var(--func-bg)}
-.toolbar-sort .sortable{outline:1px dashed var(--line);border-radius:8px;cursor:grab}
-.toolbar-sort .drop-target{background:#cbdce9;border-radius:8px;outline-color:var(--accent)}
+/* 工具栏长按排序：只有被按住的那块图标抬起（底色+投影），落位目标淡蓝高亮。
+   不铺提示行、也不给整条工具栏换底色——提示行会挡候选区，这是本次被要求去掉的东西。 */
+.toolbar .toolbar-drag{position:relative;z-index:2;border-radius:8px;background:var(--key-bg);box-shadow:0 3px 10px #00000024;transform:scale(1.06)}
+.toolbar .drop-target{background:var(--accent-soft);border-radius:8px;box-shadow:inset 0 0 0 1px var(--accent)}
+.toolbar .drop-remove{background:#fbe8e6;border-radius:8px;box-shadow:inset 0 0 0 1px var(--danger);color:var(--danger)}
 .toolbar-custom-btn{font-size:12px;color:var(--key-color);overflow:hidden}
 .toolbar .toolbar-custom-btn{display:flex;align-items:center;justify-content:center;gap:2px;flex:1;height:40px;min-width:0}
 .toolbar .toolbar-custom-btn .tb-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.toolbar .tb-remove{color:var(--danger);font-size:14px;padding:0 2px}
 
 /* ── 候选区：按讯飞小米版 K60 真机实测还原 ────────────────────────────────
    官方布局以 720 单位宽为基准，K60 为 1440×3200 / density 560（=3.5），

@@ -232,22 +232,23 @@ try{
     assert.equal(await page.locator('[data-action="association-candidate"]').count(),0,'文本删完后联想候选必须清空');
     assert.equal(await page.locator('.candidate-bar').count(),0);
   });
-  await check('existing toolbar remains sortable',async({page,click})=>{
+  await check('existing toolbar is reorderable by long-press drag',async({page})=>{
     const order=nodes=>nodes.map(n=>n.dataset.action==='toolbar-custom'?n.dataset.value:n.dataset.action);
-    const toolbar=()=>page.locator('.toolbar [data-action]:not(.tb-remove)');
-    const before=await toolbar().evaluateAll(order);
-    const first=await toolbar().first().boundingBox();
-    await page.mouse.move(first.x+first.width/2,first.y+first.height/2);await page.mouse.down();await page.waitForTimeout(600);await page.mouse.up();
-    assert(await page.locator('.toolbar-sort').count(),'长按工具栏应进入排序模式');
+    const toolbar=()=>page.locator('.toolbar [data-action]');
+    const layout=()=>page.evaluate(()=>({bars:document.querySelectorAll('#keyboard .candidate-bar').length,top:document.querySelector('#keyboard .toolbar').getBoundingClientRect().top}));
+    const before=await toolbar().evaluateAll(order),beforeLayout=await layout();
     const nodes=await toolbar().all();
     const from=await nodes[0].boundingBox(),to=await nodes[nodes.length-1].boundingBox();
-    await page.mouse.move(from.x+from.width/2,from.y+from.height/2);await page.mouse.down();
+    await page.mouse.move(from.x+from.width/2,from.y+from.height/2);await page.mouse.down();await page.waitForTimeout(450);
+    // 2026-10-18：长按直接抬起拖动，不再有「排序模式」和多出来的提示行。
+    assert.equal(await page.locator('.toolbar-drag').count(),1,'长按应直接抬起被按住的图标');
+    assert.deepEqual(await layout(),beforeLayout,'长按拖动不得多出一行提示');
     await page.mouse.move(to.x+to.width/2,to.y+to.height/2,{steps:8});await page.mouse.up();
     const after=await toolbar().evaluateAll(order);
     assert.notDeepEqual(after,before,'拖动后工具栏顺序应变化');
     assert.equal(after[after.length-1],before[0],'被拖动的首项应移动到末尾');
-    await click('toolbar-sort-done');
-    assert.equal(await page.locator('.toolbar-sort').count(),0);
+    assert.equal(await page.locator('.toolbar-drag').count(),0,'松手后不得残留抬起态');
+    assert.deepEqual(await layout(),beforeLayout,'松手后不得留下提示行或改变布局');
   });
   await check('clipboard candidate bar follows its setting',async({page,click})=>{
     await page.evaluate(()=>voxfixClipboard('候选栏内容','c'.repeat(64)));
