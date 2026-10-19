@@ -53,9 +53,11 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
     override fun onStart() {
         val output = Bundle()
         try {
+            if (modelCompare == "adoption-safety") { output.putString("result", VoiceAdoptionSafetySmoke.run(targetContext)); finish(Activity.RESULT_OK, output); return }
             if (modelCompare == "boundary-probe") { output.putString("result", VoiceBoundaryProbe.run(targetContext)); finish(Activity.RESULT_OK, output); return }
             if (modelCompare == "mandarin-punctuation") { output.putString("result", VoiceMandarinStressSmoke.punctuation(targetContext)); finish(Activity.RESULT_OK, output); return }
             if (modelCompare == "mandarin-stress") { output.putString("result", VoiceMandarinStressSmoke.run(targetContext)); finish(Activity.RESULT_OK, output); return }
+            if (modelCompare == "mandarin-capture") { output.putString("result", VoiceCaptureStressSmoke.run(targetContext)); finish(Activity.RESULT_OK, output); return }
             if (modelCompare == "stability") { output.putString("result", VoiceStabilitySmoke.run(this)); finish(Activity.RESULT_OK, output); return }
             if (modelCompare == "interaction-fixed") { output.putString("result", VoiceInteractionAuditSmoke.regression(this)); finish(Activity.RESULT_OK, output); return }
             if (modelCompare == "interaction-audit") { output.putString("result", VoiceInteractionAuditSmoke.run(this)); finish(Activity.RESULT_OK, output); return }

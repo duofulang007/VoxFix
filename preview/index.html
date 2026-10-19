@@ -2,7 +2,11 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>VoxFix · 键盘试用页</title><link rel="stylesheet" href="style.css">
+  <title>VoxFix · 键盘试用页</title>
+  <!-- 原生桥在导航前已注入，首帧就切换布局，不等待模块及其依赖。 -->
+  <script>if(globalThis.VoxFixIme)document.documentElement.classList.add('native-ime');</script>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="native-ime.css">
 </head>
 <body>
   <header class="page-header"><a class="brand" href="#"><span class="brand-mark">V</span>VoxFix<span class="brand-detail">键盘试用页</span></a><span class="version">对齐手机版 · 2026-10-18</span></header>
@@ -44,6 +48,5 @@
   <dialog id="snippet-dialog" class="snippet-dialog">
     <form id="snippet-form"><h2 id="snippet-title">添加剪贴板内容</h2><div class="snippet-frame"><label class="field">内容<textarea id="snippet-content" aria-labelledby="snippet-title" rows="5" maxlength="10000" required></textarea></label><div class="dialog-actions"><button type="button" id="snippet-cancel">取消</button><button type="button" id="snippet-split">拆词</button><button type="submit">保存</button></div></div><p class="note">保存到当前浏览器，可随时编辑或删除。</p><p id="snippet-error" role="alert"></p></form>
   </dialog>
-  <link rel="stylesheet" href="native-ime.css">
   <script type="module" src="app.mjs"></script>
 </body></html>

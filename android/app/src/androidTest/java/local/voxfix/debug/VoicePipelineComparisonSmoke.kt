@@ -14,12 +14,13 @@ import java.util.concurrent.TimeUnit
 /** Replays public/synthetic audio through the actual paced production pipeline. */
 internal object VoicePipelineComparisonSmoke {
     fun run(context: Context, label: String): String {
-        check(label in setOf("pipeline-current", "pipeline-sense2024", "pipeline-sense2024opt", "pipeline-cold", "pipeline-async", "pipeline-audit", "pipeline-audit-cold", "pipeline-fix"))
+        check(label in setOf("pipeline-current", "pipeline-sense2024", "pipeline-sense2024opt", "pipeline-cold", "pipeline-async", "pipeline-audit", "pipeline-audit-cold", "pipeline-buffered-cold", "pipeline-fix"))
         val fix = label == "pipeline-fix"
         val audit = label == "pipeline-audit"
-        val cold = label == "pipeline-cold" || label == "pipeline-audit-cold"
+        val buffered = label == "pipeline-buffered-cold"
+        val cold = label == "pipeline-cold" || label == "pipeline-audit-cold" || buffered
         // 「先上屏、后改写」：松手立刻返回实时文字，二遍通过回调补一次改写。
-        val async = label == "pipeline-async" || audit || label == "pipeline-audit-cold" || fix
+        val async = label == "pipeline-async" || audit || label == "pipeline-audit-cold" || buffered || fix
         val folder = context.cacheDir.resolve("voice-quality-20261018")
         val cases = JSONArray(folder.resolve("cases.json").readText())
         val ids = if (audit) (0 until cases.length()).map { cases.getJSONObject(it).getString("id") }.toSet()
@@ -39,7 +40,8 @@ internal object VoicePipelineComparisonSmoke {
                             language = "auto", useInverseTextNormalization = true),
                         tokens = folder.resolve("$model/tokens.txt").path, numThreads = SpeechEngine.SECOND_PASS_THREADS)))
                 }
-                checkNotNull(engine).javaClass.getDeclaredField("secondLoader").apply { isAccessible = true }.set(engine, loader)
+                checkNotNull(engine).secondPass().release()
+                engine.javaClass.getDeclaredField("secondLoader").apply { isAccessible = true }.set(engine, loader)
             }
             engine?.secondPass()
             for (i in 0 until cases.length()) {
@@ -59,8 +61,20 @@ internal object VoicePipelineComparisonSmoke {
                     var firstTextMs = -1L
                     var releaseAt = 0L
                     var liveText = ""
-                    val started = SystemClock.elapsedRealtime()
+                    val loadingAt = SystemClock.elapsedRealtime()
                     val active = engine ?: SpeechEngine(context.assets)
+                    val engineInitMs = SystemClock.elapsedRealtime() - loadingAt
+                    val decisions = mutableListOf<JSONObject>()
+                    active.observeRefinement = { raw, second, chosen ->
+                        synchronized(decisions) {
+                            decisions.add(JSONObject().put("raw", raw).put("candidate", second.text)
+                                .put("chosen", chosen).put("lang", second.lang).put("agreement", second.boundaryAgreement)
+                                .put("cantoneseAgreement", second.cantoneseAgreement)
+                                .put("decisionMs", if (releaseAt == 0L) -1 else SystemClock.elapsedRealtime() - releaseAt))
+                        }
+                    }
+                    // Buffered mode models capture already running while the engine is constructed.
+                    val started = if (buffered) loadingAt else SystemClock.elapsedRealtime()
                     var doneAt = 0L
                     var refinedText = ""
                     var refineMs = -1L
@@ -69,9 +83,11 @@ internal object VoicePipelineComparisonSmoke {
                         if (refinedText.isEmpty()) { refinedText = value; refineMs = SystemClock.elapsedRealtime() - releaseAt }
                         refinedReady.countDown()
                     } else null
+                    val playbackAt = SystemClock.elapsedRealtime()
                     val text = try { active.transcribe({
                         if (offset == samples.size) {
-                            releaseAt = SystemClock.elapsedRealtime()
+                            check(SystemClock.elapsedRealtime() - (if (buffered) started else playbackAt) + 20 >= samples.size / 16) { "Fixed audio was fed faster than real time" }
+                            releaseAt = if (buffered) started + samples.size / 16 else SystemClock.elapsedRealtime()
                             null
                         } else {
                             val until = minOf(offset + 320, samples.size)
@@ -82,17 +98,22 @@ internal object VoicePipelineComparisonSmoke {
                     }, {
                         if (firstTextMs < 0) firstTextMs = SystemClock.elapsedRealtime() - started
                         if (releaseAt == 0L) liveText = it
-                    }, { false }, { offset < samples.size }, refine)
+                    }, { false }, { if (buffered) SystemClock.elapsedRealtime() < started + samples.size / 16 else offset < samples.size }, refine)
                         .also { doneAt = SystemClock.elapsedRealtime() }
                     } finally {
                         if (async) refinedReady.await(600, TimeUnit.MILLISECONDS)
                         if (cold) active.release()
                     }
                     rows.put(JSONObject().put("id", id).put("pauseMs", pauseMs).put("text", text)
-                        .put("firstTextMs", firstTextMs).put("releaseMs", doneAt - releaseAt)
+                        .put("firstTextMs", firstTextMs).put("engineInitMs", engineInitMs).put("releaseMs", doneAt - releaseAt)
                         .put("liveText", liveText)
-                        .put("refinedText", refinedText).put("refineMs", refineMs))
+                        .put("refinedText", refinedText).put("refineMs", refineMs)
+                        .put("decisions", JSONArray(synchronized(decisions) { decisions.toList() })))
                     folder.resolve("$label.json").writeText(JSONObject().put("rows", rows).toString(2))
+                    if ((label == "pipeline-audit-cold" || buffered) && id == "word-0") {
+                        val accepted = if (refineMs in 0..(doneAt - releaseAt + 420)) refinedText else text
+                        check(accepted.trim().trimEnd('.').equals("apple", ignoreCase = true)) { "Cold short word lost: $accepted" }
+                    }
                 }
             }
         } finally { engine?.release() }

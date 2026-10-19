@@ -5,6 +5,18 @@ import org.junit.Test
 import java.util.concurrent.FutureTask
 
 class SpeechSegmentTest {
+    @Test fun corroboratedCantoneseEvidenceSurvivesSegmentDelivery() {
+        val raw = "How could looked on fortun learn go to hackym name"
+        val candidate = "包括六堂课同两个测验。"
+        val pending = FutureTask { SecondPass(candidate, "<|yue|>", cantoneseAgreement = true) }.apply { run() }
+        assertEquals(candidate, SpeechSegment(raw, pending).finish())
+        val late = FutureTask { SecondPass(candidate, "<|yue|>", cantoneseAgreement = true) }
+        val segment = SpeechSegment(raw, late)
+        assertEquals(raw, segment.finish(0, cancel = false))
+        late.run()
+        assertEquals(candidate, segment.awaitRefined(1))
+    }
+
     @Test fun boundaryAgreementSurvivesSegmentDeliveryWithoutBypassingNumericProtection() {
         for ((candidate, agreement, expected) in listOf(
             Triple("不要取消订单。", true, "不要取消订单。"),

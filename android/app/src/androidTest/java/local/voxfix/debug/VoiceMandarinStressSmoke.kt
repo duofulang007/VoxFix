@@ -67,6 +67,13 @@ internal object VoiceMandarinStressSmoke {
                 val async = !case.optBoolean("sync")
                 var offset = 0
                 var releaseAt = 0L
+                val decisions = mutableListOf<JSONObject>()
+                active.observeRefinement = { raw, second, chosen ->
+                    synchronized(decisions) {
+                        decisions.add(JSONObject().put("raw", raw).put("candidate", second.text).put("chosen", chosen)
+                            .put("decisionMs", if (releaseAt == 0L) -1 else SystemClock.elapsedRealtime() - releaseAt))
+                    }
+                }
                 var live = ""
                 var firstMs = -1L
                 var refined = ""
@@ -94,13 +101,14 @@ internal object VoiceMandarinStressSmoke {
                 }, { false }, { offset < samples.size }, callback)
                 val releaseMs = SystemClock.elapsedRealtime() - releaseAt
                 if (async) ready.await(650, TimeUnit.MILLISECONDS)
-                // Same 420 ms acceptance window as ordinary input, independent of the observer wait.
-                val accepted = refined.isNotEmpty() && refineMs in 0..420
+                // Ordinary input starts its 420 ms replacement window after the first result.
+                val accepted = refined.isNotEmpty() && refineMs in 0..(releaseMs + 420)
                 rows.put(JSONObject().put("id", id).put("text", text).put("liveText", live)
                     .put("refinedText", refined).put("refineMs", refineMs)
                     .put("finalText", if (accepted) refined else text)
                     .put("releaseMs", releaseMs).put("firstMs", firstMs)
-                    .put("pssKb", Debug.getPss()))
+                    .put("pssKb", Debug.getPss())
+                    .put("decisions", JSONArray(synchronized(decisions) { decisions.toList() })))
                 output.writeText(report.toString(2))
                 if (cold) { active.release(); engine = null }
             }

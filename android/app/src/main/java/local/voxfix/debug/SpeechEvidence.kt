@@ -5,6 +5,20 @@ internal object SpeechEvidence {
     private val negation = Regex("不|没|未|别|无|勿")
     private val money = Regex("([-负]?[0-9零〇一二两三四五六七八九十百千万亿]+(?:[.点][0-9零〇一二两三四五六七八九]+)?)(块钱|元|块|角|毛|分)")
 
+    fun corroboratesCantonese(padded: SecondPass, original: SecondPass) =
+        padded.text.isNotBlank() && padded.lang == "<|yue|>" && original.lang == padded.lang &&
+            SpeechEngine.comparable(padded.text) == SpeechEngine.comparable(original.text)
+
+    fun plausibleCantoneseWordLength(raw: String, candidate: String): Boolean {
+        val latin = SpeechEngine.englishWords(raw)
+        val letters = candidate.filter { it.isLetter() }
+        if (latin.isEmpty() || letters.isEmpty() || letters.any { it !in '\u3400'..'\u9fff' }) return false
+        // A hallucinated English word's letters are not separate Cantonese syllables.
+        val said = raw.count { it.isLetterOrDigit() } - latin.sumOf { it.length } + latin.size
+        val heard = candidate.count { it.isLetterOrDigit() }
+        return said > 0 && heard.toDouble() / said in 0.35..2.8
+    }
+
     fun sameMoney(raw: String, candidate: String): Boolean {
         fun units(text: String) = money.findAll(text).map {
             SpeechEngine.numericTokens(it.groupValues[1]).single() to when (val unit = it.groupValues[2]) {

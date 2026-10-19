@@ -13,7 +13,6 @@ import java.util.Locale
 import java.util.concurrent.Future
 import java.util.concurrent.FutureTask
 import java.util.concurrent.ArrayBlockingQueue
-import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -37,7 +36,8 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
     private var online: OnlineRecognizer? = null
     private var secondLoader: FutureTask<OfflineRecognizer>? = null
     private var vad: Vad? = null
-    private var secondStarted = false
+    // Fixed-audio tests only; ordinary sessions never attach an observer.
+    internal var observeRefinement: ((String, SecondPass, String) -> Unit)? = null
     /** 标点与二遍解耦：模型只吃文本，二遍没跑完时同样能给尾段补标点。 */
     private val punctuator = Punctuator(assets)
     private val secondWorker = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(1), { task ->
@@ -52,13 +52,12 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
      * 这里丢掉还没开始跑的旧任务（它所属片段自动退回实时文字），把位置让给最新这段。
      */
     private fun submitSecond(block: () -> SecondPass): Future<SecondPass>? {
-        val task = FutureTask(block)
-        return try {
-            secondWorker.submit(task); task
-        } catch (_: RejectedExecutionException) {
-            // 容量只有一格：摘掉还在排队的那一个（它所属片段会退回实时文字），把位置让给最新这段。
-            (secondWorker.queue.poll() as? Future<*>)?.cancel(false)
-            try { secondWorker.submit(task); task } catch (_: RejectedExecutionException) { null }
+        val queuedAt = System.nanoTime()
+        return SpeechSecondQueue.submit(secondWorker) {
+            val started = System.nanoTime()
+            try { block() } finally {
+                Log.i("VoxFix", "ASR_SECOND_PASS queueMs=${(started - queuedAt) / 1_000_000} decodeMs=${(System.nanoTime() - started) / 1_000_000}")
+            }
         }
     }
 
@@ -69,6 +68,17 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             loadedAt = System.nanoTime()
         }
         try {
+            // Voice is already requested; load pass 2 alongside pass 1 so an empty short word can recover.
+            secondLoader = FutureTask {
+                val started = System.nanoTime()
+                OfflineRecognizer(assets, OfflineRecognizerConfig(modelConfig = OfflineModelConfig(
+                    senseVoice = OfflineSenseVoiceModelConfig(
+                        "sensevoice/model.int8.onnx", language = SECOND_PASS_LANGUAGE, useInverseTextNormalization = true),
+                    tokens = "sensevoice/tokens.txt", numThreads = SECOND_PASS_THREADS))).also {
+                    Log.i("VoxFix", "ASR_MODEL_READY model=second elapsedMs=${(System.nanoTime() - started) / 1_000_000}")
+                }
+            }
+            secondWorker.execute(checkNotNull(secondLoader))
             online = OnlineRecognizer(assets, OnlineRecognizerConfig(
                 modelConfig = OnlineModelConfig(
                     transducer = OnlineTransducerModelConfig(
@@ -102,19 +112,6 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
                 }
                 catch (error: Throwable) { Log.w("VoxFix", "ASR_VOCAB_UNAVAILABLE", error) }
             }, "VoxFix-vocab").apply { isDaemon = true; start() }
-            // Defer pass 2 until live text has started, so cold streaming gets the CPU first.
-            // General SenseVoice supplies LID/ITN; tokens are mandatory to avoid a native crash.
-            secondLoader = FutureTask {
-                val started = System.nanoTime()
-                OfflineRecognizer(assets, OfflineRecognizerConfig(modelConfig = OfflineModelConfig(
-                    // 语种交给 SenseVoice 内建 LID 自己判，不写死 zh：写死时粤/日/韩只会被强行按
-                    // 中文解码。结果首 token 就是 `<|zh|>`/`<|yue|>` 这类标签，见 SecondPass.lang。
-                    senseVoice = OfflineSenseVoiceModelConfig(
-                        "sensevoice/model.int8.onnx", language = SECOND_PASS_LANGUAGE, useInverseTextNormalization = true),
-                    tokens = "sensevoice/tokens.txt", numThreads = SECOND_PASS_THREADS))).also {
-                    Log.i("VoxFix", "ASR_MODEL_READY model=second elapsedMs=${(System.nanoTime() - started) / 1_000_000}")
-                }
-            }
         } catch (error: Throwable) { release(); throw error }
     }
 
@@ -131,6 +128,7 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
         val recognizer = checkNotNull(online)
         val detector = checkNotNull(vad)
         val dictionary = personal
+        val observer = observeRefinement
         val stream = recognizer.createStream(if (usesPersonalDecoder) dictionary.hotwords(personalTokens) else "")
         val segments = mutableListOf<SpeechSegment>()
         var finishing = false
@@ -147,12 +145,8 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             if (text.isNotBlank() && text != previousText && !isCancelled()) {
                 if (previousText.isEmpty()) {
                     Log.i("VoxFix", "ASR_FIRST_TEXT elapsedMs=${(System.nanoTime() - started) / 1_000_000}")
-                    // 标点模型与二遍同时开始加载，都在后台，不占实时出字这条路径。
+                    // 标点模型只在真正出字后加载。
                     punctuator.start()
-                    if (!finishing && isRecording() && !secondStarted) {
-                        secondStarted = true
-                        secondWorker.execute(checkNotNull(secondLoader))
-                    }
                 }
                 previousText = text
                 onText(text)
@@ -188,7 +182,11 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             val result = decode(samples)
             if (original.isEmpty() || samples.contentEquals(original)) return result
             // Mandarin boundary padding can change Cantonese wording; keep its established VAD audio view.
-            if (result.lang == "<|yue|>") return decode(original)
+            if (result.lang == "<|yue|>") {
+                val confirmation = decode(original)
+                return SecondPass(confirmation.text, confirmation.lang,
+                    cantoneseAgreement = SpeechEvidence.corroboratesCantonese(result, confirmation))
+            }
             if (!SpeechEvidence.needsBoundaryConfirmation(raw, result.text)) return result
             val confirmation = decode(original)
             return SecondPass(result.text, result.lang, result.lang == confirmation.lang && comparable(result.text) == comparable(confirmation.text))
@@ -229,15 +227,15 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             utteranceSegments = 0
             // Keep live decoding ahead of optional corrections rather than building a backlog.
             val pending = when {
-                early != null && earlySegments == merged -> early
+                early != null && early?.isCancelled == false && earlySegments == merged -> early
                 samples.isEmpty() -> null
                 else -> submitSecond { decodeSecondPass(samples, original, streaming) }
             }
             early = null
             earlySegments = -1
             segments.add(SpeechSegment(streaming, pending) { raw, second ->
-                val refined = refine(raw, second.text, second.lang, second.boundaryAgreement, VoiceLanguage::phonetic)
-                dictionary.protect(raw, refined, VoiceLanguage::phonetic)
+                val refined = refine(raw, second.text, second.lang, second.boundaryAgreement, VoiceLanguage::phonetic, second.cantoneseAgreement)
+                dictionary.protect(raw, refined, VoiceLanguage::phonetic).also { observer?.invoke(raw, second, it) }
             })
             recognizer.reset(stream)
         }
@@ -339,7 +337,7 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
                     Thread({
                         val refined = last.awaitRefined(LATE_REFINE_WINDOW_MS) ?: return@Thread
                         val merged = if (prefix.isEmpty()) refined else join(prefix, refined)
-                        val text = dictionary.correct(restorePunctuation(merged), VoiceLanguage::phonetic, VoiceLanguage::boundaries)
+                        val text = dictionary.correct(reuseSingleSentencePunctuation(result, merged) ?: restorePunctuation(merged), VoiceLanguage::phonetic, VoiceLanguage::boundaries)
                         Log.i("VoxFix", "ASR_LATE_REFINE applied=${text != result}")
                         if (text.isNotBlank()) onRefined(text)
                     }, "VoxFix-late-refine").start()
@@ -651,10 +649,10 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
          * [lang] 为空表示调用方没拿到标签（旧调用、单元测试），行为与只比文本时完全一致。
          */
         fun refine(raw: String, candidate: String, lang: String = "", boundaryAgreement: Boolean = false,
-                   phonetic: ((String) -> String)? = null): String {
+                   phonetic: ((String) -> String)? = null, cantoneseAgreement: Boolean = false): String {
             if (candidate.isEmpty()) return raw
             if (raw.isEmpty()) return candidate
-            if (adoptsForeign(raw, candidate, lang)) return candidate
+            if (adoptsForeign(raw, candidate, lang, cantoneseAgreement)) return candidate
             val said = englishWords(raw)
             val heard = englishWords(candidate)
             // 术语替换会顺手少掉中文字（`一笑` 里的 `一` 会被 NUMBER_RUN 当成数字），
@@ -663,17 +661,18 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             if (!SpeechEvidence.sameMoney(raw, candidate)) return raw
             // 数值按归一后的形态比，「十点」与「10点」应当等价。
             if (!term && numericTokens(raw) != numericTokens(candidate)) return raw
-            if (said != heard) {
-                if (!term && !hearsEnglishOnly(raw, candidate, said, heard) &&
-                    !rewritesEnglishLetters(raw, candidate, said, heard)) return raw
-                return candidate
-            }
             val a = comparable(raw)
             val b = comparable(candidate)
-            if (boundaryAgreement && SpeechEvidence.acceptsBoundaryCorrection(a, b, phonetic)) return candidate
+            if (said == heard && boundaryAgreement && SpeechEvidence.acceptsBoundaryCorrection(a, b, phonetic)) return candidate
             // 否定词一旦不同，说明二遍真的动了内容，必须保守退回。
             if (Regex("不|没|未|别|无|勿").findAll(a).map { it.value }.toList() !=
                 Regex("不|没|未|别|无|勿").findAll(b).map { it.value }.toList()) return raw
+            if (said != heard) {
+                if (!term && !hearsEnglishOnly(raw, candidate, said, heard) &&
+                    !rewritesEnglishLetters(raw, candidate, said, heard))
+                    return SpeechEnglishRecovery.recover(raw, candidate, ::isKnownEnglishTerm) ?: raw
+                return candidate
+            }
             if (b.isEmpty()) return raw
             var previous = IntArray(b.length + 1) { it }
             for (i in a.indices) {
@@ -691,7 +690,7 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
          * 相似度门会拒绝正确结果。粤语可能没有专用字，不能以字形否决语种。
          * 此契约依赖构建校验的2024通用权重，不适用于LID恒报yue的2025微调权重。
          */
-        private fun adoptsForeign(raw: String, candidate: String, lang: String): Boolean {
+        private fun adoptsForeign(raw: String, candidate: String, lang: String, cantoneseAgreement: Boolean): Boolean {
             val tag = lang.trim().removePrefix("<|").removeSuffix("|>").lowercase(Locale.ROOT)
             val corroborated = when (tag) {
                 "ja" -> KANA.containsMatchIn(candidate)
@@ -699,7 +698,8 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
                 "yue" -> candidate.any { it in '\u3400'..'\u9fff' }
                 else -> false
             }
-            return corroborated && saneLength(raw, candidate)
+            return corroborated && (saneLength(raw, candidate) || tag == "yue" && cantoneseAgreement &&
+                SpeechEvidence.plausibleCantoneseWordLength(raw, candidate))
         }
         /** 噪声上二遍会把一个字复读成整句；这里只挡数量级异常，正常句子的比值都在 1 附近。 */
         private fun saneLength(raw: String, candidate: String): Boolean {
@@ -748,6 +748,8 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
         private fun prefersKnownEnglish(raw: String, candidate: String, said: List<String>, heard: List<String>): Boolean {
             if (heard.isEmpty() || !heard.all { isKnownEnglishTerm(it) }) return false
             if (said.isNotEmpty() && said.all { isKnownEnglishTerm(it) }) return false
+            // Existing Latin terms cannot explain away a quantity as a Chinese homophone.
+            if (said.isNotEmpty() && numericTokens(raw) != numericTokens(candidate)) return false
             val before = hanOf(raw)
             val after = hanOf(candidate)
             if (before.isEmpty() && after.isEmpty()) return true
@@ -816,6 +818,20 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
         fun stripSentencePunctuation(text: String) = SENTENCE_MARKS.replace(text, "")
         /** 二次防御：模型偶尔仍在残留标点后追加，相邻重复只留一个。 */
         fun dedupePunctuation(text: String) = REPEATED_MARK.replace(text, "$1")
+
+        /** A late single-clause correction reuses the first result's completed sentence analysis. */
+        internal fun reuseSingleSentencePunctuation(first: String, candidate: String): String? {
+            val initial = first.trim()
+            if (initial.lastOrNull() !in listOf('。', '？', '！', '.', '?', '!')) return null
+            if ('.' in initial.dropLast(1) || SENTENCE_MARKS.containsMatchIn(initial.dropLast(1)) ||
+                (initial + candidate).any { it in QUOTE_OR_BRACKET }) return null
+            val revised = formatNumbers(candidate).trim()
+            // General SenseVoice already supplies punctuation; do not strip it and run a second model.
+            if (revised.lastOrNull() in listOf('。', '？', '！', '.', '?', '!')) return revised
+            if ('.' in revised || SENTENCE_MARKS.containsMatchIn(revised)) return null
+            if (initial.dropLast(1).lastOrNull()?.lowercaseChar() != revised.lastOrNull()?.lowercaseChar()) return null
+            return revised + initial.last()
+        }
 
         internal fun punctuationOnly(original: String, candidate: String): String {
             fun content(text: String) = text.filterNot { it.isWhitespace() || it in PUNCTUATION }

@@ -4,6 +4,15 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class SpeechEvidenceTest {
+    @Test fun cantoneseAgreementRequiresBothAudioViewsAndTheSameWordsAndLanguage() {
+        val original = SecondPass("包括六堂课同两个测验。", "<|yue|>")
+        assertEquals(true, SpeechEvidence.corroboratesCantonese(SecondPass("包括6堂课同2个测验", "<|yue|>"), original))
+        assertEquals(false, SpeechEvidence.corroboratesCantonese(SecondPass("包括六堂课同三个测验", "<|yue|>"), original))
+        assertEquals(false, SpeechEvidence.corroboratesCantonese(SecondPass(original.text, "<|zh|>"), original))
+        assertEquals(false, SpeechEvidence.corroboratesCantonese(original, SecondPass(original.text, "<|zh|>")))
+        assertEquals(false, SpeechEvidence.corroboratesCantonese(SecondPass("", "<|yue|>"), SecondPass("", "<|yue|>")))
+    }
+
     @Test fun corroboratedSpeechCanRestoreAClippedNegativePrefixWithoutAddingDoubleNegation() {
         assertEquals("不要打开通知。", SpeechEngine.refine("开通知", "不要打开通知。", boundaryAgreement = true))
         assertEquals("不要删除。", SpeechEngine.refine("删除", "不要删除。", boundaryAgreement = true))

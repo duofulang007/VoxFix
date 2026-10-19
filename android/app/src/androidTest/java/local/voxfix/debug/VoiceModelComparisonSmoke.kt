@@ -12,7 +12,7 @@ import java.nio.ByteOrder
 /** Public/synthetic fixtures and isolated candidate files only; never records or edits user text. */
 internal object VoiceModelComparisonSmoke {
     fun run(context: Context, label: String): String {
-        check(label in setOf("current", "zip2025", "para3", "sense2025", "sense2024", "sense2024opt",
+        check(label in setOf("current", "zip2025", "para3", "sense2025", "sense2024", "sense2024opt", "sense-native-noitn", "sense-native-itn", "fire-red2-ctc",
             "stream-greedy", "stream-beam2", "stream-beam4", "stream-beam8"))
         val folder = context.cacheDir.resolve("voice-quality-20261018")
         val cases = JSONArray(folder.resolve("cases.json").readText())
@@ -44,6 +44,12 @@ internal object VoiceModelComparisonSmoke {
             else -> null
         }
         val offline = when (label) {
+            "fire-red2-ctc" -> OfflineRecognizer(config = OfflineRecognizerConfig(modelConfig = OfflineModelConfig(
+                fireRedAsrCtc = OfflineFireRedAsrCtcModelConfig(model = folder.resolve("fire-red2-ctc/model.int8.onnx").path),
+                tokens = folder.resolve("fire-red2-ctc/tokens.txt").path, numThreads = SpeechEngine.SECOND_PASS_THREADS)))
+            "sense-native-noitn", "sense-native-itn" -> OfflineRecognizer(context.assets, OfflineRecognizerConfig(modelConfig = OfflineModelConfig(
+                senseVoice = OfflineSenseVoiceModelConfig("sensevoice/model.int8.onnx", language = "auto", useInverseTextNormalization = label == "sense-native-itn"),
+                tokens = "sensevoice/tokens.txt", numThreads = SpeechEngine.SECOND_PASS_THREADS)))
             "sense2025", "sense2024", "sense2024opt" -> OfflineRecognizer(config = OfflineRecognizerConfig(modelConfig = OfflineModelConfig(
                 senseVoice = OfflineSenseVoiceModelConfig(folder.resolve("$label/model.int8.onnx").path,
                     language = "auto", useInverseTextNormalization = true), tokens = folder.resolve("$label/tokens.txt").path, numThreads = 4)))

@@ -5,9 +5,83 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class SpeechEngineTest {
+    @Test fun agreesOnCantoneseWhenBilingualStreamingInventsALongEnglishSentence() {
+        val raw = "How could looked on fortun learn go to hackym name"
+        val candidate = "包括六堂课同两个测验。"
+        assertEquals(candidate, SpeechEngine.refine(raw, candidate, "<|yue|>", cantoneseAgreement = true))
+        assertEquals(raw, SpeechEngine.refine(raw, candidate, "<|yue|>"))
+    }
+
+    @Test fun crossScriptLengthRecoveryStillRequiresCantoneseAgreementAndPlausibleWordCount() {
+        val raw = "How could looked on fortun learn go to hackym name"
+        val candidate = "包括六堂课同两个测验。"
+        for (lang in listOf("", "<|zh|>", "<|ja|>", "<|ko|>"))
+            assertEquals(raw, SpeechEngine.refine(raw, candidate, lang, cantoneseAgreement = true))
+        for ((source, heard) in listOf(
+            "你好" to "唔哋".repeat(150),
+            "English" to "唔哋".repeat(20),
+            "One two three four five six seven eight nine ten eleven twelve" to "好。",
+            "$raw $raw" to "课程A。"
+        )) assertEquals(source, SpeechEngine.refine(source, heard, "<|yue|>", cantoneseAgreement = true))
+    }
+
+    @Test fun recoversOneEnglishTermWithoutAdoptingAnotherIncompleteTerm() {
+        // Fixed API/JSON audio: pass 2 still clips API to AP, but does hear JSON.
+        assertEquals("这个app返回的是JSON数据。",
+            SpeechEngine.refine("这个app返回的是gson数据。", "这个ap返回的是JSON数据。"))
+        assertEquals("不要把3份app返回的JSON数据删除。",
+            SpeechEngine.refine("不要把3份app返回的gson数据删除。", "不要把3份ap返回的JSON数据删除。"))
+    }
+
+    @Test fun partialEnglishRecoveryCannotMoveTermsOrChangeChineseOrQuantities() {
+        for ((raw, candidate) in listOf(
+            "这个app返回的是gson数据" to "这个ap返回的是JSON文件",
+            "不要把app返回的gson数据删除" to "要把ap返回的JSON数据删除",
+            "导出3份app的gson数据" to "导出2份ap的JSON数据",
+            "这个app返回的是gson数据" to "这个ap返回的是J S O N数据",
+            "把app的gson数据导出" to "把ap的JSON数据立即导出",
+            "把app的PDF数据导出" to "把ap的JSON数据导出",
+            "把app的gson数据导出" to "把JSON的ap数据导出"
+        )) assertEquals(raw, SpeechEngine.refine(raw, candidate))
+    }
+
+    @Test fun lateSingleClauseCorrectionReusesCompletedPunctuationAnalysis() {
+        assertEquals("不要取消订单。", SpeechEngine.reuseSingleSentencePunctuation("要取消订单。", "不要取消订单"))
+        assertEquals("不要取消订单。", SpeechEngine.reuseSingleSentencePunctuation("要取消订单。", "不要取消订单。"))
+        assertEquals(null, SpeechEngine.reuseSingleSentencePunctuation("现在能走了。", "现在能走了吗"))
+        assertEquals("现在能走了吗？", SpeechEngine.reuseSingleSentencePunctuation("现在能走了吗？", "现在能走了吗"))
+        assertEquals("一共128元五角。", SpeechEngine.reuseSingleSentencePunctuation("一共128元5角。", "一共一百二十八元五角"))
+        assertEquals(null, SpeechEngine.reuseSingleSentencePunctuation("要取消订单", "不要取消订单"))
+        assertEquals(null, SpeechEngine.reuseSingleSentencePunctuation("不要取消订单，先等一下。", "不要取消订单先等一下"))
+        assertEquals(null, SpeechEngine.reuseSingleSentencePunctuation("不要取消订单。", "不要取消订单，先等一下"))
+        assertEquals(null, SpeechEngine.reuseSingleSentencePunctuation("他说“取消”。", "他说“不要取消”"))
+        assertEquals(null, SpeechEngine.reuseSingleSentencePunctuation("Hello. How are you?", "Hello how are you"))
+        assertEquals(null, SpeechEngine.reuseSingleSentencePunctuation("一共3.5元。", "一共3.5元"))
+    }
+
+    @Test fun latinTermRecoveryMustNotDropQuantities() {
+        for (number in listOf("一", "三", "3")) {
+            val raw = "请导出${number}份EXA表格"
+            assertEquals(raw, SpeechEngine.refine(raw, "请导出EXCEL表格"))
+        }
+        assertEquals("请导出三份EXCEL表格", SpeechEngine.refine("请导出三份EXA表格", "请导出三份EXCEL表格"))
+    }
+
+    @Test fun termRecoveryMustNotRemoveChineseNegation() {
+        for ((raw, candidate) in listOf(
+            "不要用EXA做表格" to "要用EXCEL做表格",
+            "我没用EXA做表格" to "我用EXCEL做表格",
+            "别用EXA做表格" to "用EXCEL做表格"
+        )) {
+            assertEquals(raw, SpeechEngine.refine(raw, candidate))
+            assertEquals(raw, SpeechEngine.refine(raw, candidate, boundaryAgreement = true))
+        }
+        assertEquals("不要用EXCEL做表格", SpeechEngine.refine("不要用EXA做表格", "不要用EXCEL做表格"))
+    }
+
     /** 真实词表来自包内 english-words.txt；单元测试注入固定词集，避免读 Android 资产。 */
     @org.junit.Before fun installEnglishVocabulary() {
-        EnglishVocabulary.install(setOf("excel", "word", "ppt", "wifi", "api", "bug", "offline", "computer", "recognition"))
+        EnglishVocabulary.install(setOf("excel", "word", "ppt", "wifi", "api", "app", "bug", "offline", "computer", "recognition"))
     }
 
     @Test fun formatsSpokenNumbersByDefaultWithoutChangingOrdinaryWords() {
