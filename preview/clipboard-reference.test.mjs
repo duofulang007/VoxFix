@@ -9,6 +9,7 @@ for(const raw of ['mtxw','mingtian','mingtxw','mt','ming'])assert.equal(clipboar
 for(const raw of ['m','nihao','<script>'])assert.equal(clipboardMatch(raw,text),'',raw);
 assert.equal(clipboardMatch('mtxw',text.repeat(4)),text.repeat(4),'Long clips are searchable');
 assert.equal(clipboardMatch('mtxw',text+'\n其他内容'),text+'\n其他内容');
+for(const [raw,value] of [['huangei','文件还给同事'],['shoubuliao','这件事受不了'],['fanqie','晚上做番茄鸡蛋'],['kaihuhang','开户行信息']])assert.equal(clipboardMatch(raw,value),value,'Light dictionary must retain phrase readings: '+raw);
 assert.equal(clipboardMatch('yanzheng','验证码明天下午'),'');
 assert.equal(clipboardMatch('mingtian','明天密码是abc'),'');
 assert.equal(clipboardMatch('mingtian','明天联系13812345678'),'');

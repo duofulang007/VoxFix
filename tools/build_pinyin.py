@@ -53,7 +53,9 @@ for word, _, code in entries:
 data = {'schema': 2, 'syllables': syllables, 'entries': entries, 'characters': characters}
 target = ROOT/'preview/pinyin-data.json'
 target.write_text(json.dumps(data, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
-lite = dict(data, entries=[row for row in entries if len(row[0]) == 1 or row[1] >= 10000])
+# 剪贴板匹配需要所有词组的特殊读音，不能按词频删掉多音字修正。
+lite = dict(data, entries=[row for row in entries if len(row[0]) == 1 or row[1] >= 10000
+                          or len(row[0]) == len(row[2]) and any(code != characters.get(char) for char, code in zip(row[0], row[2]))])
 (ROOT/'preview/pinyin-lite.json').write_text(json.dumps(lite, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
 optional = {}
 for name in ['quotes', 'technology', 'running']:

@@ -15,7 +15,7 @@ clipSearchInput.setAttribute('aria-label','搜索剪贴板');clipSearchInput.pla
 let nativeCursor={position:0,total:0};
 const nativeIme = globalThis.VoxFixIme;
 const hasNativePinyin=typeof nativeIme?.pinyinCandidates==='function';
-const nativePinyinActive=()=>hasNativePinyin&&(!localInput||clipSearch)&&state.language==='zh'&&state.layout==='26'&&nativeIme.pinyinReady();
+const nativePinyinActive=()=>hasNativePinyin&&(!localInput||clipSearch||typeof nativeIme.pinyinChooseLocal==='function')&&state.language==='zh'&&state.layout==='26'&&nativeIme.pinyinReady();
 let fullPinyinLoaded=!hasNativePinyin,fullPinyinLoading=null;
 function loadFullPinyin(){return fullPinyinLoading??=loadPinyin().then(()=>{fullPinyinLoaded=true;updatePhraseOptions();render();});}
 if(nativeIme){document.documentElement.classList.add('native-ime');document.body.append($('phone'));}
@@ -1233,10 +1233,12 @@ function insert(value) { state.clipCandidate='';englishPrefix='';if(nativeIme&&s
 function commit(word) {
   if(!state.comp)return;
   const nativeRows=nativePinyinActive()?JSON.parse(nativeIme.pinyinCandidates(state.comp.raw,state.page==='candidates'?2000:240)):null;
-  if(clipSearch&&localInput&&nativeRows&&typeof nativeIme.pinyinChooseLocal==='function'&&word!==state.comp.raw&&word&&(nativeRows.words||[]).includes(word)){
+  if(localInput&&nativeRows&&typeof nativeIme.pinyinChooseLocal==='function'&&word!==state.comp.raw&&word&&(nativeRows.words||[]).includes(word)){
     const selected=JSON.parse(nativeIme.pinyinChooseLocal(state.comp.raw,word));
     if(!selected.committed){toast('未能选词，请重试');return;}
     const previous=state.comp,remaining=selected.remaining||'';
+    recordChoice(previous.raw.slice(0,previous.raw.length-remaining.length),word,nativeRows.preedit);
+    if(!clipSearch)rememberContext(word);
     applyText(replaceRange(editor.value,previous.start,previous.start+previous.raw.length,word+remaining));
     state.comp=remaining?{start:previous.start+word.length,raw:remaining}:null;
     if(state.page==='candidates')state.page='letters';return;
@@ -1431,7 +1433,7 @@ function activate(action,value='') {
     case 'group-undo': clipMenu=null;undoGroupDelete();break;
     case 'clip-confirm-cancel': state.clipConfirm=null;break;
     case 'clip-confirm-ok': { const pending=state.clipConfirm;state.clipConfirm=null;if(!pending)break;
-      if(pending.action==='clip-manage-delete'){removeSnippets(text=>state.clipSelected.includes(text));state.clipSelected=[];}
+      if(pending.action==='clip-manage-delete'){if(removeSnippets(text=>state.clipSelected.includes(text)))state.clipSelected=[];}
       else if(pending.action==='snippet-delete'){
         if(pending.tab!==state.clipTab||pending.tab==='phrases'&&pending.group!==currentGroup()||!currentList().includes(pending.text)){toast('内容已更新，请重新长按。');break;}
         removeSnippets(text=>text===pending.text);
@@ -1445,7 +1447,7 @@ function activate(action,value='') {
       if(index<0){toast('内容已更新，请重新长按。');render();return;}
       if(action==='context-edit'){openSnippet(index);render();return;}
       if(action==='context-delete'){state.clipConfirm={action:'snippet-delete',text,tab:state.clipTab,group:currentGroup(),title:'是否确定删除该条记录？'};render();return;}
-      if(action==='context-favorite'){try{if(addPhraseItem(phraseGroups[0],text)){snippetUndo=null;saveSnippets();toast('已添加到常用语。');}}catch(error){toast(error.message);}break;}
+      if(action==='context-favorite'){const group=phraseGroups[0],before=[...group.items];try{if(addPhraseItem(group,text)){if(saveSnippets()){snippetUndo=null;toast('已添加到常用语。');}else group.items=before;}}catch(error){toast(error.message);}break;}
       if(nativeIme){nativeIme.copy(text);}else if(!navigator.clipboard?.writeText)toast('系统复制不可用，可短按内容插入输入框后复制。');else navigator.clipboard.writeText(text).catch(()=>toast('系统复制未获授权，可短按内容插入输入框后复制。'));break;
     }
     case 'snippet-add': clipMenu=null;openSnippet();render();return;
@@ -1508,16 +1510,24 @@ for(const event of ['pointerup','pointercancel'])document.addEventListener(event
 for(const event of ['touchend','touchcancel'])document.addEventListener(event,()=>{if(candidateContact!==null)releaseCandidateContact({pointerId:candidateContact});},true);
 window.addEventListener('blur',()=>{candidateContact=null;clearItemHold();if(candidateRenderPending){candidateRenderPending=false;render();}else syncClipboardReference();});
 keyboard.addEventListener('pointerdown',e=>{
-  if(e.button!==0 || gesture) return;
+  if(e.button!==0)return;
+  let source=e.target;
+  if(gesture){
+    if(gesture.id===e.pointerId||gesture.long||!['letter','nine','insert'].includes(gesture.action)||!source.closest('.key'))return;
+    // 第二根手指落下时先提交上一短按，保持按下顺序；长按和连续手势仍独占。
+    const rect=gesture.target.getBoundingClientRect();
+    endGesture({pointerId:gesture.id,clientX:gesture.lastX??rect.left+rect.width/2,clientY:gesture.lastY??gesture.y});
+    source=document.elementFromPoint(e.clientX,e.clientY)||source;
+  }
   consumedClick=null;
-  const row=e.target.closest('.candidate-visible');
+  const row=source.closest('.candidate-visible');
   if(row && e.pointerType==='mouse') {
     e.preventDefault();if(e.isTrusted)keyboard.setPointerCapture(e.pointerId);
     row.classList.add('candidate-dragging');
     gesture={id:e.pointerId,action:'candidate-scroll',x:e.clientX,scroll:row.scrollLeft,row,target:row,dragged:false};
     return;
   }
-  const target=e.target.closest('[data-action]'); if(!target) return;
+  const target=source.closest('[data-action]'); if(!target) return;
   if(target.dataset.action==='split-word'&&clipboardSplit){
     e.preventDefault();keyboard.setPointerCapture(e.pointerId);
     const start=Number(target.dataset.value),base=[...clipboardSplit.selected];
@@ -1774,6 +1784,7 @@ function beginToolbarDrag(hold){
   try{keyboard.setPointerCapture(hold.id);}catch{}
 }
 function clearToolbarDrag(){
+  clearTimeout(toolbarHold?.timer);toolbarHold=null;
   if(!toolbarDrag)return null;
   const drag=toolbarDrag;toolbarDrag=null;
   toolbarNodes().forEach(node=>node.classList.remove('toolbar-drag','drop-target','drop-remove'));
@@ -1872,7 +1883,7 @@ document.addEventListener('pointerdown',e=>{
   hold.timer=setTimeout(()=>{if(editorHold!==hold)return;const head=editor.selectionDirection==='backward'?editor.selectionStart:editor.selectionEnd;selectionLocked=true;lockedSelection={editor,text:editor.value,anchor:head};localSelection={editor,text:editor.value,anchor:head,head};editor.setSelectionRange(head,head);selectedCount=0;state.selectionActions=true;render();},cursorHoldDelay);
 });
 for(const event of ['pointerup','pointercancel','pointermove'])document.addEventListener(event,e=>{if(editorHold&&e.pointerId===editorHold.id&&(event!=='pointermove'||Math.hypot(e.clientX-editorHold.x,e.clientY-editorHold.y)>8)){clearTimeout(editorHold.timer);editorHold=null;}});
-document.addEventListener('visibilitychange',()=>{ if(document.hidden) {clearTimeout(editorHold?.timer);editorHold=null;if(state.voice)preserveVoice(state.voice);if(gesture)endGesture({pointerId:gesture.id},true); } });
+document.addEventListener('visibilitychange',()=>{ if(document.hidden) {clearItemHold();clearTimeout(editorHold?.timer);editorHold=null;if(state.voice)preserveVoice(state.voice);if(gesture)endGesture({pointerId:gesture.id},true); } });
 document.addEventListener('compositionstart',e=>{if(e.target!==editor)return;nativeComposition=true;state.comp=null;render();});
 document.addEventListener('compositionend',e=>{if(e.target!==editor)return;nativeComposition=false;state.comp=null;render();});
 document.addEventListener('input',e=>{
@@ -2017,16 +2028,17 @@ if(nativeIme){
   globalThis.voxfixRedraw=()=>render();
   globalThis.voxfixStartInput=(type,restarting,options=0)=>{
     const wasSplit=Boolean(clipboardSplit);endClipboardSplit();
-    const previous=enterLabel;noPersonalizedLearning=Boolean(options&0x1000000);
+    const previous=enterLabel,previousLearning=noPersonalizedLearning;noPersonalizedLearning=Boolean(options&0x1000000);
     enterLabel=options&0x40000000?'换行':({2:'前往',3:'搜索',4:'发送',5:'下一项',6:'完成',7:'上一项'}[options&255]||'换行');
     if(!restarting){globalThis.voxfixReset();globalThis.voxfixInputType(type);}
     else if(inputType!==null&&inputForm(inputType)!==inputForm(type)){globalThis.voxfixClearComposition();englishPrefix='';state.page='letters';globalThis.voxfixInputType(type);}
     else{
       const wasPrivate=privateField;privateField=isPrivateField(type);
       if(privateField&&!wasPrivate)globalThis.voxfixClearComposition();
-      if(previous!==enterLabel||wasPrivate!==privateField)render();
+      if(previous!==enterLabel||wasPrivate!==privateField||previousLearning!==noPersonalizedLearning)render();
     }
     inputType=type;
+    if(previousLearning!==noPersonalizedLearning)syncClipboardReference();
     if(wasSplit)render();
   };
   globalThis.voxfixVoiceDone=message=>{exitVoice();if(message)toast(message);};
