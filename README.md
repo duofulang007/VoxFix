@@ -17,7 +17,9 @@ VoxFix 是一个安装后可在系统里独立选择的自有 Android 输入法�
   （松手**先定稿上屏**，420ms 内只在原输入框、原位置、原文字未变时改写并补标点数字，不再占用拼音组合区）+
   silero VAD（阈值 0.4）断句；VAD 边界前后各补 160ms 原音频，短词与否定补全要求「补边界 / 原裁剪」两次识别
   一致才采用，金额单位结构不一致则拒绝二遍覆盖；另有独立 CT-Transformer 标点在二遍超时退路时补位。
-  长按空格 300ms 进入语音，上滑取消、松手结束。普通打字不加载语音，使用后空闲 30 秒释放；二遍后台加载。
+  长按空格 300ms 进入语音，上滑取消、松手结束。普通打字不加载语音，使用后空闲 30 秒释放；二遍随语音启动并行加载。
+  2026-10-19 又补了英文术语数量保护、中文否定保护、混说局部术语恢复（`SpeechEnglishRecovery.kt`）与迟到的单句标点复用，
+  并修掉键盘刚打开时短暂闪出试用页的问题。
   见[收尾预算](docs/语音二遍收尾预算与通用模型-2026-10-18.md)与[边界修复](docs/普通话边界与二遍采用修复-2026-10-19.md)。
 - 底部滑轨：碰一下即可拖动光标，离触控点越远走得越快（跟手 / 高速两档）；长按在「起点锁定」与「自由移动」
   之间切换，锁定时把光标钉成起点并呼出右侧编辑框，收起面板不等于解锁。
@@ -55,8 +57,8 @@ pwsh -ExecutionPolicy Bypass -File tools/build_android.ps1
 ```
 
 脚本会按固定摘要准备 JDK / Gradle / SDK / Build-Tools / sherpa-onnx AAR，然后执行
-`testDebugUnitTest assembleDebug`。产物在 `android/app/build/outputs/apk/debug/app-debug.apk`，
-**不会自动安装**。拼音 JNI 由 gradle 任务 `buildPinyinNative` 调用 `tools/build_pinyin_rime.py` 编译，
+`testDebugUnitTest assembleDebug`。产物在 `android/app/build/outputs/apk/debug/app-debug.apk`（约 486 MB，四个模型全打包），
+**不会自动安装**。包体与手机占用的实测口径见[体积与内存优化](docs/体积与内存优化-2026-10-19.md)。拼音 JNI 由 gradle 任务 `buildPinyinNative` 调用 `tools/build_pinyin_rime.py` 编译，
 前提是 `.android/pinyin-rime/` 已由 `tools/setup_pinyin_rime.py` + `tools/prepare_personal_pinyin.py` 准备好。
 
 > 个人词库与英文词表必须由 `stagePinyin` 打包，再由 `preparePersonalData()` 落到 `filesDir/pinyin-personal/`。
@@ -78,6 +80,7 @@ node preview/core.test.mjs
 | 拼音与英文 | `pinyin`、`english` |
 | 原生桥与语音 | `native-ime`、`voice-orb`、`system-audit`、`ime-regressions` |
 | 按键与剪贴板审计 | `functional-audit`（双指交错输入、共享编辑框原生候选、保存失败、长按生命周期） |
+| 启动与加载 | `startup`（入口与依赖延迟加载时都不闪出试用页） |
 
 真机脚本（`preview/*-device.test.mjs`）需要先用 `adb forward` 把 IME WebView 的 devtools 端口转到本机，
 并且手机操作要由使用者实际完成。
