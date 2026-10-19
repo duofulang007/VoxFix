@@ -14,9 +14,11 @@ VoxFix 是一个安装后可在系统里独立选择的自有 Android 输入法�
 - **中文拼音走原生 librime 1.17.0**：`PinyinEngine.kt` + `cpp/rime_jni.cpp` → `libvoxfix_rime.so`，
   词库为 luna_pinyin 加个人词条，并保留 speller `algebra` 简拼修复。
 - **语音走 sherpa-onnx 1.13.8**：Zipformer 中英流式（第一遍，边说边进输入框）+ SenseVoice 通用版第二遍
-  （松手**先上屏实时文字**，二遍回来在 composing 内改写并补标点数字）+ silero VAD（阈值 0.4）断句，
-  另有独立 CT-Transformer 标点在二遍超时退路时补位。长按空格 300ms 进入语音，上滑取消、松手结束。
-  普通打字不加载语音，使用后空闲30秒释放；二遍后台加载，见[语音收尾预算](docs/语音二遍收尾预算与通用模型-2026-10-18.md)。
+  （松手**先定稿上屏**，420ms 内只在原输入框、原位置、原文字未变时改写并补标点数字，不再占用拼音组合区）+
+  silero VAD（阈值 0.4）断句；VAD 边界前后各补 160ms 原音频，短词与否定补全要求「补边界 / 原裁剪」两次识别
+  一致才采用，金额单位结构不一致则拒绝二遍覆盖；另有独立 CT-Transformer 标点在二遍超时退路时补位。
+  长按空格 300ms 进入语音，上滑取消、松手结束。普通打字不加载语音，使用后空闲 30 秒释放；二遍后台加载。
+  见[收尾预算](docs/语音二遍收尾预算与通用模型-2026-10-18.md)与[边界修复](docs/普通话边界与二遍采用修复-2026-10-19.md)。
 - 底部滑轨：碰一下即可拖动光标，离触控点越远走得越快（跟手 / 高速两档）；长按在「起点锁定」与「自由移动」
   之间切换，锁定时把光标钉成起点并呼出右侧编辑框，收起面板不等于解锁。
 - **删除键有独立连删曲线**（90ms 起步到 30ms 封底），与滑轨摇杆分档速度互不影响，见
@@ -75,6 +77,7 @@ node preview/core.test.mjs
 | 剪贴板与词库 | `clipboard-search`、`clipboard-match-ime`、`clipboard-reference`、`clipboard-panel-search`、`split`、`learning`、`learning-ime`、`lexicon`、`lexicon-browser` |
 | 拼音与英文 | `pinyin`、`english` |
 | 原生桥与语音 | `native-ime`、`voice-orb`、`system-audit`、`ime-regressions` |
+| 按键与剪贴板审计 | `functional-audit`（双指交错输入、共享编辑框原生候选、保存失败、长按生命周期） |
 
 真机脚本（`preview/*-device.test.mjs`）需要先用 `adb forward` 把 IME WebView 的 devtools 端口转到本机，
 并且手机操作要由使用者实际完成。
