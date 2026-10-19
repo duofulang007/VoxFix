@@ -254,6 +254,14 @@ class SpeechEngineTest {
         }
     }
 
+    @Test fun punctuationCannotChangeAmountsDecimalsOrWords() {
+        assertEquals("这件衣服128元5角。", SpeechEngine.punctuationOnly("这件衣服128元5角。", "这件衣服128元5元角。"))
+        assertEquals("长度是3.5厘米。", SpeechEngine.punctuationOnly("长度是3.5厘米。", "长度是3 . 5厘米。"))
+        assertEquals("不要删除。", SpeechEngine.punctuationOnly("不要删除。", "要删除。"))
+        assertEquals("今天，天气不错。", SpeechEngine.punctuationOnly("今天天气不错", "今天，天气不错。"))
+        assertEquals("这个 bug 修好了。", SpeechEngine.punctuationOnly("这个bug修好了", "这个 bug 修好了。"))
+    }
+
     /**
      * 松手预算只给「最后一句 + 二遍已加载」。
      *

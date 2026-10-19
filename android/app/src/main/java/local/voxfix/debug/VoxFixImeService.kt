@@ -81,22 +81,12 @@ class VoxFixImeService : InputMethodService() {
     private var voiceStart = 0
     private var selectedBeforeVoice = ""
     private var streamedText = ""
-    /** 「先上屏、后改写」：松手立刻结束录音，composing 区域留一小段窗口等二遍回来。 */
-    private var voiceFinalText = ""
-    private var voiceRefineArmed = false
+    private var voiceRefinement: VoiceRefinement? = null
     private val finishVoiceComposition = Runnable {
-        if (!voiceRefineArmed) return@Runnable
-        voiceRefineArmed = false
-        val text = voiceFinalText
-        voiceFinalText = ""
-        val connection = currentInputConnection
-        if (text.isNotBlank() && connection != null) {
-            val kept = connection.getTextBeforeCursor(text.length, 0)?.toString() == text
-            connection.finishComposingText()
-            if (kept && !localVoice) armVoiceLearning(text)
-        }
-        streamedText = ""
-        selectedBeforeVoice = ""
+        val pending = voiceRefinement
+        val empty = pending?.text?.isEmpty() == true && pending.matches(currentInputConnection, inputGeneration)
+        finishVoiceRefinement()
+        if (empty) voiceDone("没有识别到文字")
     }
     private var localVoice = false
     private var searchInputActive = false
@@ -385,6 +375,7 @@ class VoxFixImeService : InputMethodService() {
     private fun script(code: String) { web?.evaluateJavascript(code, null) }
     private fun voiceDone(message: String = "") { script("globalThis.voxfixVoiceDone?.(${JSONObject.quote(message)})") }
     private fun setSearchInputActive(active: Boolean) {
+        if (active) finishVoiceRefinement()
         searchInputActive = active
         if (android.os.Build.VERSION.SDK_INT >= 31) currentInputConnection?.setImeConsumesInput(active)
     }
@@ -440,6 +431,7 @@ class VoxFixImeService : InputMethodService() {
 
     override fun onStartInput(info: EditorInfo, restarting: Boolean) {
         super.onStartInput(info, restarting)
+        if (!restarting) finishVoiceRefinement()
         if (!restarting || !VoiceCorrectionTracker.allowed(info.inputType, info.imeOptions)) resetVoiceLearning()
         clipboardSplit = null
         if (!restarting) {
@@ -642,6 +634,7 @@ class VoxFixImeService : InputMethodService() {
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        finishVoiceRefinement()
         flushVoiceLearning()
         resetVoiceLearning()
         setSearchInputActive(false)
@@ -660,6 +653,7 @@ class VoxFixImeService : InputMethodService() {
     }
 
     override fun onFinishInput() {
+        finishVoiceRefinement()
         flushVoiceLearning()
         resetVoiceLearning()
         setSearchInputActive(false)
@@ -807,9 +801,7 @@ class VoxFixImeService : InputMethodService() {
 
     private fun beginVoice(local: Boolean = false) {
         if (busy) { voiceDone("上一段语音正在结束，请稍后再试"); return }
-        // 上一段可能还在 420ms 的改写窗口里：先把它结清，避免两段文字抢同一个 composing 区域。
-        main.removeCallbacks(finishVoiceComposition)
-        if (voiceRefineArmed) finishVoiceComposition.run()
+        finishVoiceRefinement()
         flushVoiceLearning()
         resetVoiceLearning()
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -840,6 +832,18 @@ class VoxFixImeService : InputMethodService() {
         capturing.set(true)
         Log.i("VoxFix", "IME_STREAM_STARTED")
         var updates = 0
+        var resultDelivered = false
+        var earlyRefined = ""
+        fun applyRefined(refined: String) {
+            if (!shown || inputGeneration != targetGeneration || ticket != current) return
+            if (!resultDelivered) { earlyRefined = refined; return }
+            val pending = voiceRefinement ?: return
+            if (refined != pending.text && pending.apply(currentInputConnection, targetGeneration, refined)) {
+                ownSelectionUntil = SystemClock.uptimeMillis() + 250
+                streamedText = refined
+                Log.i("VoxFix", "IME_REFINE_APPLIED characters=${refined.length}")
+            }
+        }
         worker.execute {
             var received = ""
             try {
@@ -865,46 +869,33 @@ class VoxFixImeService : InputMethodService() {
                     } }, { capture ->
                         microphoneCapture = capture
                         if (!capturing.get()) capture?.stop()
-                    }, { refined -> main.post {
-                        // 二遍在窗口内跑完：只改还没离开 composing 的那段文字；用户已打字或换框就不动。
-                        if (shown && voiceRefineArmed && !localVoice && inputGeneration == targetGeneration &&
-                            refined.isNotBlank() && refined != voiceFinalText) {
-                            val connection = currentInputConnection
-                            val untouched = connection?.getTextBeforeCursor(voiceFinalText.length, 0)?.toString() == voiceFinalText
-                            if (untouched && connection?.setComposingText(refined, 1) == true) {
-                                voiceFinalText = refined
-                                streamedText = refined
-                                Log.i("VoxFix", "IME_REFINE_APPLIED characters=${refined.length}")
-                            } else Log.i("VoxFix", "IME_REFINE_SKIPPED")
-                        }
-                    } })
+                    }, if (local) null else { refined -> main.post { applyRefined(refined) }; Unit })
                 }
                 capturing.set(false)
                 val result = received
                 main.post {
                     if (shown && inputGeneration == targetGeneration && session.consume(current)) {
-                        if (result.isNotBlank()) {
-                            if (local) {
+                        resultDelivered = true
+                        if (local) {
+                            if (result.isNotBlank()) {
                                 script("globalThis.voxfixVoiceText?.(${JSONObject.quote(result)})")
                                 Log.i("VoxFix", "IME_STREAM_FINISHED updates=$updates characters=${result.length}")
                                 voiceDone("")
-                                streamedText = ""; selectedBeforeVoice = ""
-                            } else {
-                                // 先上屏：实时文字原地留在 composing 里，二遍回来再改写（最多 420ms）。
-                                val written = currentInputConnection?.setComposingText(result, 1) == true
-                                if (written) {
-                                    voiceFinalText = result
-                                    streamedText = result
-                                    voiceRefineArmed = true
-                                    main.removeCallbacks(finishVoiceComposition)
-                                    main.postDelayed(finishVoiceComposition, VOICE_REFINE_WINDOW_MS)
-                                    Log.i("VoxFix", "IME_STREAM_FINISHED updates=$updates characters=${result.length} committed=true")
-                                }
-                                voiceDone(if (written) "" else "当前输入框未接受文字")
-                            }
-                        } else {
-                            voiceDone("没有识别到文字")
+                            } else voiceDone("没有识别到文字")
                             streamedText = ""; selectedBeforeVoice = ""
+                        } else {
+                            val connection = currentInputConnection
+                            // 定稿后不再占拼音组合区；空首结果也保留一次安全补词机会。
+                            val written = connection != null && (result.isEmpty() || connection.commitText(result, 1))
+                            if (written) {
+                                streamedText = result
+                                voiceRefinement = VoiceRefinement(checkNotNull(connection), targetGeneration, voiceStart, result)
+                                    .takeIf { it.matches(connection, inputGeneration) }
+                                main.postDelayed(finishVoiceComposition, VOICE_REFINE_WINDOW_MS)
+                                applyRefined(earlyRefined)
+                                Log.i("VoxFix", "IME_STREAM_FINISHED updates=$updates characters=${result.length} committed=true")
+                            }
+                            voiceDone(if (!written) "当前输入框未接受文字" else "")
                         }
                     }
                 }
@@ -925,6 +916,15 @@ class VoxFixImeService : InputMethodService() {
         }
     }
 
+    private fun finishVoiceRefinement() {
+        main.removeCallbacks(finishVoiceComposition)
+        val pending = voiceRefinement ?: return
+        voiceRefinement = null
+        if (pending.text.isNotBlank() && pending.matches(currentInputConnection, inputGeneration)) armVoiceLearning(pending.text)
+        streamedText = ""
+        selectedBeforeVoice = ""
+    }
+
     inner class KeyboardBridge(private val owner: WebView) {
         @JavascriptInterface fun searchFocus(active: Boolean) {
             val generation = inputGeneration
@@ -934,7 +934,7 @@ class VoxFixImeService : InputMethodService() {
             val generation = inputGeneration
             val result = FutureTask {
                 if (web !== owner || !shown || generation != inputGeneration) "{}"
-                else try { action() } catch (error: Exception) { Log.e("VoxFix", "IME_INPUT_REPLY_FAILED", error); "{}" }
+                else try { finishVoiceRefinement(); action() } catch (error: Exception) { Log.e("VoxFix", "IME_INPUT_REPLY_FAILED", error); "{}" }
             }
             main.post(result)
             return result.get()
@@ -942,6 +942,7 @@ class VoxFixImeService : InputMethodService() {
         private fun editInput(marksSelection: Boolean = true, action: () -> Unit) {
             val generation = inputGeneration
             main.post { if (web === owner && shown && generation == inputGeneration) navigation.run { if (web === owner && shown && generation == inputGeneration) {
+                finishVoiceRefinement()
                 if (marksSelection) {
                     hostSelectionOpen?.let { main.removeCallbacks(it) }; hostSelectionOpen = null
                     selectionDrag.cancelHostSelection()
@@ -1354,6 +1355,7 @@ class VoxFixImeService : InputMethodService() {
     }
 
     override fun onDestroy() {
+        finishVoiceRefinement()
         resetVoiceLearning()
         setSearchInputActive(false)
         destroyed = true

@@ -95,7 +95,11 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             loaded("vad")
             // 术语判定用的英文词表（包内 rime-ice 词表）：后台读一次，不占出字路径。
             Thread({
-                try { EnglishVocabulary.load(assets) }
+                try {
+                    EnglishVocabulary.load(assets)
+                    // ICU's first transliterator load otherwise consumes the short-word correction window.
+                    VoiceLanguage.phonetic("")
+                }
                 catch (error: Throwable) { Log.w("VoxFix", "ASR_VOCAB_UNAVAILABLE", error) }
             }, "VoxFix-vocab").apply { isDaemon = true; start() }
             // Defer pass 2 until live text has started, so cold streaming gets the CPU first.
@@ -156,6 +160,9 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
         }
         // Pass 2 needs a whole utterance, so audio stays buffered until VAD reports a pause.
         val utterance = mutableListOf<FloatArray>()
+        val originalUtterance = mutableListOf<FloatArray>()
+        val audio = SpeechAudioWindow(SAMPLE_RATE * 32)
+        var paddedEnd = 0
         var utteranceSamples = 0
         var streamingOnly = false
         var fedSamples = 0
@@ -167,15 +174,24 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
         var early: Future<SecondPass>? = null
         var earlySegments = -1
 
-        fun decodeSecondPass(samples: FloatArray): SecondPass {
+        fun decodeSecondPass(samples: FloatArray, original: FloatArray, raw: String): SecondPass {
             val offline = secondPass()
-            val second = offline.createStream()
-            return try {
-                second.acceptWaveform(samples, SAMPLE_RATE)
-                offline.decode(second)
-                val result = offline.getResult(second)
-                SecondPass(clean(result.text), result.lang)
-            } finally { second.release() }
+            fun decode(input: FloatArray): SecondPass {
+                val second = offline.createStream()
+                return try {
+                    second.acceptWaveform(input, SAMPLE_RATE)
+                    offline.decode(second)
+                    val result = offline.getResult(second)
+                    SecondPass(clean(result.text), result.lang)
+                } finally { second.release() }
+            }
+            val result = decode(samples)
+            if (original.isEmpty() || samples.contentEquals(original)) return result
+            // Mandarin boundary padding can change Cantonese wording; keep its established VAD audio view.
+            if (result.lang == "<|yue|>") return decode(original)
+            if (!SpeechEvidence.needsBoundaryConfirmation(raw, result.text)) return result
+            val confirmation = decode(original)
+            return SecondPass(result.text, result.lang, result.lang == confirmation.lang && comparable(result.text) == comparable(confirmation.text))
         }
 
         /**
@@ -201,10 +217,12 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             // 既没有 VAD 音频、也没有流式文字时才真的没有东西可提交。
             if (streaming.isBlank() && utterance.isEmpty() && !streamingOnly) return
             val samples = if (!streamingOnly && !isCancelled()) concat(utterance) else FloatArray(0)
+            val original = if (!streamingOnly && !isCancelled()) concat(originalUtterance) else FloatArray(0)
             val merged = utteranceSegments
             // Diagnostic only: fixed-audio runs need the segment's audio range and live text.
             Log.i("VoxFix", "ASR_SEG n=${segments.size + 1} fedMs=${fedSamples / 16} audioMs=${utteranceSamples / 16} text=$streaming")
             utterance.clear()
+            originalUtterance.clear()
             utteranceSamples = 0
             streamingOnly = false
             silenceSamples = 0
@@ -213,12 +231,12 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             val pending = when {
                 early != null && earlySegments == merged -> early
                 samples.isEmpty() -> null
-                else -> submitSecond { decodeSecondPass(samples) }
+                else -> submitSecond { decodeSecondPass(samples, original, streaming) }
             }
             early = null
             earlySegments = -1
             segments.add(SpeechSegment(streaming, pending) { raw, second ->
-                val refined = refine(raw, second.text, second.lang)
+                val refined = refine(raw, second.text, second.lang, second.boundaryAgreement, VoiceLanguage::phonetic)
                 dictionary.protect(raw, refined, VoiceLanguage::phonetic)
             })
             recognizer.reset(stream)
@@ -227,13 +245,20 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
         /** Pull every completed segment out of VAD and append its audio to the current utterance. */
         fun drainUtterance() {
             while (!detector.empty()) {
-                val segment = detector.front().samples
-                if (!streamingOnly && segment.isNotEmpty()) {
-                    utteranceSamples += segment.size
+                val segment = detector.front()
+                val first = maxOf(paddedEnd, (segment.start - SECOND_PASS_BOUNDARY_SAMPLES).coerceAtLeast(0))
+                val last = minOf(audio.end, segment.start + segment.samples.size + SECOND_PASS_BOUNDARY_SAMPLES)
+                val padded = if (last > first) audio.read(first, last) else FloatArray(0)
+                paddedEnd = maxOf(paddedEnd, last)
+                if (!streamingOnly && segment.samples.isNotEmpty()) {
+                    utteranceSamples += padded?.size ?: 0
                     // Continuous speech beyond 30s keeps streaming; do not buffer six minutes for pass 2.
-                    if (utteranceSamples > SAMPLE_RATE * 30) {
-                        utterance.clear(); utteranceSamples = 0; streamingOnly = true
-                    } else utterance.add(segment)
+                    if (padded == null || utteranceSamples > SAMPLE_RATE * 30) {
+                        utterance.clear(); originalUtterance.clear(); utteranceSamples = 0; streamingOnly = true
+                    } else {
+                        utterance.add(padded)
+                        originalUtterance.add(segment.samples)
+                    }
                 }
                 detector.pop()
                 utteranceSegments++
@@ -245,6 +270,7 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
                 val samples = nextChunk() ?: break
                 if (isCancelled()) return ""
                 fedSamples += samples.size
+                audio.append(samples)
                 stream.acceptWaveform(samples, SAMPLE_RATE)
                 detector.acceptWaveform(samples)
                 while (recognizer.isReady(stream)) recognizer.decode(stream)
@@ -259,7 +285,9 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
                         earlySegments = utteranceSegments
                         early = null
                         val paused = concat(utterance)
-                        if (paused.isNotEmpty()) early = submitSecond { decodeSecondPass(paused) }
+                        val original = concat(originalUtterance)
+                        val raw = clean(recognizer.getResult(stream).text)
+                        if (paused.isNotEmpty()) early = submitSecond { decodeSecondPass(paused, original, raw) }
                     }
                     silenceSamples += samples.size
                     if (silenceSamples >= COMMIT_SILENCE_SAMPLES) commitSegment()
@@ -340,7 +368,7 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
     private fun restorePunctuation(text: String): String {
         val marked = if (needsPunctuationModel(text)) {
             val stripped = stripSentencePunctuation(text)
-            punctuator.add(stripped)?.let { dedupePunctuation(it) } ?: text
+            punctuator.add(stripped)?.let { punctuationOnly(text, it) } ?: text
         } else text
         return punctuate(formatNumbers(marked))
     }
@@ -445,6 +473,8 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
         const val VAD_THREADS = 1
         /** silero 判人声的概率阈值；0.5（上游默认）会吞掉句首轻声，见 init 里的实测。 */
         const val VAD_THRESHOLD = 0.4f
+        /** Fixed quiet/short/long Mandarin audio recovers clipped syllables with 160 ms on both edges. */
+        const val SECOND_PASS_BOUNDARY_SAMPLES = SAMPLE_RATE * 160 / 1000
         const val AUDIO_CHUNK_SAMPLES = 320
         /**
          * VAD 报出停顿后还要等多久才真的切段。
@@ -620,7 +650,8 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
          * 那串必然是同音汉字，相似度天然极低；此时按 [adoptsForeign] 走整句采用，不比较相似度。
          * [lang] 为空表示调用方没拿到标签（旧调用、单元测试），行为与只比文本时完全一致。
          */
-        fun refine(raw: String, candidate: String, lang: String = ""): String {
+        fun refine(raw: String, candidate: String, lang: String = "", boundaryAgreement: Boolean = false,
+                   phonetic: ((String) -> String)? = null): String {
             if (candidate.isEmpty()) return raw
             if (raw.isEmpty()) return candidate
             if (adoptsForeign(raw, candidate, lang)) return candidate
@@ -629,6 +660,7 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             // 术语替换会顺手少掉中文字（`一笑` 里的 `一` 会被 NUMBER_RUN 当成数字），
             // 所以这一种情形单独用数字子序列判断，其余仍按归一形态严格比。
             val term = said != heard && prefersKnownEnglish(raw, candidate, said, heard)
+            if (!SpeechEvidence.sameMoney(raw, candidate)) return raw
             // 数值按归一后的形态比，「十点」与「10点」应当等价。
             if (!term && numericTokens(raw) != numericTokens(candidate)) return raw
             if (said != heard) {
@@ -638,6 +670,7 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
             }
             val a = comparable(raw)
             val b = comparable(candidate)
+            if (boundaryAgreement && SpeechEvidence.acceptsBoundaryCorrection(a, b, phonetic)) return candidate
             // 否定词一旦不同，说明二遍真的动了内容，必须保守退回。
             if (Regex("不|没|未|别|无|勿").findAll(a).map { it.value }.toList() !=
                 Regex("不|没|未|别|无|勿").findAll(b).map { it.value }.toList()) return raw
@@ -783,6 +816,13 @@ class SpeechEngine internal constructor(assets: AssetManager, private var person
         fun stripSentencePunctuation(text: String) = SENTENCE_MARKS.replace(text, "")
         /** 二次防御：模型偶尔仍在残留标点后追加，相邻重复只留一个。 */
         fun dedupePunctuation(text: String) = REPEATED_MARK.replace(text, "$1")
+
+        internal fun punctuationOnly(original: String, candidate: String): String {
+            fun content(text: String) = text.filterNot { it.isWhitespace() || it in PUNCTUATION }
+            // 标点模型也会拆小数或改正文；只允许句读变化。
+            return if (content(original) == content(candidate) && numericTokens(original) == numericTokens(candidate))
+                dedupePunctuation(candidate) else original
+        }
         /** 引号与括号：模型处理这些会插错逗号，出现即不交给模型。 */
         private const val QUOTE_OR_BRACKET = "\"'「」『』“”‘’（）()《》【】〈〉〔〕"
         /** 纯英文句首疑问词：没有模型兜底时用它决定问号还是句号。 */

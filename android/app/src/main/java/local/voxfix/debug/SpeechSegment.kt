@@ -12,11 +12,11 @@ import java.util.concurrent.TimeoutException
  * 语种由二遍自己判（`language = "auto"`），调用方不再假设是中文：粤语/日/韩的整句采用逻辑
  * 依赖这个标签，见 [SpeechEngine.refine]。
  */
-internal class SecondPass(val text: String, val lang: String)
+internal class SecondPass(val text: String, val lang: String, val boundaryAgreement: Boolean = false)
 
 /** Live text never waits; final release may give the last segment a bounded correction budget. */
 internal class SpeechSegment(private var text: String, private var second: Future<SecondPass>?,
-    private val choose: (String, SecondPass) -> String = { raw, candidate -> SpeechEngine.refine(raw, candidate.text, candidate.lang) }) {
+    private val choose: (String, SecondPass) -> String = { raw, candidate -> SpeechEngine.refine(raw, candidate.text, candidate.lang, candidate.boundaryAgreement) }) {
     fun current(): String {
         val pending = second ?: return text
         if (!pending.isDone) return text
@@ -41,8 +41,8 @@ internal class SpeechSegment(private var text: String, private var second: Futur
         return result
     }
 
-    /** 松手时还没跑完的二遍：调用方可以让它继续跑，稍后取结果改写。 */
-    fun pending(): Boolean = second?.let { !it.isDone } ?: false
+    /** 二遍结果还未读取；完成与交接同时发生时也必须补发。 */
+    fun pending(): Boolean = second != null
 
     /** 等二遍跑完再给出这段话的最终文本；超时或失败返回 null（调用方保持原样）。 */
     fun awaitRefined(ms: Long): String? {

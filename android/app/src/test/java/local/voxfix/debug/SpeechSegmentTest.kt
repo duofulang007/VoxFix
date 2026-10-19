@@ -5,6 +5,17 @@ import org.junit.Test
 import java.util.concurrent.FutureTask
 
 class SpeechSegmentTest {
+    @Test fun boundaryAgreementSurvivesSegmentDeliveryWithoutBypassingNumericProtection() {
+        for ((candidate, agreement, expected) in listOf(
+            Triple("不要取消订单。", true, "不要取消订单。"),
+            Triple("不要取消订单。", false, "要取消订单"))) {
+            val pending = FutureTask { SecondPass(candidate, "<|zh|>", agreement) }.apply { run() }
+            assertEquals(expected, SpeechSegment("要取消订单", pending).finish())
+        }
+        val changedAmount = FutureTask { SecondPass("花了5角。", "<|zh|>", true) }.apply { run() }
+        assertEquals("花了5元", SpeechSegment("花了5元", changedAmount).finish())
+    }
+
     @Test fun liveTextAndReleaseNeverWaitForAnUnfinishedSecondPass() {
         val pending = FutureTask { SecondPass("10点。", "<|zh|>") }
         val segment = SpeechSegment("十点", pending)
@@ -68,5 +79,15 @@ class SpeechSegmentTest {
         val pending = FutureTask { SecondPass("二遍", "<|zh|>") }
         assertEquals("原文", SpeechSegment("原文", pending).finish(10))
         org.junit.Assert.assertTrue(pending.isCancelled)
+    }
+
+    @Test fun completedButUnreadSecondPassStillNeedsLateDelivery() {
+        val pending = FutureTask { SecondPass("Apple.", "<|en|>") }
+        val segment = SpeechSegment("", pending)
+        assertEquals("", segment.finish(0, cancel = false))
+        pending.run()
+        org.junit.Assert.assertTrue("Completion between release and handoff must not lose the result", segment.pending())
+        assertEquals("Apple.", segment.awaitRefined(1))
+        org.junit.Assert.assertFalse(segment.pending())
     }
 }
