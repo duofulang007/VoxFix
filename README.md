@@ -13,14 +13,14 @@ VoxFix 是一个安装后可在系统里独立选择的自有 Android 输入法�
   键盘高度／字号／间距／圆角／背景按官方截图固定，不提供尺寸自定义。
 - **中文拼音走原生 librime 1.17.0**：`PinyinEngine.kt` + `cpp/rime_jni.cpp` → `libvoxfix_rime.so`，
   词库为 luna_pinyin 加个人词条，并保留 speller `algebra` 简拼修复。
-- **语音走 sherpa-onnx 1.13.8**：Zipformer 中英流式（第一遍，边说边进输入框）+ SenseVoice 通用版第二遍
-  （松手**先定稿上屏**，420ms 内只在原输入框、原位置、原文字未变时改写并补标点数字，不再占用拼音组合区）+
-  silero VAD（阈值 0.4）断句；VAD 边界前后各补 160ms 原音频，短词与否定补全要求「补边界 / 原裁剪」两次识别
-  一致才采用，金额单位结构不一致则拒绝二遍覆盖；另有独立 CT-Transformer 标点在二遍超时退路时补位。
-  长按空格 300ms 进入语音，上滑取消、松手结束。普通打字不加载语音，使用后空闲 30 秒释放；二遍随语音启动并行加载。
-  2026-10-19 又补了英文术语数量保护、中文否定保护、混说局部术语恢复（`SpeechEnglishRecovery.kt`）与迟到的单句标点复用，
-  并修掉键盘刚打开时短暂闪出试用页的问题。
-  见[收尾预算](docs/语音二遍收尾预算与通用模型-2026-10-18.md)与[边界修复](docs/普通话边界与二遍采用修复-2026-10-19.md)。
+- **语音走桌面R5的本地流程**：sherpa-onnx 1.13.8 + SenseVoiceSmall R5 INT8（两线程、自动语种、ITN 关闭）
+  + silero VAD + CT-Transformer 标点；不再打包 Zipformer，旧的流式+二遍引擎已删除。
+  长按空格240ms进入，上滑取消、松手完成定稿；键盘出现即预热，空闲5分钟释放模型，单轮最多3分钟。
+  文本层只有一条管线：定稿 → CTC 热词救援 → 个人词典 → 标点。不保存日常录音或转写。
+  见[接入与安装](docs/桌面R5语音接入与安装-2026-10-25.md)；旧双遍机制保留为[历史参考](docs/archive/安卓双遍语音链路-2026-10-25迁移前.md)。
+- **个人词典**：`files/voice-dictionary.json`（与电脑版 `dictionary.json` 同格式）记录「词 / 错法」，
+  功能菜单「词典」页编辑，1:1 复刻桌面模块；自动改字学习已删除，拼音候选记忆仍走 librime `entries`。
+  见[词典与 CTC 救援](docs/桌面词典与CTC热词救援迁移-2026-10-25.md)。
 - 底部滑轨：碰一下即可拖动光标，离触控点越远走得越快（跟手 / 高速两档）；长按在「起点锁定」与「自由移动」
   之间切换，锁定时把光标钉成起点并呼出右侧编辑框，收起面板不等于解锁。
 - **删除键有独立连删曲线**（90ms 起步到 30ms 封底），与滑轨摇杆分档速度互不影响，见
@@ -32,6 +32,11 @@ VoxFix 是一个安装后可在系统里独立选择的自有 Android 输入法�
   点条目引用、长按编辑。引用与剪贴板编辑共用「取消 / 拆词 / 保存」编辑框。
 - **拼音个性化学习**：原生成功选词同步到本地记忆，补齐分段短语、全拼／简拼／混拼共享召回与接续联想；
   全量个人词库默认开启并支持完整备份／通用文本导出与合并导入，不保存日常上屏文本，不联网。
+- **表情包同屏搜索**：工具栏笑脸进入，搜索框、结果与自有键盘同屏，停顿300ms 自动查询；无分组、相关标签
+  与 Emoji/颜文字分区。图源按用户选择暂留搜狗，微信 App 内同源未确认，
+  见[同屏搜索](docs/表情包同屏搜索-2026-10-19.md)。
+- **横屏独立适配**：键盘约 258dp、字母区约 696dp 居中、不保留竖屏底栏；旋转后窗口边界、可见高度与
+  页面状态恢复，见[横屏适配](docs/横屏适配-2026-10-25.md)。
 - **手写已移除**：停用源码、测试与配套许可已删除，可从Git历史追溯；不打包手写模型或运行库。
 - **安卓端 Qwen 本地整理已移除**：手机上不再保留 GGUF 模型，输入法不阻塞上屏、不调用大模型。
 - **电脑端语音服务已移除**：`voice/`、`preview/voice.mjs` 与配套服务脚本于 2026-10-18 删除，
@@ -52,12 +57,13 @@ VoxFix 是一个安装后可在系统里独立选择的自有 Android 输入法�
 ## 构建安卓包
 
 ```powershell
-# 使用 PowerShell 7（pwsh），需要先有 .venv（Python）与 models/（语音模型，tools/setup_voice.py 准备）
+# 需要先有 .venv 与公共 VAD/标点（python tools/setup_voice.py），
+# 再用 tools/prepare_desktop_voice.py --source <本机R5目录> 导入固定 R5
 pwsh -ExecutionPolicy Bypass -File tools/build_android.ps1
 ```
 
 脚本会按固定摘要准备 JDK / Gradle / SDK / Build-Tools / sherpa-onnx AAR，然后执行
-`testDebugUnitTest assembleDebug`。产物在 `android/app/build/outputs/apk/debug/app-debug.apk`（约 486 MB，四个模型全打包），
+`testDebugUnitTest assembleDebug`。产物在 `android/app/build/outputs/apk/debug/app-debug.apk`（只打包R5、词表、VAD和标点），
 **不会自动安装**。包体与手机占用的实测口径见[体积与内存优化](docs/体积与内存优化-2026-10-19.md)。拼音 JNI 由 gradle 任务 `buildPinyinNative` 调用 `tools/build_pinyin_rime.py` 编译，
 前提是 `.android/pinyin-rime/` 已由 `tools/setup_pinyin_rime.py` + `tools/prepare_personal_pinyin.py` 准备好。
 
@@ -78,6 +84,7 @@ node preview/core.test.mjs
 | 滑轨与编辑框 | `selection-lock`、`selection-drag`、`selection-direction`、`selection-editor`、`selection-delete`、`selection-pad` |
 | 剪贴板与词库 | `clipboard-search`、`clipboard-match-ime`、`clipboard-reference`、`clipboard-panel-search`、`split`、`learning`、`learning-ime`、`lexicon`、`lexicon-browser` |
 | 拼音与英文 | `pinyin`、`english` |
+| 横屏与表情包 | `landscape`、`meme-search`、`meme-search-ime` |
 | 原生桥与语音 | `native-ime`、`voice-orb`、`system-audit`、`ime-regressions` |
 | 按键与剪贴板审计 | `functional-audit`（双指交错输入、共享编辑框原生候选、保存失败、长按生命周期） |
 | 启动与加载 | `startup`（入口与依赖延迟加载时都不闪出试用页） |

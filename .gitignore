@@ -52,3 +52,6 @@ docs/handwriting-engine-upstream.kt
 docs/*.json
 docs/android-native-model-output.txt
 docs/android-native-model-runtime.txt
+
+# 临时构建产物
+.tmp-*

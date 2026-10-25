@@ -11,8 +11,4 @@ internal class InputSession {
         close()
         return true
     }
-    companion object {
-        fun isVoiceSelection(start: Int, hasText: Boolean, selectionStart: Int, selectionEnd: Int, composingStart: Int, composingEnd: Int): Boolean =
-            selectionStart == selectionEnd && ((!hasText && selectionStart == start) || composingStart == start && selectionStart == composingEnd)
-    }
 }

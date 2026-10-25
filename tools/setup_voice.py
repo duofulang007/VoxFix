@@ -1,14 +1,12 @@
-"""Download and verify the offline voice models the Android build ships.
+"""Download and verify the public VAD and punctuation models packaged by the app.
 
-The Android package uses four models:
+The ASR weights are not handled here: the active Android R5 package is imported and
+pinned by prepare_desktop_voice.py into models/desktop-sensevoice/. This script only
+prepares the two remaining public assets that stageModels packs:
 
-- a streaming Zipformer for pass 1, so text appears while the user talks;
-- SenseVoiceSmall int8 for pass 2, which re-reads the whole utterance;
 - silero-vad, which decides when a pause closes an utterance;
-- a CT-Transformer int8 punctuation model, applied to the final text.
-
-The general 2024 SenseVoice supplies language detection and ITN. Keep the independent
-punctuator for streaming fallback and corrections which miss the final time budget.
+- a CT-Transformer int8 punctuation model, used when a settled segment still needs
+  sentence punctuation.
 
 Every download is checked against a fixed SHA-256. Digests are recorded per extracted
 file rather than per archive, so the check still holds when a mirror is used instead of
@@ -25,28 +23,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GITHUB = 'https://github.com/k2-fsa/sherpa-onnx/releases/download'
 MIRROR = 'https://hf-mirror.com/csukuangfj'
-SENSEVOICE_MODEL = 'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17'
-SENSEVOICE_SOURCE = f'https://huggingface.co/csukuangfj/{SENSEVOICE_MODEL}/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07'
-
 ARCHIVES = [
-    ('asr-models', 'sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20-mobile'),
     ('punctuation-models', 'sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8'),
 ]
 
 # source name inside the archive -> destination under models/, with its digest
 FILES = {
-    'sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20-mobile': {
-        'encoder-epoch-99-avg-1.int8.onnx': ('streaming/encoder.int8.onnx', 'f559f422d970323e0c266aaa3c56cf6d1a3a4bc0c0822124727686c1e43e9447'),
-        'decoder-epoch-99-avg-1.onnx': ('streaming/decoder.onnx', '2e3b5ec371f8899ee6acd829fd753ba45772df57a91bdf37cde3136354e7db7d'),
-        'joiner-epoch-99-avg-1.int8.onnx': ('streaming/joiner.int8.onnx', '1ed689c5ed19dbaa725d9d191bb4822b5f4855a39e1ffd28cbc1f340d25b2ee0'),
-        'tokens.txt': ('streaming/tokens.txt', 'a8e0e4ec53810e433789b54a5c0134a7eaa2ffca595a6334d54c00da858841d3'),
-    },
-    SENSEVOICE_MODEL: {
-        'model.int8.onnx': ('sensevoice/model.int8.onnx',
-                            'c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51'),
-        'tokens.txt': ('sensevoice/tokens.txt',
-                       'f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc'),
-    },
     # 词表与标点符号集内嵌在 onnx 元数据里，只需要这一个文件。
     'sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8': {
         'model.int8.onnx': ('punctuation/model.int8.onnx',
@@ -56,10 +38,6 @@ FILES = {
 
 # Fetched individually because GitHub release objects are large and often unavailable.
 SINGLES = [
-    ('sensevoice/model.int8.onnx', f'{SENSEVOICE_SOURCE}/model.int8.onnx', FILES[SENSEVOICE_MODEL]['model.int8.onnx'][1]),
-    ('sensevoice/tokens.txt', f'{SENSEVOICE_SOURCE}/tokens.txt', FILES[SENSEVOICE_MODEL]['tokens.txt'][1]),
-    ('streaming/bpe.vocab', 'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/resolve/98590b7/bpe.vocab',
-     'd0b642f3a2eacd5fadefdeff9e0e1358cab729647cbb7fe58cf738e1f7407029'),
     ('vad/silero_vad.onnx', f'{GITHUB}/asr-models/silero_vad.onnx',
      '9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6'),
 ]
@@ -135,4 +113,4 @@ if __name__ == '__main__':
         setup_archive(release, name)
     for destination, url, expected in SINGLES:
         setup_single(destination, url, expected)
-    print('All offline voice models are ready.', flush=True)
+    print('VAD and punctuation models are ready.', flush=True)
