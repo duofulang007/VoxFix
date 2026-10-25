@@ -1,5 +1,3 @@
-import java.security.MessageDigest
-
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 android {
     namespace = "local.voxfix.debug"
@@ -10,53 +8,40 @@ android {
         applicationId = "local.voxfix.debug"
         minSdk = 30
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-debug"
+        versionCode = 2
+        versionName = "0.2.0-r5"
         testInstrumentationRunner = "local.voxfix.debug.VoxFixSmokeInstrumentation"
         ndk { abiFilters += "arm64-v8a" }
     }
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("modelAssets"))
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("keyboardAssets"))
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("pinyinAssets"))
+    sourceSets["main"].java.srcDir("src/voice/java")
     sourceSets["main"].jniLibs.srcDir("../../.android/pinyin-rime/jni")
     androidResources { noCompress += listOf("onnx", "wav") }
+    // sherpa's AAR also ships an x86 emulator onnxruntime; this build is arm64-only and the
+    // pinned rescue AAR supplies its own arm64 runtime, so other ABIs must not collide.
+    packaging { jniLibs { excludes += listOf("lib/x86/**", "lib/x86_64/**", "lib/armeabi-v7a/**") } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 }
-val streamingModelFiles = listOf("encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx")
-val optimizeStreamingModels by tasks.registering(Exec::class) {
+val verifyVoiceModels by tasks.registering(Exec::class) {
     workingDir("../..")
-    commandLine(file("../../.venv/Scripts/python.exe"), "tools/prepare_streaming_models.py")
-    inputs.files("../../tools/prepare_streaming_models.py", "../../tools/setup_voice.py", "../../tools/streaming-optimization-requirements.txt")
-    streamingModelFiles.forEach {
-        inputs.file("../../models/streaming/$it")
-        outputs.file("../../.android/streaming-optimized/$it")
-    }
-    inputs.file("../../models/sensevoice/model.int8.onnx")
-    outputs.file("../../.android/streaming-optimized/model.int8.onnx")
-    outputs.file("../../.android/streaming-optimized/receipt.json")
+    commandLine(file("../../.venv/Scripts/python.exe"), "tools/prepare_desktop_voice.py")
 }
 val stageModels by tasks.registering(Sync::class) {
-    dependsOn(optimizeStreamingModels)
-    doFirst {
-        val vocab = file("../../models/streaming/bpe.vocab")
-        check(vocab.isFile) { "Missing hotword vocabulary; run tools/setup_voice.py" }
-        val digest = MessageDigest.getInstance("SHA-256").digest(vocab.readBytes()).joinToString("") { "%02x".format(it) }
-        check(digest == "d0b642f3a2eacd5fadefdeff9e0e1358cab729647cbb7fe58cf738e1f7407029") { "Hotword vocabulary checksum mismatch" }
-    }
-    from("../../models") { include("streaming/**", "sensevoice/**", "punctuation/*.onnx"); exclude("streaming/*.onnx", "sensevoice/*.onnx") }
-    from("../../.android/streaming-optimized") { include(streamingModelFiles); into("streaming") }
-    from("../../.android/streaming-optimized") { include("model.int8.onnx"); into("sensevoice") }
-    // getVadModelConfig hardcodes the asset name "silero_vad.onnx", so the VAD model has to sit at
-    // the assets root instead of under vad/. Keeping the source under vad/ stays tidy on disk.
-    from("../../models/vad") { include("*.onnx") }
+    dependsOn(verifyVoiceModels)
+    from("../../models/desktop-sensevoice") { include("model.int8.onnx", "tokens.txt"); into("sensevoice") }
+    from("../../models/punctuation") { include("model.int8.onnx"); into("punctuation") }
+    from("../../models/vad") { include("silero_vad.onnx") }
     into(layout.buildDirectory.dir("modelAssets"))
 }
 val stageKeyboard by tasks.registering(Sync::class) {
-    from("../../preview") { include("index.html", "*.css", "app.mjs", "core.mjs", "lexicon.mjs", "voice-orb.mjs", "pinyin.mjs", "english.mjs", "split.mjs", "english-words.txt", "pinyin-data.json", "pinyin-lite.json", "phrase-packs.json", "vendor/rime-ice/LICENSE", "vendor/rime-ice/UPSTREAM.md") }
+    from("../../preview") { include("index.html", "*.css", "app.mjs", "core.mjs", "lexicon.mjs", "voice-orb.mjs", "pinyin.mjs", "english.mjs", "split.mjs", "meme-search.mjs", "english-words.txt", "pinyin-data.json", "pinyin-lite.json", "phrase-packs.json", "vendor/rime-ice/LICENSE", "vendor/rime-ice/UPSTREAM.md") }
     from("src/main/licenses/sensevoice") { include("LICENSE", "UPSTREAM.md"); into("licenses/sensevoice") }
     from("src/main/licenses/sherpa") { include("LICENSE", "UPSTREAM.md"); into("licenses/sherpa") }
     from("src/main/licenses/punctuation") { include("LICENSE", "UPSTREAM.md"); into("licenses/punctuation") }
+    from("src/main/licenses/meme") { include("UPSTREAM.md"); into("licenses/meme") }
     into(layout.buildDirectory.dir("keyboardAssets/keyboard"))
 }
 val buildPinyinNative by tasks.registering(Exec::class) {
@@ -78,5 +63,8 @@ dependencies {
     // 1.13.8 brings the silence-hallucination fixes from 1.13.7/1.13.8; its Kotlin API is
     // identical to 1.13.6 for everything this app calls (Vad, OnlineRecognizer, SenseVoice).
     implementation(files("../../.android/app-tools/sherpa-onnx-static-link-onnxruntime-1.13.8.aar"))
+    // Decode-time hotword rescue needs per-frame logits, which the sherpa API does not
+    // expose; this is the pinned onnxruntime build the desktop prototype used.
+    implementation(files("../../.android/app-tools/onnxruntime-android-1.17.3.aar"))
     testImplementation("junit:junit:4.13.2")
 }

@@ -4,6 +4,7 @@ import { createVoiceOrb } from './voice-orb.mjs';
 import { loadPinyin, pinyinCandidates, nineCandidates, setPhraseOptions, phraseCandidates, associationCandidates, pinyinConsumed, hasPinyinMatch, isSyllable, selectionCode, learnedCandidates, learnedAssociations, clipboardMatches } from './pinyin.mjs';
 import { loadEnglish,loadPersonalEnglish,englishCandidates,hasEnglishWord } from './english.mjs';
 import { loadClipboardSplitter } from './split.mjs';
+import { createMemeSearch } from './meme-search.mjs';
 
 const $ = id => document.getElementById(id);
 const hostEditor=$('editor'), keyboard=$('keyboard');
@@ -107,13 +108,13 @@ function clipboardSplitPanel(){
   const backLabel=session.fromEditor?'返回编辑框，保留拆词草稿':'返回剪贴板，保留已选文字';
   return `<div class="clip-split-title"><span>拆词</span>${button(backLabel,'split-return','','clip-split-return',icon('split-back'))}</div><section class="clip-split-card"><div class="clip-split-grid" role="group" aria-label="${session.fromEditor?'拆词词块，点选修改草稿，保存后提交':'拆词词块，点选上屏，再点撤回'}"><div class="clip-split-flow">${session.words.map((word,i)=>button(word.trim()?'词块：'+word:'空白词块','split-word',String(i),'clip-split-chip',esc(word.trim()?word:word.includes('\n')?'↵':'␣'),`aria-pressed="${selected.has(i)}"`)).join('')}</div></div><div class="clip-split-actions">${button('全选','split-all','','clip-split-all','<span class="clip-split-dot" aria-hidden="true">✓</span>全选',`aria-pressed="${all}"`)}${button(session.selected.length?'复制所选词块':'复制原文','split-copy','','clip-split-return',icon('split-cards'))}</div></section><div class="clip-split-space"></div>${footer()}`;
 }
-function closeLocalEditor(keepDraft=false){if(!localInput&&!clipSearch)return;if(clipSearch){nativeIme?.searchFocus?.(false);const host=clipSearch.target==='host'?state:clipSearch.inputs.host;Object.assign(state,{language:host.language,layout:host.layout});clipSearch=null;}if(state.voice){if(keepDraft)preserveVoice(state.voice);else cancelVoice();}if(keepDraft&&!quoteEditor&&localInput===$('snippet-content'))snippetDraft={edit:snippetEdit,text:localInput.value};state.comp=null;context='';learningChain=[];associatedWords=[];editor=hostEditor;localInput=null;snippetDialog.append(snippetForm);localPanel.replaceChildren();localPanel.hidden=true;if(quoteEditor){snippetForm.querySelector('button[type=submit]').textContent='保存';snippetForm.querySelector('.note').hidden=false;if(snippetDialog.open)snippetDialog.close();}}
+function closeLocalEditor(keepDraft=false){if(!localInput&&!clipSearch)return;if(localInput===memeInput)nativeIme?.searchFocus?.(false);if(clipSearch){nativeIme?.searchFocus?.(false);const host=clipSearch.target==='host'?state:clipSearch.inputs.host;Object.assign(state,{language:host.language,layout:host.layout});clipSearch=null;}if(state.voice){if(keepDraft)preserveVoice(state.voice);else cancelVoice();}if(keepDraft&&!quoteEditor&&localInput===$('snippet-content'))snippetDraft={edit:snippetEdit,text:localInput.value};state.comp=null;context='';learningChain=[];associatedWords=[];editor=hostEditor;localInput=null;snippetDialog.append(snippetForm);localPanel.replaceChildren();localPanel.hidden=true;if(quoteEditor){snippetForm.querySelector('button[type=submit]').textContent='保存';snippetForm.querySelector('.note').hidden=false;if(snippetDialog.open)snippetDialog.close();}}
 const nativeSettings=nativeIme?document.createElement('dialog'):null;
 if(nativeSettings){nativeSettings.className='snippet-dialog settings-dialog';nativeSettings.setAttribute('aria-label','键盘设置');const close=document.createElement('button');close.className='settings-back';close.textContent='‹ 返回键盘';close.onclick=()=>nativeSettings.close();nativeSettings.append(close,$('custom-panel'));document.body.append(nativeSettings);}
 let settings = structuredClone(defaults);
 try { const stored = localStorage.getItem('voxfix-layout-v1'); if (stored) {const saved=JSON.parse(stored);settings=settingsFrom(saved);localStorage.setItem('voxfix-layout-v1',JSON.stringify({...saved,...keyboardGeometry,rememberInput:true}));} } catch { /* Keep malformed or unwritable saved data untouched. */ }
 if(nativeIme&&!settings.toolbar.includes('menu'))settings.toolbar.unshift('menu');
-const state = { page: 'letters', returnPage:'letters', symbolReturn:'letters', language: 'zh', shift: 0, symbol: '常用', locked: false, night: false, clipTab: 'clipboard', clipLocked: false, popup: null, comp: null, voice: null, hidden: false, emojiTab: 'Emoji', emojiCategory: '常用', layout: '26', voiceTimer: null, cursorDrag: null, selectionActions: false, clipGroup: 0, clipManage: false, clipSelected: [], clipConfirm: null, clipCandidate: '', clipGroupMenu: null };
+const state = { page: 'letters', returnPage:'letters', symbolReturn:'letters', language: 'zh', shift: 0, symbol: '常用', locked: false, night: false, clipTab: 'clipboard', clipLocked: false, popup: null, comp: null, voice: null, hidden: false, layout: '26', voiceTimer: null, cursorDrag: null, selectionActions: false, clipGroup: 0, clipManage: false, clipSelected: [], clipConfirm: null, clipCandidate: '', clipGroupMenu: null };
 let clipTabTap=null;
 let latestClipboard='',clipReference='',referenceWanted='',referenceTimer=0,candidateContact=null,candidateRenderPending=false,quoteEditor=null;
 let referenceMatches=[],referencePopup=null,referenceCache=null;
@@ -244,7 +245,6 @@ let snippetEdit=null,snippetUndo=null,groupUndo=null;
 let clipMenu=null,clipHold=null,clipSuppressUntil=0,learningChain=[];
 const personalLexicon=createPersonalLexicon(nativeIme,error=>toast('个人词库保存失败：'+error.message));
 personalLexicon.initialized.then(()=>{refreshAssociations();render();}).catch(error=>toast('个人词库加载失败，已有记录保留：'+error.message));
-let emojiQuery='',emojiSearchOpen=false;
 let gesture = null, candidateSuppressUntil=0, toastTimer, nativeComposition = false;
 // 底部滑轨每一格对应的像素：越小越"无极"（每滑一小段就动一个字），同时大于触摸抖动阈值。
 const cursorStep = 11, cursorHoldDelay = 350;
@@ -494,6 +494,7 @@ const icons = {
   'paste-sheet': '<path d="M9.2 4.4H7.4a2.2 2.2 0 0 0-2.2 2.2v12.2a2.2 2.2 0 0 0 2.2 2.2h9.2a2.2 2.2 0 0 0 2.2-2.2V6.6a2.2 2.2 0 0 0-2.2-2.2h-1.8"/><rect x="8.6" y="2.4" width="6.8" height="3.8" rx="1.4"/><path d="M9.2 11.4h5.6M9.2 15h3.6"/>',
   enter: '<path d="M20 6v8H4m5-5-5 5 5 5"/>', space: '<path d="M3 14v4h18v-4"/>',
   mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2m-7 9v3m-3 0h6"/>',
+  'mic-filled': '<rect x="9" y="2" width="6" height="12" rx="3" fill="currentColor" stroke="none"/><path d="M5 10v2a7 7 0 0 0 14 0v-2m-7 9v3m-3 0h6"/>',
   keyboard: '<rect x="2" y="2" width="20" height="20" rx="3"/><path d="M6 6h3v3H6zM11 6h3v3h-3zM16 6h3v3h-3zM6 11h3v3H6zM11 11h3v3h-3zM16 11h3v3h-3zM6 16h13v3H6z" fill="currentColor" stroke="none"/>',
   lock: '<rect x="5" y="10" width="14" height="12" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4"/>',
   trash: '<path d="M4 6h16M9 6V3h6v3m-9 0 1 15h10l1-15M10 10v7m4-7v7"/>',
@@ -619,7 +620,10 @@ function footer() {
   const total=nativeIme&&!localInput?nativeCursor.total:editor.value.length,cursor=nativeIme&&!localInput?nativeCursor.position:editor.selectionEnd;
   const drag=state.cursorDrag,locked=lockedNow(),zoneClass='cursor-zone'+(drag?drag.selecting?' selecting':' dragging':'')+(locked?' locked':'');
   const label=locked?'起点锁定，左右拖动调整终点，长按解除锁定':'底部中间空白可左右拖动光标、点按两侧精调一个字，长按后拖动框选文字';
-  return `<div class="keyboard-footer">${settings.footerSwitcher ? button('底部输入法菜单', 'switcher', '', '', icon('keyboard')) : '<span class="empty"></span>'}<div class="${zoneClass}" data-action="cursor-gesture" role="slider" tabindex="0" aria-label="${label}" aria-valuemin="0" aria-valuenow="${cursor}"><span class="cursor-hint"></span><span class="cursor-focus"></span><span class="cursor-contact"></span></div>${clipSearch?button('收起键盘查看结果','clip-search-keys','','',icon('hide')):settings.footerClipboard ? button('底部剪贴板', 'clipboard', '', '', icon('copy')) : '<span class="empty"></span>'}</div>${joyGuide()}`;
+  const voice=state.voice,voiceClass='voice-toggle'+(voice?.tap&&voice.phase==='loading'?' arming':'')+(voice?.tap&&voice.micReady&&voice.phase==='listening'?' active':'')+(voice?.tap&&voice.phase==='recognizing'?' recognizing':'');
+  const micGlyph=voice?.tap&&['loading','listening','recognizing'].includes(voice.phase)?'mic-filled':'mic';
+  const right=clipSearch?button('收起键盘查看结果','clip-search-keys','','',icon('hide')):localInput||voice&&!voice.tap?'<span class="empty"></span>':button(voice?.phase==='recognizing'?'识别中':voice?'结束语音并上屏':'开始语音输入','voice-toggle','',voiceClass,`<span class="voice-mic-disc">${icon(micGlyph)}</span>`);
+  return `<div class="keyboard-footer">${settings.footerSwitcher ? button('底部输入法菜单', 'switcher', '', '', icon('keyboard')) : '<span class="empty"></span>'}<div class="${zoneClass}" data-action="cursor-gesture" role="slider" tabindex="0" aria-label="${label}" aria-valuemin="0" aria-valuenow="${cursor}"><span class="cursor-hint"></span><span class="cursor-focus"></span><span class="cursor-contact"></span></div>${right}</div>${joyGuide()}`;
 }
 function selectionEditor(){
   if(!state.selectionActions||state.voice||state.hidden)return '';
@@ -695,6 +699,8 @@ function syncCursorFeedback() {
 function fadeCursorFeedback() {
   syncCursorFeedback();cursorFeedback.visible=false;
   const zone=feedbackZone();if(!zone)return;
+  // 增量渲染下面板节点是留着的，摇杆小圆点的内联位移必须显式归零（以前靠整块重建顺手清掉）。
+  for(const dot of keyboard.querySelectorAll('.selection-mini-track .selection-center span'))dot.style.transform='';
   const duration=matchMedia('(prefers-reduced-motion: reduce)').matches?0:125;
   for(const node of zone.querySelectorAll('.cursor-contact,.cursor-focus'))node.animate([{opacity:node.style.opacity||0},{opacity:0}],{duration,easing:'cubic-bezier(.23,1,.32,1)',fill:'forwards'});
   zone.classList.remove('dragging','selecting');setHintOpacity(zone,.23);
@@ -729,6 +735,25 @@ function toolbar() {
   const clipBar=state.clipCandidate&&settings.clipboardCandidate?clipCandidateBar():'';
   const bar=`<div class="toolbar">${settings.toolbar.map(toolbarItemButton).join('')}</div>`;
   return clipBar||bar;
+}
+// 候选框（拼音候选 / 联想候选 / 英文候选 / 展开的候选面板）在的时候原生语音不识别：
+// 用户选完第一个候选后输入框里已经没有 composing，但候选框还挂着联想词，只能按框在不在判定。
+let candidatesVisibleCache=null;
+function candidatesVisibleNow(){
+  if(state.hidden)return false;
+  if(state.page==='candidates')return true;
+  if(state.comp)return true;
+  if(clipSearch&&localInput)return false;
+  if(state.language==='zh'&&associatedWords.length&&(!privateField||localInput))return true;
+  if(englishPrefix&&!privateField&&state.language==='en')return true;
+  return false;
+}
+function reportCandidatesVisible(){
+  if(!nativeIme?.candidatesVisible)return;
+  const value=candidatesVisibleNow();
+  if(value===candidatesVisibleCache)return;
+  candidatesVisibleCache=value;
+  nativeIme.candidatesVisible(value);
 }
 function candidateStrip(words,action='candidate') {
   const referenceSlot=action==='candidate'&&!clipSearch&&state.language==='zh'&&state.layout==='26'&&!localInput&&settings.clipboardMatch;
@@ -990,33 +1015,46 @@ function openSnippet(index=-1){
   if(nativeIme){if(state.comp)commit(state.comp.raw);localInput=$('snippet-content');editor=localInput;localPanel.append(snippetForm);localPanel.hidden=false;state.page='letters';}
   else snippetDialog.showModal();$('snippet-content').focus();
 }
-function openEmojiSearch(){
-  if(localInput){toast('请先保存或取消当前编辑');return;}
-  if(state.comp)commit(state.comp.raw);
-  const input=document.createElement('input');input.type='text';input.placeholder='搜索表情';input.setAttribute('aria-label','搜索表情');input.value=emojiQuery;
-  const done=document.createElement('button');done.textContent='搜索';done.onclick=()=>{if(state.comp)commit(currentCandidates()[0]||state.comp.raw);emojiQuery=input.value;closeLocalEditor();state.emojiTab='Emoji';state.page='emoji';render();};
-  const cancel=document.createElement('button');cancel.textContent='返回';cancel.onclick=()=>{closeLocalEditor();state.page='emoji';render();};
-  localInput=input;editor=input;localPanel.replaceChildren(input,done,cancel);localPanel.hidden=false;state.page='letters';render();input.focus();
-}
 const layouts = [['9','9键拼音','拼'],['26','26键拼音','拼'],['en26','26键英文','EN']];
 function layoutPanel() {
   return `<div class="panel-title"><span>键盘选择</span>${button('返回键盘','return','','',icon('back'))}</div><div class="layout-grid">${layouts.map(([id,label,glyph])=>button(label,'layout',id,(id==='en26'?state.layout==='26'&&state.language==='en':id==='26'?state.layout==='26'&&state.language==='zh':state.layout===id)?'selected':'',`<span class="layout-icon">${glyph}</span><span>${label}</span>`)).join('')}</div>${footer()}`;
 }
-const emojiGroups = {'常用':['😊','🍀','😂','⭐','🌸','🙄','😭','🌝'],'精选':['👍','❤️','🎉','🙏','💪','👌','🥳','👏'],'花样':['🌸','🌷','🌼','🌹','💐','🌻','🍃','🍀'],'黄脸':['😀','😁','😂','🥲','😊','😍','🤔','😭'],'动物':['🐱','🐶','🐰','🐼','🦊','🐸','🐻','🐵']};
-const emojiNames={'😊':'微笑 开心 smile','🍀':'幸运 四叶草 clover','😂':'笑 哭 laugh','⭐':'星星 star','🌸':'花 flower','🙄':'白眼 无语','😭':'哭 伤心 cry','🌝':'月亮 moon','👍':'赞 支持 good','❤️':'爱 心 love','🎉':'庆祝 party','🙏':'谢谢 祈祷','💪':'加油 力量','👌':'好 ok','🥳':'庆祝 party','👏':'鼓掌','🐱':'猫 cat','🐶':'狗 dog','🐰':'兔 rabbit','🐼':'熊猫 panda','🦊':'狐狸 fox','🐸':'青蛙 frog','🐻':'熊 bear','🐵':'猴 monkey'};
-Object.assign(emojiNames,{'🌷':'花 郁金香 tulip','🌼':'花 菊花 blossom','🌹':'花 玫瑰 rose','💐':'花 花束 bouquet','🌻':'花 向日葵 sunflower','🍃':'叶 植物 leaf','😀':'笑 开心 smile','😁':'笑 开心 grin','🥲':'笑 哭 tear','😍':'爱 喜欢 love','🤔':'思考 疑问 think'});
-let recentEmoji=[];
-try{const saved=JSON.parse(localStorage.getItem('voxfix-emoji-v1'));if(Array.isArray(saved))recentEmoji=saved.filter(word=>Object.values(emojiGroups).some(group=>group.includes(word))).slice(0,16);}catch{}
 function emojiPanel() {
-  const tabs = ['Emoji','颜文字'];
-  let body = '';
-  if (state.emojiTab === 'Emoji'){const words=emojiQuery?[...new Set(Object.values(emojiGroups).flat())].filter(s=>(s+' '+(emojiNames[s]||'')).toLowerCase().includes(emojiQuery.toLowerCase())):state.emojiCategory==='常用'?[...new Set([...recentEmoji,...emojiGroups.常用])].slice(0,16):emojiGroups[state.emojiCategory];body=`${emojiSearchOpen&&!nativeIme?`<input class="emoji-search-input" aria-label="搜索表情" value="${esc(emojiQuery)}" placeholder="输入笑、猫、爱等关键词">`:''}<div class="emoji-categories">${Object.keys(emojiGroups).map(s=>button(s,'emoji-category',s,state.emojiCategory===s?'selected':'')).join('')}</div><div class="emoji-grid">${words.map(s=>button(s,'insert',s,'emoji-hold')).join('')}${button('删除','delete','','key',icon('delete'))}</div>${words.length?'':'<p class="emoji-placeholder">没有匹配的表情</p>'}`;}
-  else if (state.emojiTab==='颜文字') body=`<div class="emoji-grid" style="grid-template-columns:repeat(3,1fr)">${['(＾▽＾)','(╥﹏╥)','(•‿•)','(ง •̀_•́)ง','(￣▽￣)','♡'].map(s=>button(s,'insert',s,'',esc(s))).join('')}</div>`;
-  return `<div class="emoji-top">${button('搜索表情','emoji-search','','',icon('search'))}${tabs.map(s=>button(s,'emoji-tab',s,state.emojiTab===s?'selected':'')).join('')}${button('返回键盘','return','','',icon('back'))}</div><div class="emoji-body">${body}</div>${footer()}`;
+  return `<div class="emoji-body">${memeSearch.render()}</div>${footer()}`;
 }
+const memeInput=document.createElement('input'),memeHost=document.createElement('div');
+memeInput.type='search';memeInput.inputMode='none';memeInput.autocomplete='off';memeInput.spellcheck=false;memeInput.maxLength=80;
+memeInput.placeholder='搜索表情包';memeInput.setAttribute('aria-label','搜索表情包');
+const memeSearch=createMemeSearch({
+  update:()=>{if(localInput===memeInput||state.page==='emoji')render();},
+  insert:id=>{if(localInput===memeInput)closeMemeSearch();if(typeof nativeIme?.insertMeme==='function')nativeIme.insertMeme(id);else toast('请在手机 VoxFix 输入法中插入图片');}
+});
+function openMemeSearch(){
+  if(localInput===memeInput)return;
+  if(localInput){toast('请先保存或取消当前编辑');return;}
+  if(state.comp)commit(currentCandidates()[0]||state.comp.raw);
+  localInput=memeInput;editor=memeInput;state.comp=null;englishPrefix='';associatedWords=[];
+  state.page='letters';localPanel.replaceChildren(memeHost);nativeIme?.searchFocus?.(true);render();memeInput.focus({preventScroll:true});
+}
+function closeMemeSearch(){
+  if(localInput!==memeInput)return;
+  if(state.comp)commit(currentCandidates()[0]||state.comp.raw);
+  const query=memeInput.value;closeLocalEditor();state.page='emoji';memeSearch.search(query);render();
+}
+function paintMemeSearch(){
+  const typing=localInput===memeInput,browsing=state.page==='emoji';
+  memeSearch.activate((typing||browsing)&&!state.hidden);
+  if(typing){const colors=getComputedStyle(keyboard);for(const name of ['--key-bg','--key-color','--muted','--kb-bg'])memeHost.style.setProperty(name,colors.getPropertyValue(name));if(!state.comp&&!nativeComposition&&!state.voice)memeSearch.schedule(memeInput.value);memeSearch.paint(memeHost);}
+  const slot=(typing?memeHost:keyboard).querySelector('.meme-input-slot');
+  if(slot&&(typing||browsing)){if(!typing)memeInput.value=memeSearch.query;if(!slot.contains(memeInput))slot.append(memeInput);}
+}
+memeInput.addEventListener('focus',openMemeSearch);
+memeInput.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();closeMemeSearch();}});
+localPanel.addEventListener('click',event=>{if(localInput!==memeInput)return;const button=event.target.closest('[data-action^="meme-"]');if(button){event.preventDefault();activate(button.dataset.action,button.dataset.value);}});
+globalThis.voxfixMemeInsertion=(message,accepted)=>{if(accepted){state.page='letters';render();}toast(message);};
 // 功能菜单里符号/数字/编辑/设置没有专属图标，用方形字标代替，避免四个一模一样的方块。
-const menuGlyphs={symbols:'符',numbers:'123',edit:'编',custom:'设'};
-function menuPanel() { return `<div class="panel-title"><span>${nativeIme?'功能菜单':'功能菜单 · 未展开页面的补充入口'}</span>${button('返回键盘','return','','',icon('back'))}</div><div class="menu-grid">${[...toolbarItems.filter(([id])=>!['menu','hide'].includes(id)),['symbols','符号'],['numbers','数字'],['edit','编辑文字'],['custom','键盘设置']].map(([id,label])=>button(label,id,'','',`<span class="menu-glyph">${menuGlyphs[id]||icon(id)}</span><span>${label}</span>`)).join('')}</div>${footer()}`; }
+const menuGlyphs={symbols:'符',numbers:'123',edit:'编',lexicon:'典',custom:'设'};
+function menuPanel() { return `<div class="panel-title"><span>${nativeIme?'功能菜单':'功能菜单 · 未展开页面的补充入口'}</span>${button('返回键盘','return','','',icon('back'))}</div><div class="menu-grid">${[...toolbarItems.filter(([id])=>!['menu','hide'].includes(id)),['symbols','符号'],['numbers','数字'],['edit','编辑文字'],['lexicon','词典'],['custom','键盘设置']].map(([id,label])=>button(label,id,'','',`<span class="menu-glyph">${menuGlyphs[id]||icon(id)}</span><span>${label}</span>`)).join('')}</div>${footer()}`; }
 function editPanel() { return `<div class="panel-title"><span>${nativeIme?'编辑文字':'编辑文字 · 补充试用'}</span>${button('返回键盘','return','','',icon('back'))}</div><div class="menu-grid">${[['select-all','全选'],['copy-text','复制'],['cut-text','剪切'],['paste-last','粘贴'],['cursor-left','左移'],['cursor-right','右移'],['delete','删除'],['enter',localInput?'换行':enterLabel]].map(([id,label])=>button(label,id,'',id==='delete'?'key':'',icon(id==='delete'?'delete':'copy')+`<span>${label}</span>`)).join('')}</div>${footer()}`; }
 const VOICE_PHASES=['loading','listening','paused','cancel','recognizing'];
 const VOICE_TITLES={loading:'正在开启麦克风',listening:'倾听中',paused:'已暂停',cancel:'松手取消',recognizing:'识别中'};
@@ -1037,6 +1075,11 @@ function voicePanel() {
 // 只改类名与文案，不重建 DOM。拖拽 / 声幅期间必须走这条。
 function paintVoice() {
   const panel=keyboard.querySelector('.voice-panel'), phase=state.voice?.phase;
+  const mic=keyboard.querySelector('.keyboard-footer .voice-toggle');
+  mic?.classList.toggle('arming',Boolean(state.voice?.tap&&phase==='loading'));
+  mic?.classList.toggle('active',Boolean(state.voice?.tap&&state.voice.micReady&&phase==='listening'));
+  mic?.classList.toggle('recognizing',Boolean(state.voice?.tap&&phase==='recognizing'));
+  if(mic&&state.voice?.tap){mic.style.setProperty('--mic-scale',(1.02+tapMicLevel*.08).toFixed(3));mic.style.setProperty('--mic-outer-scale',(1.02+tapMicLevel*.1).toFixed(3));mic.style.setProperty('--mic-alpha',(.48+tapMicLevel*.22).toFixed(3));mic.style.setProperty('--mic-outer-alpha',(.28+tapMicLevel*.18).toFixed(3));}
   if(!panel||!phase) return;
   for(const node of [panel,panel.querySelector('.voice-stage')]) if(node) for(const name of VOICE_PHASES) node.classList.toggle(name,name===phase);
   const title=panel.querySelector('.voice-title'), text=VOICE_TITLES[phase]||'';
@@ -1047,10 +1090,20 @@ function paintVoice() {
   if(stage)stage.style.visibility=state.voice.micReady===false?'hidden':'';
 }
 let voiceRaf=null, voiceLast=0;
+let tapMicLevel=0,tapMicRelease=null;
 let voiceLevel=0, voiceLevelTarget=0, voiceLevelAt=0, voiceFlow=0, voiceElapsed=0;
 let ballSize=1, ballVel=0;
 let voiceDragT=0, voiceDragShift=0;     // 上滑跟手
 function setVoiceLevel(level){
+  if(state.voice?.tap){
+    if(state.voice.phase!=='listening')return;
+    tapMicLevel=voiceReduced.matches?0:Number.isFinite(level)?Math.max(0,Math.min(1,level)):0;
+    paintVoice();
+    clearTimeout(tapMicRelease);
+    const session=state.voice;
+    tapMicRelease=setTimeout(()=>{if(state.voice===session){tapMicLevel=0;paintVoice();}},260);
+    return;
+  }
   voiceLevelTarget=Number.isFinite(level)?Math.max(0,Math.min(1,level)):0;
   voiceLevelAt=performance.now();
 }
@@ -1097,6 +1150,7 @@ function syncVoiceDrag(g,clientY) {
 }
 // 退场：状态立刻清空（不影响任何逻辑与测试），把面板摘下来当"幽灵"原位重放一次内收动画。
 function exitVoice() {
+  clearTimeout(tapMicRelease);tapMicLevel=0;
   stopVoiceLoop();
   const renderer=voiceRenderer;voiceRenderer=null;
   const live=keyboard.querySelector('.voice-panel');
@@ -1115,14 +1169,79 @@ function popup() {
   if (state.popup?.type==='key') return `<div class="popup key-popup" style="left:${state.popup.x}px;top:${state.popup.y}px">${state.popup.options.map((s,i)=>button(s,'long-insert',s,i===state.popup.choice?'selected':'')).join('')}</div>`;
   return '';
 }
+function preserveVoiceToggle(previous) {
+  const next=keyboard.querySelector('.keyboard-footer .voice-toggle');
+  if(!previous||!next)return;
+  const attributes=[...next.attributes],oldDisc=previous.querySelector('.voice-mic-disc'),newDisc=next.querySelector('.voice-mic-disc');
+  if(!oldDisc||!newDisc)return;
+  next.replaceWith(previous);
+  // Resolve the old colors before retargeting so the shared control can crossfade its states.
+  getComputedStyle(oldDisc).backgroundColor;
+  for(const attribute of attributes)if(attribute.name!=='class')previous.setAttribute(attribute.name,attribute.value);
+  previous.removeAttribute('style');
+  oldDisc.innerHTML=newDisc.innerHTML;
+  previous.className=next.className;
+}
+// 键盘内容分两层写：页内容（字母/候选/各种面板）与覆盖层（悬浮 popup、选字编辑框）。
+// 编辑框里的删除、复制、方向键每按一次都会走 render()，以前每次都整块重写 .keyboard 的 innerHTML，
+// 几十个键节点连同 .kb-recede 的亮度滤镜层要整体重新栅格化，用户看到的就是「背景字母闪一下」。
+// 现在页内容没变就一个节点都不动，只按需换覆盖层。
+let lastPageSignature=null,pageChildCount=0,lastOverlayHtml=null;
+// 底部滑轨的开标签带着锁定/选择/光标位置，删一个字就会变；它由 syncPageDrift 原地抄过去，
+// 不参与「页内容变没变」的比较，否则每次删除又会整块重建。
+const CURSOR_ZONE_TAG=/<div class="cursor-zone[^>]*>/;
+function pageSignature(html){return html.replace(CURSOR_ZONE_TAG,'<div class="cursor-zone">');}
+function topLevelCount(html){
+  const box=document.createElement('template');box.innerHTML=html||'';
+  return box.content.children.length;
+}
+function syncPageDrift(pageHtml){
+  const box=document.createElement('template');box.innerHTML=pageHtml;
+  const next=box.content.querySelector('.keyboard-footer .cursor-zone');
+  const live=keyboard.querySelector(':scope > .keyboard-footer > .cursor-zone');
+  if(!next||!live)return;
+  live.className=next.className;
+  for(const name of ['aria-label','aria-valuenow'])live.setAttribute(name,next.getAttribute(name)||'');
+}
+function paintKeyboardContent(pageHtml,overlayHtml,previousEditor,previousBackdrop){
+  const signature=pageSignature(pageHtml);
+  if(signature!==lastPageSignature){
+    keyboard.innerHTML=pageHtml+overlayHtml;
+    lastPageSignature=signature;lastOverlayHtml=overlayHtml;
+    pageChildCount=topLevelCount(pageHtml);
+    // 保留动画目标，只更新内容，避免原生重绘把入场动画截成最终帧。
+    const nextEditor=keyboard.querySelector(':scope > .selection-editor');
+    if(previousEditor&&nextEditor){
+      previousEditor.innerHTML=nextEditor.innerHTML;nextEditor.replaceWith(previousEditor);
+      if(previousBackdrop)keyboard.querySelector(':scope > .selection-editor-backdrop')?.replaceWith(previousBackdrop);
+    }
+    return true;
+  }
+  syncPageDrift(pageHtml);
+  if(overlayHtml===lastOverlayHtml)return false;
+  lastOverlayHtml=overlayHtml;
+  const box=document.createElement('template');box.innerHTML=overlayHtml;
+  const fresh=[...box.content.children];
+  // 退场幽灵与正在收起的浮层不归覆盖层管，这里不碰它们。
+  const stale=[...keyboard.children].slice(pageChildCount).filter(node=>!node.classList.contains('voice-ghost')&&!node.classList.contains('closing'));
+  // 同一个编辑框/遮罩节点继续沿用，只换内部 HTML：入场动画不重放、面板位置也不跳。
+  for(const selector of ['.selection-editor','.selection-editor-backdrop']){
+    const oldNode=stale.find(node=>node.matches(selector)),newNode=fresh.find(node=>node.matches(selector));
+    if(oldNode&&newNode)newNode.replaceWith(oldNode);
+  }
+  for(const node of stale)if(node.isConnected)node.remove();
+  keyboard.append(...fresh);
+  return false;
+}
 function pageLabel() {
   if(state.page==='clipboard-split')return '剪贴板拆词';
-  if(state.voice) return `长按空格语音 · ${state.voice.phase==='loading'?'开启麦克风':state.voice.phase==='paused'?'已暂停':state.voice.phase==='recognizing'?'识别中':state.voice.phase==='cancel'?'上滑取消':'倾听中'}${state.voice.demo?'（演示）':''}`;
+  if(state.voice) return `${state.voice.tap?'点按语音':'长按空格语音'} · ${state.voice.phase==='loading'?'开启麦克风':state.voice.phase==='paused'?'已暂停':state.voice.phase==='recognizing'?'识别中':state.voice.phase==='cancel'?'上滑取消':'倾听中'}${state.voice.demo?'（演示）':''}`;
   return {letters:state.layout==='9'?'9键中文':state.language==='zh'?'26键中文':'26键英文',candidates:'全部候选',numbers:'数字键盘',symbols:`${state.symbol}符号`,clipboard:state.clipTab==='clipboard'?'剪贴板':'常用语',layouts:'键盘选择',emoji:'表情',menu:'功能菜单 · 补充试用',edit:'编辑文字 · 补充试用'}[state.page] || '键盘';
 }
 function render() {
   if(candidateContact&&!quoteEditor&&!privateField&&!document.hidden){candidateRenderPending=true;return;}
   for(const node of keyboard.querySelectorAll('[data-scroll-key]'))scrollPositions.set(node.dataset.scrollKey,node.scrollTop);
+  const previousVoiceToggle=keyboard.querySelector('.keyboard-footer .voice-toggle');
   const previousCandidates=keyboard.querySelector('.candidate-visible'),previousReference=keyboard.querySelector('.clipboard-slot');
   const candidateScroll=previousCandidates?.scrollLeft||0;
   // 呼出动效前置采样：「键盘是否刚从收起态回来」「上一帧有没有编辑框」（innerHTML 重建前抓，别放后面）。
@@ -1140,12 +1259,17 @@ function render() {
   $('snippet-split').disabled=Boolean(state.voice)||!$('snippet-content').value.trim();
   const localEditing=Boolean(clipSearch)||localInput&&state.page!=='clipboard-split';
   const searchIdle=clipSearch&&state.page==='letters'&&!state.comp&&!(clipSearch.target==='host'&&(associatedWords.length||englishPrefix));
-  keyboard.className=`keyboard${state.night?' night':''}${localEditing?' local-edit':''}${state.page==='clipboard-split'?' clip-split-page':''}${clipSearch?' clip-search-mode':''}`;
-  const localHeight=clipSearch?(clipSearch.keys?176+(searchIdle?45:0):351):localEditing?(localInput===$('snippet-content')?128:44):0;
-  const keyboardHeight=clipSearch?(clipSearch.keys?settings.height+176:settings.height):settings.height+localHeight;
+  keyboard.className=`keyboard${state.night?' night':''}${localEditing?' local-edit':''}${state.page==='clipboard-split'?' clip-split-page':''}${clipSearch?' clip-search-mode':''}${state.voice?.tap?' tap-voice':''}`;
+  const landscape=document.documentElement.classList.contains('landscape-ime');
+  const baseHeight=landscape?258:settings.height;
+  const maxHeight=landscape?(nativeIme.maxKeyboardHeight?.()||347):550;
+  const requestedLocalHeight=clipSearch?(clipSearch.keys?176+(searchIdle?45:0):baseHeight):localEditing?(localInput===memeInput?Math.max(80,Math.min(199,maxHeight-baseHeight)):localInput===$('snippet-content')?128:44):0;
+  const localHeight=landscape?Math.min(requestedLocalHeight,clipSearch&&!clipSearch.keys?baseHeight:maxHeight-baseHeight):requestedLocalHeight;
+  const keyboardHeight=clipSearch?(clipSearch.keys?baseHeight+(landscape?localHeight:176):baseHeight):baseHeight+localHeight;
   localPanel.hidden=!localEditing;
   localPanel?.classList.toggle('snippet-edit',localInput===$('snippet-content'));
   localPanel.classList.toggle('clip-search-panel',Boolean(clipSearch));
+  localPanel.classList.toggle('meme-edit-panel',localInput===memeInput);
   localPanel.classList.toggle('night',state.night);
   localPanel.classList.toggle('search-keys-hidden',Boolean(clipSearch&&!clipSearch.keys));
   localPanel.classList.toggle('search-host-target',Boolean(clipSearch&&clipSearch.target==='host'));
@@ -1156,20 +1280,17 @@ function render() {
   const pages={letters:()=>state.layout==='9'?nine():letters(),candidates:candidatePanel,numbers,symbols:symbolPanel,clipboard,'clipboard-split':clipboardSplitPanel,layouts:layoutPanel,emoji:emojiPanel,menu:menuPanel,edit:editPanel};
   // 退场幽灵要在重绘后活下来（它只活 260ms），否则一次多余的 render 就会把动画吞掉。
   const voiceGhost=keyboard.querySelector(':scope > .voice-ghost');
-  if(state.voice&&keyboard.querySelector(':scope > .voice-panel'))paintVoice();
+  if(state.voice&&!state.voice.tap&&keyboard.querySelector(':scope > .voice-panel'))paintVoice();
   else{
     voiceRenderer?.dispose();voiceRenderer=null;
-    keyboard.innerHTML=(clipSearch&&!clipSearch.keys?'':state.voice?voicePanel():(pages[state.page]||letters)())+popup()+selectionEditor();
-    // 保留动画目标，只更新内容，避免原生重绘把入场动画截成最终帧。
-    const nextEditor=keyboard.querySelector(':scope > .selection-editor');
-    if(previousEditor&&nextEditor){
-      previousEditor.innerHTML=nextEditor.innerHTML;nextEditor.replaceWith(previousEditor);
-      keyboard.querySelector(':scope > .selection-editor-backdrop')?.replaceWith(previousBackdrop);
-    }
-    if(state.voice){paintVoice();voiceRenderer=createVoiceOrb(keyboard.querySelector('.voice-texture'));}
+    const pageHtml=clipSearch&&!clipSearch.keys?'':state.voice&&!state.voice.tap?voicePanel():(pages[state.page]||letters)();
+    const rebuilt=paintKeyboardContent(pageHtml,popup()+selectionEditor(),previousEditor,previousBackdrop);
+    if(rebuilt)preserveVoiceToggle(previousVoiceToggle);
+    if(state.voice){paintVoice();if(!state.voice.tap)voiceRenderer=createVoiceOrb(keyboard.querySelector('.voice-texture'));}
     if(voiceGhost)keyboard.append(voiceGhost);
   }
   if(clipSearch)paintClipSearch();else{const header=keyboard.querySelector('.clip-header');if(header)updateClipSearchHeader(header,false);}
+  paintMemeSearch();
   // 编辑框呼出动效挂点：面板新出现才播（面板在场期间的普通重绘不重播）；退后态由 .kb-recede 表达，
   // 收起时同一过渡对称还原。只切 filter/transform/opacity，键位几何与面板开合无关的断言仍然成立。
   const editorVisible=!!keyboard.querySelector(':scope > .selection-editor');
@@ -1195,7 +1316,7 @@ function render() {
   syncClipboardReference();
   layoutCandidateGrid();
   keyboard.classList.toggle('text-selecting',Boolean(state.cursorDrag?.selecting));syncSelectionFeedback();
-  for(const [selector,id] of [['.number-strip','numbers'],['.symbol-grid','symbols:'+state.symbol],['.clip-list','clipboard:'+state.clipTab],['.t9-symbols','nine'],['.candidate-grid','candidates:'+candidateMode+':'+(state.comp?.raw||associatedWords.join(','))],['.emoji-body','emoji:'+state.emojiTab+':'+state.emojiCategory]]){
+  for(const [selector,id] of [['.number-strip','numbers'],['.symbol-grid','symbols:'+state.symbol],['.clip-list','clipboard:'+state.clipTab],['.t9-symbols','nine'],['.candidate-grid','candidates:'+candidateMode+':'+(state.comp?.raw||associatedWords.join(','))],['.emoji-body','emoji']]){
     const node=keyboard.querySelector(selector);if(node){node.dataset.scrollKey=id;const top=scrollPositions.get(id)||0;if(selector==='.candidate-grid')while(top+node.clientHeight>node.scrollHeight&&appendCandidates()){}node.scrollTop=top;}
   }
   updateCandidatePages();
@@ -1224,6 +1345,7 @@ function render() {
   nightShade.style.height=($('phone').getBoundingClientRect().bottom-keyboard.getBoundingClientRect().top)+'px';
   nativeSettings?.classList.toggle('night',state.night);
   document.querySelectorAll('#quick-pages button').forEach(b=>b.setAttribute('aria-pressed', b.dataset.value===state.page));
+  reportCandidatesVisible();
 }
 function feedback(message) { $('feedback').textContent=message; }
 function toast(message) { clearTimeout(toastTimer); $('toast').textContent=message; $('toast').hidden=false; toastTimer=setTimeout(()=>$('toast').hidden=true,2600); feedback(message); }
@@ -1293,15 +1415,15 @@ function deleteText(keepPanel=false) {
 }
 function showPage(page) { endClipboardSplit();if(state.voice) cancelVoice();clipMenu=null;state.clipGroupMenu=null;state.clipConfirm=null;clearTimeout(clipHold?.timer);clipHold=null;if(['letters','numbers','symbols'].includes(state.page))state.returnPage=state.page;if(page==='symbols'){const origin=['letters','numbers'].includes(state.page)?state.page:state.returnPage;if(origin!=='symbols')state.symbolReturn=origin;}state.popup=null;state.page=page;state.hidden=false;render(); }
 function showTab(name) { if(nativeIme&&name==='custom'){$('custom-panel').hidden=false;nativeSettings.showModal();return;} $('try-panel').hidden=name!=='try'; $('custom-panel').hidden=name!=='custom'; document.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected',b.dataset.tab===name)); }
-function startVoice(long=false) {
+function startVoice(tap=false) {
   if(state.voice)return;
   learningChain=[];
   englishPrefix='';
-  if(nativeIme){if(!nativeIme.voiceReady()){toast('语音正在准备，请稍后再试。');return;}if(state.comp)commit(state.comp.raw);state.popup=null;state.voice={phase:'loading',micReady:false,long:false,local:localInput,snapshot:localInput?{text:editor.value,start:editor.selectionStart,end:editor.selectionEnd}:null};beginVoiceBall();voicePanelFresh=true;if(localInput)nativeIme.startLocalVoice();else nativeIme.startVoice();render();startVoiceLoop();return;}
+  if(nativeIme){if(!nativeIme.voiceReady()){toast('语音正在准备，请稍后再试。');return;}if(state.comp)commit(state.comp.raw);state.popup=null;state.voice={phase:'loading',micReady:false,tap,local:localInput,snapshot:localInput?{text:editor.value,start:editor.selectionStart,end:editor.selectionEnd}:null};if(!tap){beginVoiceBall();voicePanelFresh=true;}if(localInput)nativeIme.startLocalVoice();else nativeIme.startVoice();render();if(!tap)startVoiceLoop();return;}
   // 网页端不再连接电脑语音服务：真实识别只在手机原生侧，本页固定走交互演示。
   state.comp=null; state.popup=null;
   const snapshot={text:editor.value,start:editor.selectionStart,end:editor.selectionEnd};
-  beginVoiceBall();state.voice={phase:'listening',snapshot,demo:true,long:false}; voicePanelFresh=true; render(); startVoiceLoop();
+  if(!tap)beginVoiceBall();state.voice={phase:'listening',snapshot,demo:true,tap,micReady:true};if(!tap)voicePanelFresh=true;render();if(!tap)startVoiceLoop();
   feedback('语音交互演示：不录音，松手后输入示例文字。真实识别与标点在手机上运行。');
   const session=state.voice, units=[...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(settings.voiceText)].map(s=>s.segment);
   let count=0;
@@ -1324,6 +1446,11 @@ function finishVoice(cancelled) {
   setTimeout(()=>{ if(state.voice!==session) return; applyText(voiceResult(session.snapshot,settings.voiceText)); exitVoice(); feedback('语音演示结束；本页未使用真实语音识别。'); },900);
 }
 function activate(action,value='') {
+  if(action==='voice-toggle'){if(state.voice){if(state.voice.phase!=='recognizing')finishVoice(false);}else startVoice(true);return;}
+  if(action==='meme-done'||localInput===memeInput&&['enter','return','emoji'].includes(action)){closeMemeSearch();return;}
+  if(localInput===memeInput&&['clipboard','menu','layouts','hide'].includes(action))closeMemeSearch();
+  if(action==='meme-clear'){memeInput.value='';if(localInput===memeInput){state.comp=null;englishPrefix='';context='';associatedWords=[];applyText({text:'',cursor:0});}memeSearch.search('');render();return;}
+  if(action.startsWith('meme-')){memeSearch.action(action,value);return;}
   if(action==='clip-search-toggle'){if(clipSearch)closeClipSearch();else openClipSearch();return;}
   if(action==='clip-search-paste'){pasteClipSearch(value);return;}
   if(action==='clip-search-keys'&&clipSearch){clipSearch.keys=!clipSearch.keys;if(clipSearch.keys)state.page='letters';render();if(clipSearch.keys&&localInput)clipSearchInput.focus({preventScroll:true});return;}
@@ -1363,7 +1490,7 @@ function activate(action,value='') {
   switch(action) {
     case 'english-candidate': nativeIme.completeEnglish(englishPrefix,value);englishPrefix='';break;
     case 'letter': inputLetter(value); break;
-    case 'insert': case 'long-insert': insert(value); state.popup=null;if(Object.values(emojiGroups).some(group=>group.includes(value))){recentEmoji=[value,...recentEmoji.filter(word=>word!==value)].slice(0,16);try{localStorage.setItem('voxfix-emoji-v1',JSON.stringify(recentEmoji));}catch{}} break;
+    case 'insert': case 'long-insert': insert(value); state.popup=null; break;
     case 'candidate': commit(value); break;
     case 'association-candidate': insert(value);break;
     case 'more-candidates': candidateMode='words';state.page=state.page==='candidates'?'letters':'candidates';break;
@@ -1457,12 +1584,11 @@ function activate(action,value='') {
     case 'undo-snippet': clipMenu=null;undoSnippetDelete();break;
     case 'system-paste': clipMenu=null;render();if(!navigator.clipboard?.readText){openSnippet();toast('请粘贴系统剪贴板内容。');return;}navigator.clipboard.readText().then(text=>{if(!text.trim())throw Error('系统剪贴板没有文字');clips=addSnippet(clips,text);snippetUndo=null;saveSnippets();render();}).catch(()=>{openSnippet();toast('可在这里粘贴系统剪贴板内容。');});return;
     case 'layout': if(['9','26','en26'].includes(value)){state.layout=value==='en26'?'26':value;state.language=value==='en26'?'en':'zh';state.comp=null;state.page='letters';}break;
-    case 'emoji-tab': state.emojiTab=value; break;
-    case 'emoji-category': state.emojiCategory=value;emojiQuery=''; break;
-    case 'emoji-search': if(nativeIme){openEmojiSearch();return;}state.emojiTab='Emoji';emojiSearchOpen=!emojiSearchOpen;if(!emojiSearchOpen)emojiQuery='';render();if(emojiSearchOpen)keyboard.querySelector('.emoji-search-input').focus();return;
     case 'switcher': state.popup=state.popup==='switcher'?null:'switcher'; break;
     case 'custom': showTab('custom'); state.popup=null; feedback('设置自动保存。'); break;
-    case 'cancel-recognition': if(state.voice?.phase==='recognizing') { cancelVoice(); } return;
+    // 词典入口：手机上打开与电脑版同构的词语/错法编辑器；试用页没有该窗口时回到设置里的词库区。
+    case 'lexicon': if(nativeIme?.openDictionary){nativeIme.openDictionary();return;} showTab('custom'); state.popup=null; $('lexicon-actions').hidden=false; feedback('试用页没有词典窗口，个人词库在这里导入导出。'); break;
+    case 'cancel-recognition': if(state.voice?.tap||state.voice?.phase==='recognizing') { cancelVoice(); } return;
     case 'select-all': editor.setSelectionRange(0,editor.value.length);localSelection=null;selectedCount=characterCount(editor.value); state.comp=null; break;
     case 'copy-text': case 'cut-text': { const text=editor.value.slice(editor.selectionStart,editor.selectionEnd); if(selectedCount===0||!text)break; {try{clips=addSnippet(clips,text);snippetUndo=null;saveSnippets();}catch(error){toast(error.message);return;} if(settings.clipboardCandidate)state.clipCandidate=text; if(action==='cut-text') { if(editor.selectionStart===editor.selectionEnd) applyText({text:'',cursor:0}); else insert(''); } if(nativeIme)nativeIme.copy(text);else navigator.clipboard?.writeText(text).catch(()=>toast('已存入本页剪贴板，系统复制未获授权。')); } break; }
     case 'paste-last': if(clips[0]) insert(clips[0]); break;
@@ -1505,6 +1631,13 @@ function paintHoldChoice(choice){
 }
 keyboard.addEventListener('pointerdown',e=>{if(referencePopup&&!e.target.closest('.clipboard-results,.clipboard-slot')){closeReferencePopup();consumedClick={id:e.pointerId,until:Date.now()+700};e.preventDefault();e.stopImmediatePropagation();}},true);
 keyboard.addEventListener('pointerdown',e=>{if(e.target.closest('.candidate-visible,.clipboard-slot')&&e.button===0)candidateContact=e.pointerId;},true);
+keyboard.addEventListener('pointerdown',e=>{
+  if(e.button!==0||!e.target.closest('.keyboard-footer [data-action="voice-toggle"]'))return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  consumedClick={id:e.pointerId,action:'voice-toggle',x:e.clientX,y:e.clientY,until:Date.now()+700};
+  activate('voice-toggle');
+},true);
 function releaseCandidateContact(e){if(candidateContact!==e.pointerId)return;candidateContact=null;setTimeout(()=>{if(candidateContact!==null)return;if(candidateRenderPending){candidateRenderPending=false;render();}else syncClipboardReference();},0);}
 for(const event of ['pointerup','pointercancel'])document.addEventListener(event,e=>{if(event==='pointercancel'&&e.pointerType==='touch')return;releaseCandidateContact(e);},true);
 for(const event of ['touchend','touchcancel'])document.addEventListener(event,()=>{if(candidateContact!==null)releaseCandidateContact({pointerId:candidateContact});},true);
@@ -1535,7 +1668,7 @@ keyboard.addEventListener('pointerdown',e=>{
     return;
   }
   if(clipboardSplit&&target.dataset.action==='cursor-gesture')return;
-  if(target.dataset.action==='cursor-gesture' && !state.voice) {
+  if(target.dataset.action==='cursor-gesture' && (!state.voice||state.voice.tap)) {
     learningChain=[];
     if(state.selectionActions&&!target.closest('.selection-editor'))return;
     if(target.dataset.track==='mini'&&!target.dataset.direction&&!target.classList.contains('selection-center'))return;
@@ -1585,7 +1718,7 @@ keyboard.addEventListener('pointerdown',e=>{
   const panelDelete=target.classList.contains('selection-delete');
   if(!target.classList.contains('key')&&!panelDelete) return;
   e.preventDefault();
-  if(state.voice) return;
+  if(state.voice&&!state.voice.tap) return;
   keyboard.setPointerCapture(e.pointerId);
   const rect=target.getBoundingClientRect(), kbRect=keyboard.getBoundingClientRect();
   const g={id:e.pointerId,action:target.dataset.action,value:target.dataset.value,y:e.clientY,long:false,cancel:false,hint:target.querySelector('.hint')?.textContent,target,panelDelete}; gesture=g;
@@ -1594,9 +1727,8 @@ keyboard.addEventListener('pointerdown',e=>{
   if(g.action==='delete'){g.immediate=true;deleteText(panelDelete);}
   g.timer=setTimeout(()=>{
     if(gesture!==g) return;
-    if(g.action==='space') { g.long=true; startVoice(); }
+    if(g.action==='space'&&!state.voice?.tap) { g.long=true; startVoice(); }
     else if(g.action==='delete') { g.long=true;scheduleRepeat(g,0); }
-    else if(g.action==='emoji') { g.long=true;g.repeatTimer=setTimeout(()=>emitEmojiLongPress(g),320); }
     else if(g.action==='letter') {
       // 长按浮层：固定「大写 / 键帽提示 / 小写」三档，首次出现就选中中间的提示项，
       // 浮层位置让中间档压住触点（边缘按键防越界被顶回键盘内时允许偏移）。
@@ -1611,7 +1743,7 @@ keyboard.addEventListener('pointerdown',e=>{
       render();
     }
     else if(g.action==='nine'||g.action==='nine-split'){g.long=true;insert(g.value);render();}
-  },g.action==='space'?300:420);
+  },g.action==='space'?240:420);
 });
 keyboard.addEventListener('pointermove',e=>{
   if(!gesture || gesture.id!==e.pointerId) return;
@@ -1707,7 +1839,7 @@ function endGesture(e,cancelled=false) {
     const inside=element=>{if(!element)return false;const r=element.getBoundingClientRect();return e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom;};
     if(!inside(keyboard)&&!inside(keyboard.querySelector('.key-popup')))cancelled=true;
   }
-  if(cancelled) { if(state.voice) cancelVoice(); state.popup=null; render(); return; }
+  if(cancelled) { if(state.voice&&!state.voice.tap) cancelVoice(); state.popup=null; render(); return; }
   if(g.long && g.action==='space') finishVoice(g.cancel);
   else if(g.long && g.action==='letter')activate('long-insert',state.popup?.type==='key'?state.popup.options[state.popup.choice??0]:g.hint||g.value);
   else if(!g.long && !g.immediate) activate(g.hint && g.y-e.clientY>35?'insert':g.action,g.hint && g.y-e.clientY>35?g.hint:g.value);
@@ -1737,32 +1869,24 @@ keyboard.addEventListener('click',e=>{
 });
 keyboard.addEventListener('contextmenu',e=>e.preventDefault());
 keyboard.addEventListener('scroll',e=>{if(e.target.matches('.candidate-grid')){const grid=e.target;if(grid.scrollTop+grid.clientHeight>=grid.scrollHeight-grid.clientHeight)appendCandidates();updateCandidatePages();}else if(referencePopup&&e.target.matches('.candidate-visible'))closeReferencePopup();},true);
-// 表情长按连发 / 剪贴板引用长按编辑：滑动即取消，普通候选不自动收藏。
-function emojiEmit(value){
-  insert(value);
-  if(Object.values(emojiGroups).some(group=>group.includes(value)))recentEmoji=[value,...recentEmoji.filter(word=>word!==value)].slice(0,16);
-  render();
-}
-function clearItemHold(){if(!itemHold)return;clearTimeout(itemHold.timer);clearInterval(itemHold.repeatTimer);itemHold=null;}
+// 剪贴板引用长按编辑：滑动即取消。
+function clearItemHold(){if(!itemHold)return;clearTimeout(itemHold.timer);itemHold=null;}
 keyboard.addEventListener('pointerdown',e=>{
   if(e.button!==0)return;
   // 鼠标在候选栏上会先起一个拖动滚动的手势，按住不动时仍然允许长按候选词。
   if(gesture&&gesture.action!=='candidate-scroll')return;
-  const target=e.target.closest('.emoji-hold,[data-action="clipboard-result"]');if(!target||target.disabled)return;
+  const target=e.target.closest('[data-action="clipboard-result"]');if(!target||target.disabled)return;
   clearItemHold();
-  const hold={id:e.pointerId,x:e.clientX,y:e.clientY,target,kind:target.dataset.action.startsWith('clipboard-')?'reference':'emoji',value:target.dataset.value};
+  const hold={id:e.pointerId,x:e.clientX,y:e.clientY,target,value:target.dataset.value};
   itemHold=hold;
   hold.timer=setTimeout(()=>{
     if(itemHold!==hold)return;
     hold.fired=true;hold.ready=true;
     consumedClick={id:hold.id,until:Date.now()+700};
-    if(hold.kind==='emoji'){
-      emojiEmit(hold.value);
-      hold.repeatTimer=setInterval(()=>{if(itemHold!==hold||state.voice){clearInterval(hold.repeatTimer);return;}emojiEmit(hold.value);},220);
-    }else openClipboardEditor(hold.value);
-  },hold.kind==='reference'?550:340);
+    openClipboardEditor(hold.value);
+  },550);
 });
-keyboard.addEventListener('pointermove',e=>{if(itemHold&&e.pointerId===itemHold.id&&Math.hypot(e.clientX-itemHold.x,e.clientY-itemHold.y)>8){if(itemHold.kind==='reference')consumedClick={id:e.pointerId,until:Date.now()+700};clearItemHold();}});
+keyboard.addEventListener('pointermove',e=>{if(itemHold&&e.pointerId===itemHold.id&&Math.hypot(e.clientX-itemHold.x,e.clientY-itemHold.y)>8){consumedClick={id:e.pointerId,until:Date.now()+700};clearItemHold();}});
 for(const event of ['pointerup','pointercancel'])keyboard.addEventListener(event,e=>{if(itemHold&&e.pointerId===itemHold.id)clearItemHold();});
 // 工具栏：长按图标直接抬起拖动、松手落位。没有“排序模式”，也不额外占一行提示——
 // 提示行会挡住候选区视野，所以进入/退出的反馈只放在被按住的图标本身（.toolbar-drag）。
@@ -1855,9 +1979,6 @@ keyboard.addEventListener('keydown',e=>{
   e.preventDefault();const items=[...keyboard.querySelectorAll('.clip-management-menu button')],index=items.indexOf(document.activeElement);
   items[e.key==='Home'?0:e.key==='End'?items.length-1:(index+(e.key==='ArrowDown'?1:-1)+items.length)%items.length]?.focus({preventScroll:true});
 });
-function searchEmoji(input){emojiQuery=input.value;const cursor=input.selectionStart;render();const next=keyboard.querySelector('.emoji-search-input');next.focus();next.setSelectionRange(cursor,cursor);}
-keyboard.addEventListener('input',e=>{if(e.target.matches('.emoji-search-input')&&!e.isComposing)searchEmoji(e.target);});
-keyboard.addEventListener('compositionend',e=>{if(e.target.matches('.emoji-search-input'))searchEmoji(e.target);});
 let clipSearchTouch=null;
 localPanel.addEventListener('pointerdown',e=>{if(!clipSearch)return;if(e.target.closest('.clip-search-result'))clipSearchTouch={id:e.pointerId,x:e.clientX,y:e.clientY,moved:false};else if(e.target.closest('button'))e.preventDefault();});
 localPanel.addEventListener('pointermove',e=>{if(clipSearchTouch?.id===e.pointerId&&Math.hypot(e.clientX-clipSearchTouch.x,e.clientY-clipSearchTouch.y)>8)clipSearchTouch.moved=true;});
@@ -1991,7 +2112,7 @@ loadPinyin(hasNativePinyin).then(()=>{updatePhraseOptions();if(state.comp)render
 loadEnglish().then(async()=>{if(hasNativePinyin)await loadPersonalEnglish();if(englishPrefix||state.comp)render();}).catch(()=>{});
 // 网页端语音固定为交互演示，不再检测或连接电脑语音服务。
 function updatePhraseOptions(){setPhraseOptions(allPhrases());}
-globalThis.voxfixHostFocus=(selectionChanged=false)=>{if(clipSearch)setClipSearchTarget('host',Boolean(selectionChanged));};
+globalThis.voxfixHostFocus=(selectionChanged=false)=>{if(localInput===memeInput){closeMemeSearch();state.page='letters';render();}else if(clipSearch)setClipSearchTarget('host',Boolean(selectionChanged));};
 if(nativeIme){
   globalThis.voxfixSplitInvalidated=()=>{if(clipboardSplit){clipboardSplit=null;splitRequest++;state.page='clipboard';render();toast('输入位置已变化，本次拆词已结束');}};
   globalThis.voxfixPinyinReady=(failed=false)=>{if(failed)loadFullPinyin().catch(()=>feedback('拼音词库未能加载。'));else if(state.comp)render();};
@@ -2006,7 +2127,7 @@ if(nativeIme){
   globalThis.voxfixSelectionOrigin=()=>{if(localInput||state.voice||gesture||clipboardSplit)return;kbArrivedAt=performance.now();selectionLocked=true;state.selectionActions=true;render();};
   globalThis.voxfixSelectionUnavailable=()=>toast('当前输入框暂不提供段落文本，请使用滑轨框选。');
   globalThis.voxfixSelectionBlocked=()=>{if(gesture?.selecting){gesture.blockedDirection=gesture.direction?.slice();haltJoystick(gesture);}};
-  globalThis.voxfixReset=()=>{endClipboardSplit();if(gesture)haltJoystick(gesture);releaseSelectionLock();state.selectionActions=false;state.cursorDrag=null;cursorFeedback.visible=false;closeLocalEditor(true);quoteEditor=null;candidateContact=null;clearTimeout(referenceTimer);referenceWanted='' ;clipReference='';latestClipboard='';stopVoiceLoop();englishPrefix='';context='';learningChain=[];associatedWords=[];clearTimeout(gesture?.timer);clearTimeout(gesture?.repeatTimer);gesture=null;itemHold=null;state.voice=null;state.comp=null;state.popup=null;state.locked=false;state.hidden=false;state.page='letters';state.clipManage=false;state.clipSelected=[];state.clipConfirm=null;state.clipCandidate='';clearToolbarDrag();state.clipGroupMenu=null;applyText({text:'',cursor:0});render();};
+  globalThis.voxfixReset=()=>{memeSearch.reset();memeInput.value='';endClipboardSplit();if(gesture)haltJoystick(gesture);releaseSelectionLock();state.selectionActions=false;state.cursorDrag=null;cursorFeedback.visible=false;closeLocalEditor(true);quoteEditor=null;candidateContact=null;clearTimeout(referenceTimer);referenceWanted='' ;clipReference='';latestClipboard='';stopVoiceLoop();englishPrefix='';context='';learningChain=[];associatedWords=[];clearTimeout(gesture?.timer);clearTimeout(gesture?.repeatTimer);gesture=null;itemHold=null;state.voice=null;state.comp=null;state.popup=null;state.locked=false;state.hidden=false;state.page='letters';state.clipManage=false;state.clipSelected=[];state.clipConfirm=null;state.clipCandidate='';clearToolbarDrag();state.clipGroupMenu=null;applyText({text:'',cursor:0});render();};
   globalThis.voxfixClearComposition=(keepEnglish=false)=>{if(localInput||keepEnglish||clipboardSplit)return;const changed=Boolean(englishPrefix||state.comp||associatedWords.length||state.page==='candidates');englishPrefix='';context='';learningChain=[];associatedWords=[];state.comp=null;if(state.page==='candidates')state.page='letters';applyText({text:'',cursor:0});if(changed)render();};
   // 从 inputType 推导「键盘形态」：数字/电话 → 数字页；文本密码/邮箱/网址等 → 英文；其余 → 中文字母。
   // 用于「同一编辑器重启时只有形态真变才重置」——支付宝/银行密码框每输入一个字符都会带 flag 位

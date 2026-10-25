@@ -1,4 +1,4 @@
-param([string]$Proxy = '', [switch]$PrepareOnly)
+﻿param([string]$Proxy = '', [switch]$PrepareOnly)
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path $PSScriptRoot -Parent
 Set-Location -LiteralPath $taskRoot
@@ -56,7 +56,8 @@ specs=[
  (gradle['url'],gradle['sha256'],base/'gradle',1),
  ('https://dl.google.com/android/repository/platform-35_r02.zip','0bb560a90a7a2cbd0dd8348224d518b638fe7949',root/'.android/sdk/platforms/android-35',1),
  ('https://dl.google.com/android/repository/build-tools_r35_windows.zip','af059bb67cf7786f45ee0db85e2d24985df1b4b6',root/'.android/sdk/build-tools/35.0.0',1),
- ('https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-static-link-onnxruntime-1.13.8.aar','b22c3fc1b6a45666d28892bb2f7694beeb77a8362d7ebd77c1a5431ec9435471',base/'sherpa-onnx-static-link-onnxruntime-1.13.8.aar',None)]
+ ('https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-static-link-onnxruntime-1.13.8.aar','b22c3fc1b6a45666d28892bb2f7694beeb77a8362d7ebd77c1a5431ec9435471',base/'sherpa-onnx-static-link-onnxruntime-1.13.8.aar',None),
+ ('https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/1.17.3/onnxruntime-android-1.17.3.aar','790d962102a47b9ed3523912cd9a39a67590cd353ae55d88c5358be7b6945d79',base/'onnxruntime-android-1.17.3.aar',None)]
 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:list(pool.map(install,specs))
 (root/'android/local.properties').write_text('sdk.dir='+str(root/'.android/sdk').replace('\\','/')+'\n')
 '@

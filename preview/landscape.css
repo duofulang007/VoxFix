@@ -1,0 +1,22 @@
+/* K60 讯飞小米版横屏实测：全屏编辑、约 700dp 居中键区、独立行高，无底栏。 */
+.landscape-ime #keyboard {padding-left:max(5px,calc((100% - 700px)/2));padding-right:max(5px,calc((100% - 700px)/2));}
+.landscape-ime .keyboard-footer {display:none;}
+.landscape-ime .keyboard .key-rows {gap:6px;padding:2px 0 5px;}
+.landscape-ime .keyboard .key-row.row-middle {padding:0 35px;}
+.landscape-ime .keyboard .key.space .microphone {top:5px;}
+.landscape-ime .keyboard .number-body,.landscape-ime .keyboard .symbol-body {padding-top:2px;padding-bottom:5px;}
+.landscape-ime .keyboard .symbol-grid {grid-auto-rows:calc((258px - 52px)/4);}
+.landscape-ime .keyboard .candidate-panel {padding-bottom:5px;}
+.landscape-ime .clip-split-card {height:calc(100% - 55px);}
+.landscape-ime .clip-split-grid {height:calc(100% - 44.3px);}
+.landscape-ime .selection-editor {bottom:5px;width:430px;}
+.landscape-ime .selection-editor .selection-mini-track {height:152px;}
+.landscape-ime .selection-editor-clipboard {grid-template-rows:repeat(4,35px);}
+.landscape-ime .selection-editor .selection-editor-clipboard button {min-height:35px;}
+.landscape-ime #phone > #ime-local-editor:not([hidden]) {left:max(5px,calc((100% - 700px)/2));right:max(5px,calc((100% - 700px)/2));}
+.landscape-ime #ime-local-editor .snippet-frame {display:flex;flex-direction:column;}
+.landscape-ime #ime-local-editor .snippet-frame .field {min-height:0;}
+.landscape-ime #ime-local-editor .snippet-frame .dialog-actions {flex:none;flex-direction:row;height:32px;padding:2px 3px;border-left:0;border-top:1px solid #e7eaf0;}
+.landscape-ime #ime-local-editor .snippet-frame .dialog-actions button {min-height:28px;}
+.landscape-ime .voice-stage {--orb:100px;}
+.landscape-ime .settings-dialog {height:258px;}

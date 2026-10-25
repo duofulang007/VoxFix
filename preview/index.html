@@ -4,9 +4,11 @@
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>VoxFix · 键盘试用页</title>
   <!-- 原生桥在导航前已注入，首帧就切换布局，不等待模块及其依赖。 -->
-  <script>if(globalThis.VoxFixIme)document.documentElement.classList.add('native-ime');</script>
+  <script>if(globalThis.VoxFixIme){document.documentElement.classList.add('native-ime');if(VoxFixIme.isLandscape?.())document.documentElement.classList.add('landscape-ime');}</script>
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="native-ime.css">
+  <link rel="stylesheet" href="meme-search.css">
+  <link rel="stylesheet" href="landscape.css">
 </head>
 <body>
   <header class="page-header"><a class="brand" href="#"><span class="brand-mark">V</span>VoxFix<span class="brand-detail">键盘试用页</span></a><span class="version">对齐手机版 · 2026-10-18</span></header>

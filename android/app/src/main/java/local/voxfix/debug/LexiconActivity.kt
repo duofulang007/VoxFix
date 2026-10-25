@@ -36,8 +36,7 @@ class LexiconActivity : Activity() {
         fun button(label: String, action: () -> Unit) {
             Button(this).apply { text = label; layout.addView(this); buttons.add(this); setOnClickListener { if (!running) action() } }
         }
-        button("添加个人词语") { addVoiceWord() }
-        button("管理语音词典") { manageVoiceWords() }
+        button("添加拼音词语") { addPinyinWord() }
         button("导出完整备份") { export("json") }
         button("导出通用词库") { export("tsv") }
         button("合并导入词库") {
@@ -46,7 +45,7 @@ class LexiconActivity : Activity() {
         }
         button("返回") { finish() }
         setContentView(ScrollView(this).apply { addView(layout) })
-        work { store -> "已保存 ${store.count()} 条拼音词条、${store.voiceWords().size} 条语音词语。语音改字逐步学习，手动添加立即优先。备份不包含录音、剪贴板或正文。" }
+        work { store -> "已保存 ${store.count()} 条拼音词条，选词会自动累积。语音词语与错法在键盘功能菜单的「词典」里编辑；备份不包含录音、剪贴板或正文。" }
     }
     private fun export(value: String) {
         format = value
@@ -91,41 +90,24 @@ class LexiconActivity : Activity() {
     override fun onSaveInstanceState(state: Bundle) { state.putString("format", format); super.onSaveInstanceState(state) }
     override fun onDestroy() { worker.shutdown(); super.onDestroy() }
 
-    private fun addVoiceWord(word: String = "", code: String = "") {
+    private fun addPinyinWord(word: String = "", code: String = "") {
         val fields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 8, 32, 8) }
-        val target = EditText(this).apply { hint = "正确词语，如：张玥、VoxFix"; setSingleLine(); setText(word); fields.addView(this) }
+        val target = EditText(this).apply { hint = "中文词语，如：张玥"; setSingleLine(); setText(word); fields.addView(this) }
         if (word.isNotEmpty()) target.isEnabled = false
-        val reading = EditText(this).apply { hint = "完整拼音（可选），如：zhang yue"; setSingleLine(); setText(code); fields.addView(this) }
-        fields.addView(TextView(this).apply { text = "词语用于语音优先识别；填写准确拼音后，也能用于拼音候选。不会把同音词全部强制替换。" })
-        val dialog = AlertDialog.Builder(this).setTitle("添加个人词语").setView(fields).setNegativeButton("取消", null).setPositiveButton("保存", null).create()
+        val reading = EditText(this).apply { hint = "完整拼音，如：zhang yue"; setSingleLine(); setText(code); fields.addView(this) }
+        fields.addView(TextView(this).apply { text = "只影响拼音候选的读音与频率；语音词语和错法请在功能菜单「词典」里加。" })
+        val dialog = AlertDialog.Builder(this).setTitle("添加拼音词语").setView(fields).setNegativeButton("取消", null).setPositiveButton("保存", null).create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val value = target.text.toString().trim(); val pinyin = reading.text.toString().trim()
                 try {
-                    VoiceLexicon.validateWord(value)
-                    if (pinyin.isNotEmpty()) PersonalLexicon.validate(org.json.JSONArray().put(org.json.JSONObject().put("key", "p:" + pinyin.replace(" ", "")).put("word", value).put("code", pinyin).put("hits", 1)))
-                    work { store -> store.addVoiceWord(value, pinyin); "已保存，下一次语音优先考虑此词。" }
+                    require(value.matches(Regex("[\\u3400-\\u9fff]{1,16}"))) { "请填 1 至 16 个汉字" }
+                    require(pinyin.matches(Regex("[a-z]+( [a-z]+)*")) && pinyin.split(' ').size == value.length) { "拼音要与字数一致，用小写和空格分隔" }
+                    work { store -> store.addPinyinWord(value, pinyin); "已保存，拼音候选会立即包含此词。" }
                     dialog.dismiss()
                 } catch (error: Exception) { target.error = error.message ?: "词语或拼音无效" }
             }
         }
         dialog.show()
-    }
-    private fun manageVoiceWords() {
-        worker.execute {
-            val words = try { PersonalLexicon(this).use { it.voiceWords() } } catch (_: Exception) { runOnUiThread { status.text = "词典读取失败，已有数据保留。" }; return@execute }
-            runOnUiThread {
-                if (isDestroyed) return@runOnUiThread
-                if (words.isEmpty()) { status.text = "还没有语音词语，可以手动添加；听写后用拼音改正同音错字，也会逐步学习。"; return@runOnUiThread }
-                AlertDialog.Builder(this).setTitle("语音词典").setItems(words.map { "${it.word} · ${if (it.manual) "手动优先" else "纠正${it.hits}次"}" }.toTypedArray()) { _, i ->
-                    val row = words[i]
-                    AlertDialog.Builder(this).setTitle(row.word).setItems(arrayOf("编辑／设为手动优先", "忘记此词的语音偏好")) { _, action ->
-                        if (action == 0) addVoiceWord(row.word, row.code)
-                        else AlertDialog.Builder(this).setTitle("忘记语音偏好？").setMessage("移除“${row.word}”的语音词条和相关纠正记忆，保留已有拼音选词记录。")
-                            .setNegativeButton("取消", null).setPositiveButton("忘记") { _, _ -> work { store -> store.forgetVoiceWord(row.word); "已忘记此词的语音偏好。" } }.show()
-                    }.setNegativeButton("返回", null).show()
-                }.setNegativeButton("关闭", null).show()
-            }
-        }
     }
 }

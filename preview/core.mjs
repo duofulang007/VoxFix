@@ -52,7 +52,7 @@ export function joystickLevel(rho,current,config=joystick){
 }
 export const defaults = {
   ...keyboardGeometry,
-  toolbar: toolbarItems.map(([id]) => id), footerSwitcher: true, footerClipboard: true,
+  toolbar: toolbarItems.map(([id]) => id), footerSwitcher: true,
   comma: '，', period: '。', voiceText: '你好。', rememberInput: true, phrasePacks: [],
   clipboardHistory: true, clipboardCandidate: false, clipboardMatch: true, customToolbar: [],
 };
@@ -68,7 +68,7 @@ export function settingsFrom(value) {
     if (!Array.isArray(value.toolbar) || value.toolbar.some(id => !toolbarItems.some(([valid]) => valid === id) && !/^custom:[a-z0-9]{1,8}$/.test(id))) throw Error('快捷栏配置无效');
     result.toolbar = [...new Set(value.toolbar)];
   }
-  for (const key of ['footerSwitcher', 'footerClipboard', 'clipboardHistory', 'clipboardCandidate', 'clipboardMatch']) {
+  for (const key of ['footerSwitcher', 'clipboardHistory', 'clipboardCandidate', 'clipboardMatch']) {
     if (key in value && typeof value[key] !== 'boolean') throw Error('底部入口配置无效');
     if (key in value) result[key] = value[key];
   }

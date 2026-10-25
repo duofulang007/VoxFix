@@ -40,6 +40,21 @@ try{
   assert.equal(await native.locator('.selection-delete').isDisabled(),false,'已选 0 字时删除钮仍可用');
   assert.equal(await native.locator('.selection-mini-track.locked').count(),0,'删除后起点锁定随之失效');
 
+  // 面板里的按钮不得重建键盘页内容：以前每次 render 都整块重写 .keyboard 的 innerHTML，
+  // 几十个键节点连同 .kb-recede 的亮度滤镜层要一起重新栅格化，用户看到的就是「背景字母闪一下」。
+  await openPanel();
+  const keyCount=await native.evaluate(()=>{document.querySelectorAll('#keyboard .key').forEach((node,index)=>{node.dataset.repaintProbe=String(index);});return document.querySelectorAll('#keyboard .key').length;});
+  assert(keyCount>0,'键盘键位必须存在');
+  const keysSurvived=()=>native.evaluate(count=>document.querySelectorAll('#keyboard .key[data-repaint-probe]').length===count,keyCount);
+  await native.locator('.selection-delete').click();
+  assert(await keysSurvived(),'面板删除不得重建键盘键位');
+  await native.locator('.selection-direction[data-direction="1,1"]').click();
+  assert(await keysSurvived(),'方向键不得重建键盘键位');
+  await native.locator('.selection-editor [data-action="select-all"]').click();
+  assert(await keysSurvived(),'全选不得重建键盘键位');
+  await native.locator('.selection-editor [data-action="paste-text"]').click();
+  assert(await keysSurvived(),'粘贴不得重建键盘键位');
+
   // 长按按主键盘节奏连删；重绘不得中断，也不得重复触发。
   await openPanel();
   const longBefore=await deletes();
@@ -194,5 +209,5 @@ try{
   await page.waitForTimeout(80);
   assert.equal(await page.locator('#editor').inputValue(),'n','组合中删除删掉组合里最后一个字母');
   assert.deepEqual(errors,[]);
-  console.log('PASS: 面板删除钮点按/长按连删、四类停止+收起停止、面板保持打开、计数与禁用态同步、图标居中不裁切、页头与 26 键几何不变、原生宿主/共享编辑框/网页宿主一致、主键盘删除入口一致');
+  console.log('PASS: 面板删除钮点按/长按连删、四类停止+收起停止、面板保持打开、计数与禁用态同步、面板操作不重建键位、图标居中不裁切、页头与 26 键几何不变、原生宿主/共享编辑框/网页宿主一致、主键盘删除入口一致');
 }finally{await browser.close();await new Promise(r=>server.close(r));}

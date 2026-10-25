@@ -12,7 +12,7 @@ class PcmCaptureTest {
         val reading = CountDownLatch(1)
         val unblock = CountDownLatch(1)
         var read = 0
-        PcmCapture(8, {
+        PcmCapture(150, {
             if (read++ == 0) floatArrayOf(1f) else {
                 reading.countDown()
                 unblock.await()
@@ -30,7 +30,7 @@ class PcmCaptureTest {
         val recording = AtomicBoolean(true)
         val stopped = CountDownLatch(1)
         var read = 0
-        PcmCapture(SpeechEngine.CAPTURE_BUFFER_CHUNKS, {
+        PcmCapture(150, {
             read++
             if (read == 40) recording.set(false)
             floatArrayOf(read.toFloat())
@@ -45,7 +45,7 @@ class PcmCaptureTest {
         val read = AtomicInteger()
         val ready = CountDownLatch(1)
         val stopped = CountDownLatch(1)
-        PcmCapture(8, {
+        PcmCapture(150, {
             val number = read.incrementAndGet()
             if (number <= 6) floatArrayOf(number.toFloat())
             else { ready.countDown(); stopped.await(); null }

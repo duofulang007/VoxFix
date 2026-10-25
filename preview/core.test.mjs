@@ -66,6 +66,7 @@ assert.deepEqual(voiceResult(snapshot,'你好。'),{text:'前你好。后',curso
 assert.deepEqual(voiceResult(snapshot,'演示',true),{text:snapshot.text,cursor:1});
 assert.deepEqual(settingsFrom({}),defaults);
 assert.deepEqual(settingsFrom({toolbar:[],footerClipboard:false}).toolbar,[]);
+assert.equal('footerClipboard' in settingsFrom({footerClipboard:false}),false,'Legacy footer clipboard setting no longer controls the voice button');
 assert.deepEqual(settingsFrom({toolbar:['emoji','emoji']}).toolbar,['emoji']);
 assert.equal(settingsFrom({height:NaN}).height,351);
 assert.equal(settingsFrom({height:999}).height,351);

@@ -16,7 +16,7 @@ async function check(name,run){
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.addInitScript(()=>{
     window.calls=[];
-    window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','gestureStart','gestureMove','gestureEnd','edit','ready','resize','refreshClipboard','importClipboard'].map(name=>[name,(...args)=>calls.push([name,...args])]));
+    window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','gestureStart','gestureMove','gestureEnd','edit','ready','resize','refreshClipboard','importClipboard','openLexicon','openDictionary'].map(name=>[name,(...args)=>calls.push([name,...args])]));
     VoxFixIme.voiceReady=()=>true;
     localStorage.setItem('voxfix-snippets-v1',JSON.stringify({clips:Array.from({length:30},(_,i)=>'clip-'+i),phrases:[]}));
   });
@@ -70,6 +70,7 @@ try{
   await check('explicit clipboard import does not revive automatic refresh',async({page,click})=>{const openMenu=async()=>{await page.locator('.clip-list').click({button:'right',position:{x:3,y:3}});};await page.evaluate(()=>voxfixClipboard('sample','b'.repeat(64)));await click('clipboard');await openMenu();await click('clear-snippets');assert(await page.locator('.clip-menu-sheet').count(),'清空列表需要先确认');await click('clip-confirm-ok');await page.evaluate(()=>voxfixClipboard('sample','b'.repeat(64)));assert.equal(await page.locator('.clip-text').count(),0);await openMenu();await click('system-paste');assert.equal(await page.locator('.clip-menu-sheet').count(),0);assert(await page.evaluate(()=>calls.some(c=>c[0]==='importClipboard')));await page.evaluate(()=>voxfixClipboard('sample','b'.repeat(64),true));assert.equal(await page.locator('.clip-text').count(),1);});
   await check('English cursor echo does not leave old candidates',async({page,click})=>{await click('language');for(const l of 'hel')await click('letter',l);await page.evaluate(()=>voxfixClearComposition());assert.equal(await page.locator('[data-action="english-candidate"]').count(),0);});
   await check('settings cannot strand its own entry',async({page,click})=>{await click('menu');await click('custom');assert.equal(await page.locator('#feature-toggles').count(),0);assert.equal(await page.locator('#clipboard-toggles input').count(),2);await page.locator('dialog[open] > button').click();await click('return');assert.equal(await page.locator('#keyboard [data-action="menu"]').count(),1);});
+  await check('lexicon entry opens from the function menu',async({page,click})=>{await click('menu');assert.equal(await page.locator('#keyboard .menu-grid [data-action="lexicon"]').count(),1,'功能菜单需要可见的词典入口');await click('lexicon');assert(await page.evaluate(()=>calls.some(c=>c[0]==='openDictionary')),'点击词典应打开原生词典窗口');assert.equal(await page.locator('#keyboard .menu-grid').count(),1,'原生词典窗口由系统页面呈现，键盘保持原位');});
   await check('space release outside cancels',async({page,key})=>{const r=await key('space').boundingBox();await page.mouse.move(r.x+r.width/2,r.y+r.height/2);await page.mouse.down();await page.mouse.move(-10,r.y+r.height/2);await page.mouse.up();assert(!(await page.evaluate(()=>calls.some(c=>c[0]==='commit'))));});
   await check('native cursor keyboard uses Android bridge',async({page})=>{await page.evaluate(()=>{voxfixCursor(5,10);const z=document.querySelector('.cursor-zone');z.focus();z.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}));});assert(await page.evaluate(()=>calls.some(c=>c[0]==='moveCursor'&&c[1]===-1)));});
   await check('Chinese association continues in the same bar',async({page,click})=>{for(const l of 'NI')await click('letter',l);await click('candidate','你');assert(await page.locator('[data-action="association-candidate"][data-value="好"]').count());await click('association-candidate','好');assert(await page.locator('[data-action="association-candidate"][data-value="吗"]').count());await click('more-candidates');assert(await page.locator('.candidate-grid').count());});
@@ -107,12 +108,13 @@ try{
     assert(await page.evaluate(()=>calls.some(c=>c[0]==='commit')));
   });
   await check('clipboard double tap locks repeated paste and keeps manual return',async({page,key,click})=>{
+    const openClipboard=async()=>{await page.evaluate(()=>voxfixClearComposition());await click('clipboard');};
     await page.evaluate(()=>{
       voxfixStartInput(1,false);
       const commit=VoxFixIme.commit;
       VoxFixIme.commit=text=>{commit(text);setTimeout(()=>voxfixStartInput(1,true),10);};
     });
-    await click('clipboard');
+    await openClipboard();
     const tab=key('clip-tab','clipboard');
     const before=await tab.boundingBox();
     await tab.tap();await tab.tap();
@@ -126,17 +128,17 @@ try{
     assert.deepEqual(await page.evaluate(()=>calls.filter(c=>c[0]==='commit').map(c=>c[1])),[text,text],'每次点击只粘贴一次');
     assert.equal(await page.locator('.clip-list').evaluate(e=>e.scrollTop),200,'粘贴保留列表位置');
     await click('return');assert.equal(await page.locator('[data-action="letter"]').count(),26,'锁定时仍可收起');
-    await click('clipboard');assert.equal(await tab.getAttribute('aria-pressed'),'true','收起再打开保留锁定');
+    await openClipboard();assert.equal(await tab.getAttribute('aria-pressed'),'true','收起再打开保留锁定');
     await click('clip-tab','phrases');
     await page.evaluate(()=>voxfixClipboard('常用语示例','c'.repeat(64)));
     await click('clip-tab','clipboard');
     await page.locator('.clip-text').first().click({button:'right'});await click('context-favorite');
     await click('clip-tab','phrases');await page.locator('.clip-text').first().tap();
     assert.equal(await page.locator('.clip-list').count(),0,'剪贴板锁定不改变常用语的返回行为');
-    await click('clipboard');
+    await openClipboard();
     await tab.click();await page.waitForTimeout(400);await tab.click();
     assert.equal(await tab.getAttribute('aria-pressed'),'true','间隔较久的单击不能解锁');
-    await click('return');await click('clipboard');
+    await click('return');await openClipboard();
     await tab.click();await tab.click();
     assert.equal(await tab.getAttribute('aria-pressed'),'false','鼠标双击应解锁');
     assert.equal(await tab.locator('.clip-lock').count(),0);
@@ -264,13 +266,10 @@ try{
     assert.equal(await page.locator('.clip-candidate').count(),0);
     assert(await page.evaluate(()=>calls.some(c=>c[0]==='commit'&&c[1]==='候选栏内容')));
   });
-  await check('emoji long press repeats input',async({page,click,touch})=>{
-    await click('emoji');
-    const target=page.locator('.emoji-grid [data-action="insert"]').first();
-    const value=await target.getAttribute('data-value'),box=await target.boundingBox();
-    await touch.hold(box,1100);
-    const inserts=await page.evaluate(v=>calls.filter(c=>c[0]==='commit'&&c[1]===v).length,value);
-    assert(inserts>=3,'长按表情应连续输入多个，实际 '+inserts);
+  await check('smile opens only image search without the old tab row',async({page,click})=>{
+    await click('emoji');assert(await page.getByRole('searchbox',{name:'搜索表情包'}).isVisible());
+    assert.equal(await page.locator('.emoji-top,.emoji-grid,[data-action="emoji-tab"]').count(),0);
+    await click('return');assert.equal(await page.locator('[data-action="letter"]').count(),26);
   });
   await check('long press an ordinary candidate does not silently save phrases',async({page,click,touch})=>{
     for(const l of 'NI')await click('letter',l);

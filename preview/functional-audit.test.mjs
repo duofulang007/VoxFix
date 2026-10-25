@@ -86,12 +86,10 @@ try{
     await page.waitForTimeout(100);await page.evaluate(()=>window.dispatchEvent(new Event('blur')));await page.waitForTimeout(400);
     const count=await page.locator('.toolbar-drag').count();console.log('TOOLBAR_BLUR_EVIDENCE '+count);assert.equal(count,0,'A pending hold starts dragging after focus was lost');
   });
-  await check('emoji repeat must stop when page becomes hidden',async({page,click})=>{
-    await click('emoji');const emoji=page.locator('.emoji-hold').first();
-    await emoji.dispatchEvent('pointerdown',{pointerId:412,pointerType:'touch',button:0,clientX:100,clientY:300});await page.waitForTimeout(380);
-    await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});document.dispatchEvent(new Event('visibilitychange'));});
-    const before=await page.evaluate(()=>calls.filter(c=>c[0]==='commit').length);await page.waitForTimeout(700);const after=await page.evaluate(()=>calls.filter(c=>c[0]==='commit').length);
-    console.log('EMOJI_HIDE_EVIDENCE '+JSON.stringify({before,after}));assert.equal(after,before,'Hidden page keeps emitting emoji commits');
+  await check('image search reclaims the removed emoji header space',async({page,click})=>{
+    await click('emoji');assert.equal(await page.locator('.emoji-top').count(),0);
+    assert(await page.getByRole('searchbox',{name:'搜索表情包'}).isVisible());
+    assert(await page.locator('.emoji-body').evaluate(node=>node.clientHeight>275));
   });
   await check('batch delete failure retains checked rows for retry',async({page,click,storage})=>{
     await click('clipboard');await click('clip-manage-menu');await click('clip-manage');await click('clip-pick','A');await click('clip-manage-delete');await page.evaluate(()=>window.failSave=true);await click('clip-confirm-ok');

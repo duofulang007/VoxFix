@@ -1,0 +1,19 @@
+{
+  "hotwords": ["Python", "API", "JSON", "PDF", "WiFi", "Codex", "VoxFix", "Kotlin", "Java", "git status", "git commit", "sol", "GitHub", "APP"],
+  "rules": [
+    { "to": "Python", "from": ["python"] },
+    { "to": "API", "from": ["a p i", "api i", "api"] },
+    { "to": "JSON", "from": ["Jason", "J son", "j sen", "j-son", "js on", "j so n", "json", "j s o n"] },
+    { "to": "PDF", "from": ["p d f", "pdf"] },
+    { "to": "WiFi", "from": ["wifi", "wi fi", "why fi"] },
+    { "to": "Codex", "from": ["colex", "col death", "koldex", "koex", "colexs", "kolex", "cols", "kos", "codedes", "code death", "coldex", "colx", "codexs", "cold death", "codex"] },
+    { "to": "VoxFix", "from": ["vox fix", "voox fix", "voxfix", "v fix", "box fix", "vo fix"] },
+    { "to": "Kotlin", "from": ["codetland", "klin", "cotland", "codelin", "kotlin"] },
+    { "to": "Java", "from": ["javava", "java"] },
+    { "to": "git status", "from": ["get status", "gi status"] },
+    { "to": "git commit", "from": ["get commit", "gi commit"] },
+    { "to": "sol", "from": ["soul"] },
+    { "to": "GitHub", "from": ["gitthub", "gthub", "get up", "kitthub", "github", "git up", "git hub"] },
+    { "to": "APP", "from": ["app P", "app P P", "a p p"] }
+  ]
+}

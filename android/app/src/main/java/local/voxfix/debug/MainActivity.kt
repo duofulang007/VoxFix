@@ -18,7 +18,8 @@ import android.widget.EditText
 
 class MainActivity : Activity() {
     private val worker = Executors.newSingleThreadExecutor()
-    private var engine: SpeechEngine? = null
+    private var engine: DesktopSpeechEngine? = null
+    private val releaseVoice = Runnable { worker.execute { if (!active) { engine?.close(); engine = null } } }
     @Volatile private var microphoneCapture: PcmCapture? = null
     private var original = ""
     private lateinit var status: TextView
@@ -74,14 +75,15 @@ class MainActivity : Activity() {
     }
     private fun beginRecording() {
         if (active) return
+        start.removeCallbacks(releaseVoice)
         active = true; recordingRequested = true; start.isEnabled = false; stop.isEnabled = true
         status.text = "正在开启麦克风"; result.text = ""
         worker.execute {
             try {
                 if (!visible) return@execute
                 Log.i("VoxFix", "CAPTURE_REQUESTED")
-                val text = SpeechEngine.record(
-                    { engine ?: SpeechEngine(assets).also { engine = it } },
+                val text = DesktopSpeechEngine.record(
+                    { engine ?: DesktopSpeechEngine(assets).also { engine = it } },
                     { value -> ui { result.text = value } },
                     { rms ->
                         ui { level.text = "麦克风音量：$rms / 100" }
@@ -94,10 +96,16 @@ class MainActivity : Activity() {
                     result.text = text
                     status.text = if (text.isEmpty()) "录音结束，未识别到文字" else "已保留识别原文"
                 }
-            } catch (error: Throwable) { report("录音或识别失败，已收到文字保留", error) }
+            } catch (error: Throwable) {
+                if (error is DesktopVoiceFailure) ui { result.text = error.retained }
+                report("录音或识别失败，已收到文字保留", error)
+            }
             finally {
                 active = false; recordingRequested = false
-                ui { start.isEnabled = true; stop.isEnabled = false; level.text = "未录音" }
+                ui {
+                    start.isEnabled = true; stop.isEnabled = false; level.text = "未录音"
+                    if (visible) start.postDelayed(releaseVoice, 30_000)
+                }
             }
         }
     }
@@ -109,12 +117,14 @@ class MainActivity : Activity() {
     override fun onStart() { super.onStart(); visible = true }
     override fun onStop() {
         visible = false; stopRecording()
-        worker.execute { engine?.release(); engine = null }
+        start.removeCallbacks(releaseVoice)
+        worker.execute { engine?.close(); engine = null }
         super.onStop()
     }
     override fun onSaveInstanceState(state: Bundle) { state.putString("transcript", if (active && original.isNotEmpty()) original else result.text.toString()); super.onSaveInstanceState(state) }
     override fun onDestroy() {
-        worker.execute { engine?.release(); engine = null }
+        start.removeCallbacks(releaseVoice)
+        worker.execute { engine?.close(); engine = null }
         worker.shutdown()
         super.onDestroy()
     }

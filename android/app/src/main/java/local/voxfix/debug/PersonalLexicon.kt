@@ -9,17 +9,15 @@ import java.io.File
 
 /** One durable source for personal recall, ranking and continuation. */
 internal class PersonalLexicon(context: Context, name: String = "personal-lexicon.db") :
-    SQLiteOpenHelper(context, name, null, 2) {
+    SQLiteOpenHelper(context, name, null, 3) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE entries (key TEXT NOT NULL, word TEXT NOT NULL, code TEXT, hits INTEGER NOT NULL, nine TEXT, pinned INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(key,word))")
         db.execSQL("CREATE INDEX entries_word ON entries(word)")
         db.execSQL("CREATE INDEX entries_nine ON entries(nine)")
         db.execSQL("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-        createVoiceTables(db)
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        check(oldVersion == 1 && newVersion == 2) { "Unsupported lexicon version" }
-        createVoiceTables(db)
+        check(newVersion == 3 && oldVersion in 1..2) { "Unsupported lexicon version" }
     }
 
     private fun metadata(key: String): String? = readableDatabase.rawQuery("SELECT value FROM metadata WHERE key=?", arrayOf(key)).use {
@@ -147,25 +145,22 @@ internal class PersonalLexicon(context: Context, name: String = "personal-lexico
             db.rawQuery("SELECT key,value FROM metadata WHERE key LIKE 'rime:%' OR key IN ('personal-dictionary','personal-english')", null).use {
                 while (it.moveToNext()) extra.put(it.getString(0), it.getString(1))
             }
-            return JSONObject().put("format", "voxfix-personal-lexicon").put("version", 2)
-                .put("entries", rows()).put("legacy", extra).put("voice", voiceBackup()).toString()
+            return JSONObject().put("format", "voxfix-personal-lexicon").put("version", 3)
+                .put("entries", rows()).put("legacy", extra).toString()
         } finally { db.endTransaction() }
     }
     @Synchronized fun importBackup(text: String) {
         require(text.toByteArray().size <= MAX_BYTES) { "词库文件超过32MiB，请分批导入" }
         val entries: JSONArray; val extra: JSONObject
-        var voice: JSONObject? = null
         if (text.trimStart('\ufeff', ' ', '\n', '\r', '\t').startsWith("{")) {
             val value = JSONObject(text.removePrefix("\ufeff"))
-            require(value.optString("format") == "voxfix-personal-lexicon" && value.getInt("version") in 1..2) { "不支持的词库备份版本" }
-            if (value.getInt("version") == 2) voice = value.getJSONObject("voice").also { validateVoice(it) }
+            require(value.optString("format") == "voxfix-personal-lexicon" && value.getInt("version") in 1..3) { "不支持的词库备份版本" }
             entries = value.getJSONArray("entries"); extra = value.optJSONObject("legacy") ?: JSONObject()
             for (key in extra.keys()) require((key.matches(Regex("rime:[a-zA-Z0-9_.-]+\\.tsv")) || key in listOf("personal-dictionary", "personal-english")) && extra.get(key) is String) { "词库附加数据无效" }
         } else { entries = parseTsv(text); extra = JSONObject() }
         validate(entries)
         transaction {
             merge(entries, false)
-            voice?.let { mergeVoice(it) }
             for (key in extra.keys()) {
                 if (key == "personal-english") {
                     val words = (metadata(key).orEmpty().lineSequence() + extra.getString(key).lineSequence()).filter { it.matches(Regex("[a-zA-Z][a-zA-Z'-]{1,59}")) }.distinct().toList()
@@ -181,97 +176,32 @@ internal class PersonalLexicon(context: Context, name: String = "personal-lexico
         }
     }
 
-    private fun createVoiceTables(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE voice_words (word TEXT PRIMARY KEY, code TEXT NOT NULL, manual INTEGER NOT NULL, hits INTEGER NOT NULL)")
-        db.execSQL("CREATE TABLE voice_corrections (heard TEXT NOT NULL, word TEXT NOT NULL, left_ctx TEXT NOT NULL, right_ctx TEXT NOT NULL, hits INTEGER NOT NULL, PRIMARY KEY(heard,word,left_ctx,right_ctx))")
+    /** A word the person typed for pinyin recall: pinned so it survives frequency decay. */
+    @Synchronized fun addPinyinWord(word: String, code: String) {
+        val row = JSONObject().put("key", "p:" + code.replace(" ", "")).put("word", word)
+            .put("code", code).put("hits", 1).put("pinned", true)
+        validate(JSONArray().put(row))
+        transaction { merge(JSONArray().put(row), false) }
     }
-    @Synchronized fun voiceWords(limit: Int = Int.MAX_VALUE): List<VoiceWord> = readableDatabase.rawQuery(
-        "SELECT word,code,manual,hits FROM voice_words ORDER BY manual DESC,hits DESC,word LIMIT ?", arrayOf(limit.toString())).use { c ->
-        buildList { while (c.moveToNext()) add(VoiceWord(c.getString(0), c.getString(1), c.getInt(2) != 0, c.getInt(3))) }
-    }
-    @Synchronized fun voiceSnapshot(): VoiceLexicon {
-        val personal = voiceWords(96).toMutableList()
-        readableDatabase.rawQuery("SELECT word,code,MAX(hits) FROM entries WHERE code IS NOT NULL AND hits>=3 AND length(word) BETWEEN 2 AND 16 GROUP BY word,code ORDER BY MAX(hits) DESC,word LIMIT 96", null).use { c ->
-            // Pinyin familiarity is a weak shared prior, not a confirmed voice-correction count.
-            while (c.moveToNext()) if (personal.none { it.word == c.getString(0) }) personal.add(VoiceWord(c.getString(0), c.getString(1), hits = 0))
+
+    /** Words the person added by hand to the retired voice table, for the one-time seed. */
+    @Synchronized fun archivedManualWords(): List<String> = try {
+        readableDatabase.rawQuery("SELECT word FROM voice_words WHERE manual=1 ORDER BY word", null).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
         }
-        val corrections = readableDatabase.rawQuery("SELECT heard,word,left_ctx,right_ctx,hits FROM voice_corrections ORDER BY hits DESC LIMIT 256", null).use { c ->
-            buildList { while (c.moveToNext()) add(VoiceCorrection(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getInt(4))) }
-        }
-        return VoiceLexicon(personal.take(96), corrections)
-    }
-    @Synchronized fun addVoiceWord(word: String, code: String = "") {
-        VoiceLexicon.validateWord(word)
-        val row = if (code.isNotEmpty()) JSONObject().put("key", "p:" + code.replace(" ", "")).put("word", word)
-            .put("code", code).put("hits", 1).put("pinned", true) else null
-        row?.let { validate(JSONArray().put(it)) }
-        transaction {
-            writableDatabase.execSQL("INSERT INTO voice_words VALUES (?,?,1,1) ON CONFLICT(word) DO UPDATE SET manual=1,code=CASE WHEN excluded.code='' THEN voice_words.code ELSE excluded.code END", arrayOf(word, code))
-            row?.let { merge(JSONArray().put(it), false) }
-        }
-    }
-    @Synchronized fun learnVoice(rule: VoiceCorrection) = learnVoice(listOf(rule))
-    @Synchronized fun learnVoice(rules: List<VoiceCorrection>) {
-        require(rules.size <= 32)
-        rules.forEach(::validateCorrection)
-        if (rules.isEmpty()) return
-        transaction {
-            for (word in rules.map { it.word }.distinct())
-                writableDatabase.execSQL("INSERT INTO voice_words VALUES (?,'',0,1) ON CONFLICT(word) DO UPDATE SET hits=MIN(1000000,voice_words.hits+1)", arrayOf(word))
-            for (rule in rules.distinct()) {
-                // A reversed choice invalidates that context, not unrelated uses elsewhere.
-                writableDatabase.execSQL("DELETE FROM voice_corrections WHERE heard=? AND word=? AND left_ctx=? AND right_ctx=?", arrayOf(rule.word, rule.heard, rule.left, rule.right))
-                writableDatabase.execSQL("INSERT INTO voice_corrections VALUES (?,?,?,?,1) ON CONFLICT(heard,word,left_ctx,right_ctx) DO UPDATE SET hits=MIN(1000000,voice_corrections.hits+1)", arrayOf(rule.heard, rule.word, rule.left, rule.right))
-            }
-        }
-    }
-    @Synchronized fun forgetVoiceWord(word: String) = transaction {
-        VoiceLexicon.validateWord(word)
-        writableDatabase.delete("voice_words", "word=?", arrayOf(word))
-        writableDatabase.delete("voice_corrections", "word=? OR heard=?", arrayOf(word, word))
-    }
-    private fun voiceBackup(): JSONObject {
-        val words = JSONArray()
-        for (row in voiceWords()) words.put(JSONObject().put("word", row.word).put("code", row.code).put("manual", row.manual).put("hits", row.hits))
-        val rules = JSONArray()
-        readableDatabase.rawQuery("SELECT heard,word,left_ctx,right_ctx,hits FROM voice_corrections ORDER BY heard,word,left_ctx,right_ctx", null).use { c ->
-            while (c.moveToNext()) rules.put(JSONObject().put("heard", c.getString(0)).put("word", c.getString(1)).put("left", c.getString(2)).put("right", c.getString(3)).put("hits", c.getInt(4)))
-        }
-        return JSONObject().put("words", words).put("corrections", rules)
-    }
-    private fun validateCorrection(rule: VoiceCorrection) {
-        VoiceLexicon.validateCorrection(rule)
-    }
-    private fun validateVoice(value: JSONObject) {
-        val words = value.getJSONArray("words"); val rules = value.getJSONArray("corrections")
-        val targets = mutableSetOf<String>()
-        for (i in 0 until words.length()) {
-            val row = words.getJSONObject(i); val word = row.getString("word"); val code = row.getString("code")
-            VoiceLexicon.validateWord(word)
-            targets.add(word)
-            require(row.get("manual") is Boolean && row.get("hits") is Number && row.getDouble("hits") == row.getInt("hits").toDouble() && row.getInt("hits") in 1..1000000)
-            if (code.isNotEmpty()) validate(JSONArray().put(JSONObject().put("word", word).put("key", "p:" + code.replace(" ", "")).put("code", code).put("hits", 1)))
-        }
-        for (i in 0 until rules.length()) {
-            val row = rules.getJSONObject(i)
-            require(row.get("hits") is Number && row.getDouble("hits") == row.getInt("hits").toDouble())
-            validateCorrection(VoiceCorrection(row.getString("heard"), row.getString("word"), row.getString("left"), row.getString("right"), row.getInt("hits")))
-            require(row.getString("word") in targets)
-        }
-    }
-    private fun mergeVoice(value: JSONObject) {
-        val words = value.getJSONArray("words"); val rules = value.getJSONArray("corrections")
-        for (i in 0 until words.length()) {
-            val row = words.getJSONObject(i)
-            writableDatabase.execSQL("INSERT INTO voice_words VALUES (?,?,?,?) ON CONFLICT(word) DO UPDATE SET manual=MAX(voice_words.manual,excluded.manual),hits=MAX(voice_words.hits,excluded.hits),code=CASE WHEN voice_words.code='' THEN excluded.code ELSE voice_words.code END",
-                arrayOf(row.getString("word"), row.getString("code"), if (row.getBoolean("manual")) 1 else 0, row.getInt("hits")))
-        }
-        for (i in 0 until rules.length()) {
-            val row = rules.getJSONObject(i)
-            writableDatabase.execSQL("INSERT INTO voice_corrections VALUES (?,?,?,?,?) ON CONFLICT(heard,word,left_ctx,right_ctx) DO UPDATE SET hits=MAX(voice_corrections.hits,excluded.hits)",
-                arrayOf(row.getString("heard"), row.getString("word"), row.getString("left"), row.getString("right"), row.getInt("hits")))
-        }
-    }
+    } catch (_: Exception) { emptyList() }
+
+    /**
+     * Counts from the retired voice-learning tables. They are left on disk untouched as an
+     * archive: the dictionary file is the only voice dictionary now, and nothing reads these
+     * rows at runtime.
+     */
+    @Synchronized fun archivedVoiceCounts(): Pair<Int, Int> = try {
+        val words = readableDatabase.rawQuery("SELECT COUNT(*) FROM voice_words", null).use { it.moveToFirst(); it.getInt(0) }
+        val rules = readableDatabase.rawQuery("SELECT COUNT(*) FROM voice_corrections", null).use { it.moveToFirst(); it.getInt(0) }
+        words to rules
+    } catch (_: Exception) { 0 to 0 }
+
     companion object {
         const val MAX_BYTES = 32 * 1024 * 1024
         fun validate(rows: JSONArray) {
