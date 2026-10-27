@@ -35,6 +35,6 @@
 - **改完自己跑回归**：只跑受影响功能的 `preview/*.test.mjs`；动到 `app.mjs` 共用区段（`state` / `render()` / 事件委托）或跨功能时跑全量。跑法见 `.workbuddy/memory/MEMORY.md` 里 `NODE_PATH` 必须单独一行的要求。没跑不许回报"通过"。
 - **结构红线**（`node tools/check_module_boundaries.mjs` 一次查完）：单文件 2200 行 / 180KB 预警，3000 行 / 250KB 必须拆；循环依赖、叶子模块反向依赖 `app.mjs` 零容忍；写了却未被 `app.mjs` 引用的文件会被列为孤儿模块。
 - **依赖方向固定**：叶子模块（`core` / `pinyin` / `english` / `lexicon` / `split` / `meme-search` / `voice-orb`）只允许依赖 `core.mjs`，不碰 DOM、不读写 `state`；`app.mjs` 是唯一聚合层，只单向依赖叶子。
-- **改打包脚本必须自证零行为变化**：用改造前后的产物 sha256 比对（当前基线 `键盘试用页.html` 13,449,700 字节）。字节变了就说明动到了键盘，不允许只说"应该没影响"。
+- **改打包脚本必须自证零行为变化**：用改造前后的产物 sha256 比对（当前基线 `键盘试用页.html` 13,453,036 字节 / `02f7bfe4…108b5`）。字节变了就说明动到了键盘，不允许只说"应该没影响"。
 - **不要用 `Path.write_text` 改 `preview/*.mjs`**：`read_text` 会把 CRLF 规整成 LF，写回时按 `os.linesep` 转换，整文件行尾变 CRLF、`git status` 出现假改动。改源码用编辑工具，或 `newline=''` / `write_bytes`。
 - 开发期看效果直接开 `preview/index.html` 走本地 http（测试也这么跑），单文件 `键盘试用页.html` 只用于分发。

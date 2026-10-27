@@ -18,6 +18,10 @@ VoxFix 是一个安装后可在系统里独立选择的自有 Android 输入法�
   长按空格240ms进入，上滑取消、松手完成定稿；键盘出现即预热，空闲5分钟释放模型，单轮最多3分钟。
   文本层只有一条管线：定稿 → CTC 热词救援 → 个人词典 → 标点。不保存日常录音或转写。
   见[接入与安装](docs/桌面R5语音接入与安装-2026-10-25.md)；旧双遍机制保留为[历史参考](docs/archive/安卓双遍语音链路-2026-10-25迁移前.md)。
+- **语音常驻与联想共存**：语音未结束时联想照常展开，主键盘右下角麦克风切成半透明环形 ×；
+  点一下只收起联想并按原生条件恢复同一轮识别，空格行为不变，见[联想收起](docs/联想收起与语音常驻-2026-10-26.md)。
+- **低频嗡声拦截**：解码前拦掉高度重复的周期波形，草稿、定稿与短句补救共用同一门禁，
+  抑制短调制嗡声误出「嗯／哦」，见[嗡声修复](docs/低频嗡声误识别修复-2026-10-26.md)。
 - **个人词典**：`files/voice-dictionary.json`（与电脑版 `dictionary.json` 同格式）记录「词 / 错法」，
   功能菜单「词典」页编辑，1:1 复刻桌面模块；自动改字学习已删除，拼音候选记忆仍走 librime `entries`。
   见[词典与 CTC 救援](docs/桌面词典与CTC热词救援迁移-2026-10-25.md)。
@@ -83,7 +87,7 @@ node preview/core.test.mjs
 | 布局与按压 | `fixed-layout`、`key-press`、`focus-ring`、`interaction-transitions`、`candidates`、`letter-hold`、`toolbar-drag` |
 | 滑轨与编辑框 | `selection-lock`、`selection-drag`、`selection-direction`、`selection-editor`、`selection-delete`、`selection-pad` |
 | 剪贴板与词库 | `clipboard-search`、`clipboard-match-ime`、`clipboard-reference`、`clipboard-panel-search`、`split`、`learning`、`learning-ime`、`lexicon`、`lexicon-browser` |
-| 拼音与英文 | `pinyin`、`english` |
+| 核心与语言 | `core`（连删与摇杆曲线）、`pinyin`、`english` |
 | 横屏与表情包 | `landscape`、`meme-search`、`meme-search-ime` |
 | 原生桥与语音 | `native-ime`、`voice-orb`、`system-audit`、`ime-regressions` |
 | 按键与剪贴板审计 | `functional-audit`（双指交错输入、共享编辑框原生候选、保存失败、长按生命周期） |
@@ -91,6 +95,11 @@ node preview/core.test.mjs
 
 真机脚本（`preview/*-device.test.mjs`）需要先用 `adb forward` 把 IME WebView 的 devtools 端口转到本机，
 并且手机操作要由使用者实际完成。
+
+## 结构自检
+
+`node tools/check_module_boundaries.mjs` 一次查完循环依赖、叶子模块越层或反向依赖、单文件体积与孤儿模块；
+当前 0 越线。红线与拆分路线见[模块边界与拆分策略](docs/模块边界与拆分策略-2026-10-26.md)。
 
 ## 网页试用页（与手机功能面对齐）
 
@@ -106,7 +115,9 @@ node preview/core.test.mjs
 ## 仓库边界
 
 只提交源码、脚本、必要文档/许可与浏览器参考图。不提交：模型权重、SDK/NDK、缓存、APK、签名密钥、
-录屏、生成的词库与单文件试用页、日志（完整规则见 `.gitignore`）。首次克隆后需另行准备这些本地依赖。
+录屏、生成的词库与单文件试用页、日志（完整规则见 `.gitignore`）。例外是
+`android/app/src/androidTest/assets/` 下的合成音频夹具（约 360 KB）：隔离 smoke 靠它们复现，
+不入库则新克隆跑不起来。首次克隆后需另行准备其余本地依赖。
 
 远端为私有仓库 `https://github.com/duofulang007/VoxFix.git`，主分支 `main`。
 

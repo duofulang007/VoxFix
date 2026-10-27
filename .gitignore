@@ -28,6 +28,9 @@ __pycache__/
 *.7z
 *.rar
 
+# 例外：androidTest 的固定音频夹具随仓库走，隔离 smoke 才能在新克隆上复现
+!android/app/src/androidTest/assets/*.wav
+
 # 日志与本地构建记录
 *.log
 build-log*.txt
