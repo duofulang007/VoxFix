@@ -55,7 +55,10 @@ class DictionaryActivity : Activity() {
     private lateinit var saveButton: TextView
     private lateinit var backButton: TextView
     private val handler = Handler(Looper.getMainLooper())
-    private val expireUndo = Runnable { deleted = null; render() }
+    private val expireUndo = Runnable {
+        deleted = null
+        content.findViewWithTag<View>("dictionary-undo")?.let { content.removeView(it) }
+    }
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
@@ -128,7 +131,9 @@ class DictionaryActivity : Activity() {
     private fun load() {
         loadedText = if (file.isFile) runCatching { file.readText(Charsets.UTF_8) }.getOrNull() else null
         loadFailed = loadedText == null && file.exists()
-        dictionary = VoiceDictionary.parse(loadedText.orEmpty())
+        dictionary = if (loadedText == null) VoiceDictionary() else runCatching {
+            VoiceDictionary.parse(loadedText!!)
+        }.getOrElse { loadFailed = true; VoiceDictionary() }
         dirty = false
         showList()
         status.text = if (loadFailed) "词典读取失败，请先修复文件" else if (loadFailed.not() && loadedText == null) "还没有词典文件，添加第一个词语即可创建" else "词典已载入 · 保存后下一句生效"
@@ -146,6 +151,7 @@ class DictionaryActivity : Activity() {
         renderList()
         updateCounts()
         saveButton.visibility = View.VISIBLE
+        renderUndo()
     }
 
     private fun renderList() {
@@ -293,39 +299,47 @@ class DictionaryActivity : Activity() {
             .setPositiveButton("删除") { _, _ ->
                 val entry = dictionary.entries.removeAt(index)
                 deleted = entry to index
-                deletedUntil = System.currentTimeMillis() + 10_000
+                deletedUntil = android.os.SystemClock.uptimeMillis() + 10_000
                 dirty = true
                 showList()
                 status.text = "已移除 $word，记得保存"
                 handler.removeCallbacks(expireUndo)
-                handler.post(expireUndo)
-                renderUndo()
+                handler.postDelayed(expireUndo, 10_000L)
             }.show()
     }
 
     private fun renderUndo() {
         val pending = deleted ?: return
-        val left = ((deletedUntil - System.currentTimeMillis() + 999) / 1000).coerceAtLeast(0)
-        if (left <= 0) { deleted = null; render(); return }
+        val left = ((deletedUntil - android.os.SystemClock.uptimeMillis() + 999) / 1000).coerceAtLeast(0)
+        if (left <= 0) { expireUndo.run(); return }
+        content.findViewWithTag<TextView>("dictionary-undo-countdown")?.let {
+            it.text = "撤回 · $left 秒"
+            handler.removeCallbacks(undoTick)
+            handler.postDelayed(undoTick, 1000)
+            return
+        }
         val bar = LinearLayout(this).apply {
+            tag = "dictionary-undo"
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(field); setPadding(dp(12), dp(8), dp(12), dp(8))
         }
         bar.addView(TextView(this).apply { text = "已删除「${pending.first.word}」"; textSize = 12f; setTextColor(dim) },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        bar.addView(textButton("撤回 · $left 秒", dim) { undoDelete() })
+        bar.addView(textButton("撤回 · $left 秒", dim) { undoDelete() }.apply { tag = "dictionary-undo-countdown" })
         content.addView(bar, 0)
         handler.removeCallbacks(undoTick)
         handler.postDelayed(undoTick, 1000)
     }
 
-    private val undoTick = Runnable { if (deleted != null) render() else Unit }
+    private val undoTick = Runnable { if (deleted != null && detail == null) renderUndo() }
 
     private fun undoDelete() {
         val pending = deleted ?: return
+        if (android.os.SystemClock.uptimeMillis() >= deletedUntil) { deleted = null; showList(); return }
         if (dictionary.indexOf(pending.first.word) >= 0) { status.text = "已有同名词语，无法覆盖撤回"; return }
         val index = pending.second.coerceIn(0, dictionary.entries.size)
         dictionary.entries.add(index, pending.first)
+        handler.removeCallbacks(expireUndo)
         deleted = null
         dirty = true
         showList()

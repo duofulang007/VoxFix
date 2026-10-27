@@ -38,7 +38,7 @@ try {
   assert.equal(queries.at(-1).searchParams.get('q'),'熊大');assert(!queries.at(-1).searchParams.has('category'));
   assert(await search.isVisible());assert(await page.locator('.meme-results').isVisible());assert(await key('letter').isVisible());
   await search.evaluate(input=>window.savedMemeInput=input);
-  await search.fill('收到');await page.waitForFunction(()=>document.querySelector('.meme-grid img')?.alt==='收到表情');
+  await search.fill('收到');assert.equal(await page.locator('.meme-grid img').count(),0,'A new search must not show old results');await page.waitForFunction(()=>document.querySelector('.meme-grid img')?.alt==='收到表情');
   assert(await search.evaluate(input=>document.activeElement===input&&input===window.savedMemeInput),'Result updates must preserve the focused input');
   assert((await page.evaluate(()=>calls)).some(row=>row[0]==='searchFocus'&&row[1]===true));
   assert(!(await page.evaluate(()=>calls)).some(row=>row[0]==='commit'||row[0]==='compose'),'Search stays inside the IME');

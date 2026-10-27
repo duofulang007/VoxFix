@@ -620,11 +620,12 @@ function footer() {
   const total=nativeIme&&!localInput?nativeCursor.total:editor.value.length,cursor=nativeIme&&!localInput?nativeCursor.position:editor.selectionEnd;
   const drag=state.cursorDrag,locked=lockedNow(),zoneClass='cursor-zone'+(drag?drag.selecting?' selecting':' dragging':'')+(locked?' locked':'');
   const label=locked?'起点锁定，左右拖动调整终点，长按解除锁定':'底部中间空白可左右拖动光标、点按两侧精调一个字，长按后拖动框选文字';
-  const voice=state.voice,voiceClass='voice-toggle'+(voice?.tap&&voice.phase==='loading'?' arming':'')+(voice?.tap&&voice.micReady&&voice.phase==='listening'?' active':'')+(voice?.tap&&voice.phase==='recognizing'?' recognizing':'');
+  const voice=state.voice,dismiss=canDismissVoiceAssociations(),paused=Boolean(voice?.typingPaused||dismiss),voiceClass='voice-toggle'+(voice?.tap&&voice.phase==='loading'&&!paused?' arming':'')+(voice?.tap&&voice.micReady&&voice.phase==='listening'&&!paused?' active':'')+(voice?.tap&&voice.phase==='recognizing'?' recognizing':'')+(paused?' typing-paused':'')+(dismiss?' dismiss-associations':'');
   const micGlyph=voice?.tap&&['loading','listening','recognizing'].includes(voice.phase)?'mic-filled':'mic';
-  const right=clipSearch?button('收起键盘查看结果','clip-search-keys','','',icon('hide')):localInput||voice&&!voice.tap?'<span class="empty"></span>':button(voice?.phase==='recognizing'?'识别中':voice?'结束语音并上屏':'开始语音输入','voice-toggle','',voiceClass,`<span class="voice-mic-disc">${icon(micGlyph)}</span>`);
+  const right=clipSearch?button('收起键盘查看结果','clip-search-keys','','',icon('hide')):localInput||voice&&!voice.tap?'<span class="empty"></span>':button(dismiss?'收起联想，继续语音':voice?.phase==='recognizing'?'识别中':voice?'结束语音并上屏':'开始语音输入','voice-toggle','',voiceClass,`<span class="voice-mic-disc"><span class="voice-mic-glyph">${icon(micGlyph)}</span><span class="voice-close-glyph">${icon('close')}</span></span>`);
   return `<div class="keyboard-footer">${settings.footerSwitcher ? button('底部输入法菜单', 'switcher', '', '', icon('keyboard')) : '<span class="empty"></span>'}<div class="${zoneClass}" data-action="cursor-gesture" role="slider" tabindex="0" aria-label="${label}" aria-valuemin="0" aria-valuenow="${cursor}"><span class="cursor-hint"></span><span class="cursor-focus"></span><span class="cursor-contact"></span></div>${right}</div>${joyGuide()}`;
 }
+function canDismissVoiceAssociations(){return Boolean(state.voice?.tap&&state.voice.phase!=='recognizing'&&!localInput&&!clipSearch&&!state.comp&&!englishPrefix&&state.language==='zh'&&!privateField&&associatedWords.length);}
 function selectionEditor(){
   if(!state.selectionActions||state.voice||state.hidden)return '';
   // 面板只由外部点击关闭：左边选中字数、右边空白处放删除钮，中间不留空位。
@@ -1076,9 +1077,13 @@ function voicePanel() {
 function paintVoice() {
   const panel=keyboard.querySelector('.voice-panel'), phase=state.voice?.phase;
   const mic=keyboard.querySelector('.keyboard-footer .voice-toggle');
-  mic?.classList.toggle('arming',Boolean(state.voice?.tap&&phase==='loading'));
-  mic?.classList.toggle('active',Boolean(state.voice?.tap&&state.voice.micReady&&phase==='listening'));
+  const dismiss=canDismissVoiceAssociations(),paused=Boolean(state.voice?.typingPaused||dismiss);
+  mic?.classList.toggle('arming',Boolean(state.voice?.tap&&phase==='loading'&&!paused));
+  mic?.classList.toggle('active',Boolean(state.voice?.tap&&state.voice.micReady&&phase==='listening'&&!paused));
   mic?.classList.toggle('recognizing',Boolean(state.voice?.tap&&phase==='recognizing'));
+  mic?.classList.toggle('typing-paused',paused);
+  mic?.classList.toggle('dismiss-associations',dismiss);
+  if(mic)mic.setAttribute('aria-label',dismiss?'收起联想，继续语音':phase==='recognizing'?'识别中':state.voice?'结束语音并上屏':'开始语音输入');
   if(mic&&state.voice?.tap){mic.style.setProperty('--mic-scale',(1.02+tapMicLevel*.08).toFixed(3));mic.style.setProperty('--mic-outer-scale',(1.02+tapMicLevel*.1).toFixed(3));mic.style.setProperty('--mic-alpha',(.48+tapMicLevel*.22).toFixed(3));mic.style.setProperty('--mic-outer-alpha',(.28+tapMicLevel*.18).toFixed(3));}
   if(!panel||!phase) return;
   for(const node of [panel,panel.querySelector('.voice-stage')]) if(node) for(const name of VOICE_PHASES) node.classList.toggle(name,name===phase);
@@ -1179,7 +1184,8 @@ function preserveVoiceToggle(previous) {
   getComputedStyle(oldDisc).backgroundColor;
   for(const attribute of attributes)if(attribute.name!=='class')previous.setAttribute(attribute.name,attribute.value);
   previous.removeAttribute('style');
-  oldDisc.innerHTML=newDisc.innerHTML;
+  const oldGlyph=oldDisc.querySelector('.voice-mic-glyph'),newGlyph=newDisc.querySelector('.voice-mic-glyph');
+  if(oldGlyph&&newGlyph&&oldGlyph.innerHTML!==newGlyph.innerHTML)oldGlyph.innerHTML=newGlyph.innerHTML;
   previous.className=next.className;
 }
 // 键盘内容分两层写：页内容（字母/候选/各种面板）与覆盖层（悬浮 popup、选字编辑框）。
@@ -1419,7 +1425,7 @@ function startVoice(tap=false) {
   if(state.voice)return;
   learningChain=[];
   englishPrefix='';
-  if(nativeIme){if(!nativeIme.voiceReady()){toast('语音正在准备，请稍后再试。');return;}if(state.comp)commit(state.comp.raw);state.popup=null;state.voice={phase:'loading',micReady:false,tap,local:localInput,snapshot:localInput?{text:editor.value,start:editor.selectionStart,end:editor.selectionEnd}:null};if(!tap){beginVoiceBall();voicePanelFresh=true;}if(localInput)nativeIme.startLocalVoice();else nativeIme.startVoice();render();if(!tap)startVoiceLoop();return;}
+  if(nativeIme){if(!nativeIme.voiceReady()){toast('语音正在准备，请稍后再试。');return;}if(state.comp)commit(state.comp.raw);state.popup=null;state.voice={phase:'loading',micReady:false,tap,local:localInput,snapshot:localInput?{text:editor.value,start:editor.selectionStart,end:editor.selectionEnd}:null};if(!tap){beginVoiceBall();voicePanelFresh=true;}reportCandidatesVisible();if(localInput)nativeIme.startLocalVoice();else nativeIme.startVoice();render();if(!tap)startVoiceLoop();return;}
   // 网页端不再连接电脑语音服务：真实识别只在手机原生侧，本页固定走交互演示。
   state.comp=null; state.popup=null;
   const snapshot={text:editor.value,start:editor.selectionStart,end:editor.selectionEnd};
@@ -1446,7 +1452,7 @@ function finishVoice(cancelled) {
   setTimeout(()=>{ if(state.voice!==session) return; applyText(voiceResult(session.snapshot,settings.voiceText)); exitVoice(); feedback('语音演示结束；本页未使用真实语音识别。'); },900);
 }
 function activate(action,value='') {
-  if(action==='voice-toggle'){if(state.voice){if(state.voice.phase!=='recognizing')finishVoice(false);}else startVoice(true);return;}
+  if(action==='voice-toggle'){if(canDismissVoiceAssociations()){context='';learningChain=[];associatedWords=[];if(state.page==='candidates')state.page='letters';render();return;}if(state.voice){if(state.voice.phase!=='recognizing')finishVoice(false);}else startVoice(true);return;}
   if(action==='meme-done'||localInput===memeInput&&['enter','return','emoji'].includes(action)){closeMemeSearch();return;}
   if(localInput===memeInput&&['clipboard','menu','layouts','hide'].includes(action))closeMemeSearch();
   if(action==='meme-clear'){memeInput.value='';if(localInput===memeInput){state.comp=null;englishPrefix='';context='';associatedWords=[];applyText({text:'',cursor:0});}memeSearch.search('');render();return;}
@@ -1604,7 +1610,7 @@ function activate(action,value='') {
 // rgba(202,208,220,.451) 的 9-patch，直接叠在键盘底上，无过渡、无缩放、无位移。
 // CSS 里**不能**再给 .key 写 :active —— Android WebView 对 :active 的清除不可靠
 // （首次触摸还会被当成 hover 起点），会出现"松手了颜色还在"，这正是颜色退不走的根因。
-function clearKeyPress(){keyboard.querySelectorAll('.key.pressed,.selection-delete.pressed').forEach(node=>node.classList.remove('pressed'));}
+function clearKeyPress(){keyboard.querySelectorAll('.key.pressed,.selection-delete.pressed,.voice-toggle.pressed').forEach(node=>node.classList.remove('pressed'));}
 // 字母键长按浮层：顺序固定为「大写 ｜ 键帽提示 ｜ 小写」，默认停在中间的键帽提示（D 键就是 D｜@｜d）。
 // 命中只看「相对长按落点的水平位移」，不看浮层实际坐标——浮层为防越界被顶回键盘内时，
 // 中间档不可能压在触点上（左边缘键被右推、右边缘键被左推），按浮层坐标判定必然错档。
@@ -1637,7 +1643,9 @@ keyboard.addEventListener('pointerdown',e=>{
   e.stopImmediatePropagation();
   consumedClick={id:e.pointerId,action:'voice-toggle',x:e.clientX,y:e.clientY,until:Date.now()+700};
   activate('voice-toggle');
+  keyboard.querySelector('.keyboard-footer .voice-toggle')?.classList.add('pressed');
 },true);
+for(const event of ['pointerup','pointercancel'])document.addEventListener(event,()=>keyboard.querySelector('.voice-toggle')?.classList.remove('pressed'),true);
 function releaseCandidateContact(e){if(candidateContact!==e.pointerId)return;candidateContact=null;setTimeout(()=>{if(candidateContact!==null)return;if(candidateRenderPending){candidateRenderPending=false;render();}else syncClipboardReference();},0);}
 for(const event of ['pointerup','pointercancel'])document.addEventListener(event,e=>{if(event==='pointercancel'&&e.pointerType==='touch')return;releaseCandidateContact(e);},true);
 for(const event of ['touchend','touchcancel'])document.addEventListener(event,()=>{if(candidateContact!==null)releaseCandidateContact({pointerId:candidateContact});},true);
@@ -2163,6 +2171,7 @@ if(nativeIme){
     if(wasSplit)render();
   };
   globalThis.voxfixVoiceDone=message=>{exitVoice();if(message)toast(message);};
+  globalThis.voxfixVoiceTyping=paused=>{if(state.voice?.tap){state.voice.typingPaused=Boolean(paused);paintVoice();}};
   globalThis.voxfixVoiceListening=()=>{const session=state.voice;if(!session||!['loading','cancel'].includes(session.phase))return;session.micReady=true;session.phase=gesture?.cancel?'cancel':'listening';paintVoice();};
   globalThis.voxfixVoiceText=text=>{const session=state.voice;if(!session?.local||session.local!==editor)return;session.text=text;if(session.phase!=='cancel')applyText(voiceResult(session.snapshot,text));};
   globalThis.voxfixVoiceLevel=level=>setVoiceLevel(level/12);

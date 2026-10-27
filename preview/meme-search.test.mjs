@@ -17,8 +17,8 @@ assert(!panel.render().includes('old'));assert(!panel.render().includes('不显�
 panel.action('meme-more');reply(requests[2],{items:[{id,title:'重复'},{id:second,title:'第二张'},{id:'javascript:bad',title:'bad'}],more:false});await tick();
 assert.equal((panel.render().match(/data-action="meme-preview"/g)||[]).length,2);
 panel.action('meme-preview',id);assert(panel.render().includes('role="dialog"'));panel.action('meme-insert');assert.deepEqual(insertions,[id]);
-panel.schedule('下一项');panel.activate(false);await tick(350);assert.equal(requests.length,3,'Closing cancels a pending debounce');
-panel.activate(true);reply(requests[3],{error:'网络失败'},false);await tick();assert(panel.render().includes('网络失败'));
+panel.schedule('下一项');assert(!panel.render().includes('meme-preview'),'A new query must immediately clear previous results');panel.activate(false);await tick(350);assert.equal(requests.length,3,'Closing cancels a pending debounce');
+panel.activate(true);reply(requests[3],{error:'网络失败'},false);await tick();assert(panel.render().includes('网络失败'));assert(!panel.render().includes('meme-preview'),'A failed new query must not show previous results');
 panel.action('meme-retry');panel.search('');reply(requests[4],{items:[{id,title:'迟到'}]});await tick();assert(!panel.render().includes('迟到'));assert(!panel.render().includes('meme-preview'));
 panel.reset();assert.equal(panel.query,'');assert(changes>0);
 console.log('meme-search: inline search, debounce, stale responses, clearing, pagination, escaping, preview and retry passed');

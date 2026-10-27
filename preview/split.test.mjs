@@ -30,7 +30,7 @@ try{
   },{native,text});
   await page.goto('http://127.0.0.1:'+server.address().port+'/');await page.waitForSelector('.key-rows');
   const stored=await page.evaluate(()=>localStorage.getItem('voxfix-snippets-v1'));
-  const open=async()=>{await page.locator('#keyboard [data-action="clipboard"]').first().click();await page.locator('.clip-text').first().dispatchEvent('contextmenu');await page.locator('[data-action="context-split"]').click();await page.waitForSelector('.clip-split-chip');};
+  const open=async()=>{if(!await page.locator('.clip-list').count()){const hint=page.locator('[data-action="clip-candidate-dismiss"]');if(await hint.count())await hint.click();await page.locator('#keyboard [data-action="clipboard"]').first().click();}await page.locator('.clip-text').first().dispatchEvent('contextmenu');await page.locator('[data-action="context-split"]').click();await page.waitForSelector('.clip-split-chip');};
   if(!native)await page.locator('#editor').evaluate(e=>{e.value='前旧文后';e.setSelectionRange(1,3);});
   await open();const chips=page.locator('.clip-split-chip');assert.equal(await page.locator('.clip-split-title input,.clip-split-title textarea').count(),0);
   if(native){const rows=await chips.evaluateAll(nodes=>nodes.slice(0,5).map(n=>n.getBoundingClientRect().top));assert(rows.every(y=>y===rows[0]),'Official short sample must fit five naturally sized chips on its first row');}
@@ -92,7 +92,7 @@ try{
   if(!native){await page.evaluate(()=>rejectCopy=true);await copy.click();assert.match(await page.locator('#toast').textContent(),/复制失败/);assert.equal(await page.locator('.clip-split-card').count(),1);await page.evaluate(()=>rejectCopy=false);}
   await page.locator('.clip-split-title [data-action="split-return"]').click();
   console.log('PASS '+(native?'native bridge':'browser')+' split copy: full source, selected order, history and panel retention');
-  await page.locator('#keyboard [data-action="clipboard"]').first().click();await page.locator('.clip-text').first().dispatchEvent('contextmenu');await page.locator('[data-action="context-edit"]').click();
+  assert(await page.locator('.clip-list').isVisible());await page.locator('.clip-text').first().dispatchEvent('contextmenu');await page.locator('[data-action="context-edit"]').click();
   if(native)await page.setViewportSize({width:411,height:479});
   assert.deepEqual(await page.locator('#snippet-form .dialog-actions button').allTextContents(),['取消','拆词','保存']);
   const layout=await page.locator('.snippet-frame').evaluate(frame=>{

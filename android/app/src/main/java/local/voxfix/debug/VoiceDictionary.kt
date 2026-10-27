@@ -108,27 +108,30 @@ internal class VoiceDictionary(entries: List<Entry> = emptyList()) {
             return kept.values.toList()
         }
 
-        /** Reads the desktop file; a broken file yields an empty dictionary instead of a crash. */
+        /** Reject broken files so the editor cannot silently overwrite them as an empty dictionary. */
         fun parse(text: String): VoiceDictionary {
-            val root = runCatching { org.json.JSONObject(text.removePrefix("\uFEFF")) }.getOrNull() ?: return VoiceDictionary()
+            DesktopVoiceDictionary.parse(text)
+            val root = org.json.JSONObject(text.removePrefix("\uFEFF"))
+            require(!root.has("hotwords") || root.get("hotwords") is org.json.JSONArray) { "词语列表格式无效" }
+            require(!root.has("rules") || root.get("rules") is org.json.JSONArray) { "错法列表格式无效" }
             val entries = mutableListOf<Entry>()
             val words = root.optJSONArray("hotwords")
             if (words != null) for (index in 0 until words.length()) {
-                val word = (words.opt(index) as? String)?.trim().orEmpty()
+                val word = (words.get(index) as? String ?: error("词语必须是文字")).trim()
                 if (word.isEmpty() || entries.any { it.word.equals(word, ignoreCase = true) }) continue
                 entries.add(Entry(word, mutableListOf()))
             }
             val rules = root.optJSONArray("rules")
             if (rules != null) for (index in 0 until rules.length()) {
-                val rule = rules.optJSONObject(index) ?: continue
-                val word = rule.optString("to").trim()
-                if (word.isEmpty()) continue
+                val rule = rules.getJSONObject(index)
+                val word = (rule.get("to") as? String ?: error("正确词语必须是文字")).trim()
+                require(word.isNotEmpty()) { "正确词语不能为空" }
                 var entry = entries.firstOrNull { it.word.equals(word, ignoreCase = true) }
                 if (entry == null) { entry = Entry(word, mutableListOf()); entries.add(entry) }
-                entry.context = rule.optString("context")
-                val from = rule.optJSONArray("from") ?: continue
+                entry.context = if (rule.has("context")) rule.get("context") as? String ?: error("词语范围格式无效") else ""
+                val from = rule.getJSONArray("from")
                 for (position in 0 until from.length()) {
-                    val variant = (from.opt(position) as? String)?.trim().orEmpty()
+                    val variant = (from.get(position) as? String ?: error("错法必须是文字")).trim()
                     if (variant.isNotEmpty() && entry.variants.none { it == variant }) entry.variants.add(variant)
                 }
             }
@@ -168,11 +171,16 @@ internal object VoiceDictionaryStore {
     }
 
     fun write(target: File, dictionary: VoiceDictionary) {
-        val temp = File(target.parentFile, "$NAME.tmp")
-        temp.writeText(dictionary.serialize(), Charsets.UTF_8)
-        if (!temp.renameTo(target)) {
-            target.writeText(dictionary.serialize(), Charsets.UTF_8)
-            temp.delete()
+        val atomic = android.util.AtomicFile(target)
+        val bytes = dictionary.serialize().toByteArray(Charsets.UTF_8)
+        val stream = atomic.startWrite()
+        try {
+            stream.write(bytes)
+            atomic.finishWrite(stream)
+            check(target.readBytes().contentEquals(bytes)) { "词典保存校验失败" }
+        } catch (error: Throwable) {
+            atomic.failWrite(stream)
+            throw error
         }
     }
 
@@ -181,7 +189,7 @@ internal object VoiceDictionaryStore {
         if (target == null || !target.isFile) return DesktopVoiceDictionary()
         val stamp = target.lastModified()
         cachedFile?.let { if (it == target && stamp == cachedStamp) return cached }
-        val dictionary = DesktopVoiceDictionary.parse(runCatching { target.readText(Charsets.UTF_8) }.getOrNull().orEmpty())
+        val dictionary = DesktopVoiceDictionary.load(target)
         cachedFile = target; cachedStamp = stamp; cached = dictionary
         return dictionary
     }

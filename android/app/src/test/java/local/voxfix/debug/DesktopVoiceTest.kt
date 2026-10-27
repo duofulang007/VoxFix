@@ -4,6 +4,29 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopVoiceTest {
+    @Test fun stableLowHumIsNotSpeechButChangingVoiceIsKept() {
+        for (hz in listOf(40, 50, 60, 80, 100, 120, 160, 200, 240)) {
+            val hum = FloatArray(6400) { i ->
+                val phase = 2 * Math.PI * hz * i / 16000
+                (.03 * (kotlin.math.sin(phase) + .3 * kotlin.math.sin(phase * 2) +
+                    .15 * kotlin.math.sin(phase * 3) + .07 * kotlin.math.sin(phase * 4)) *
+                    (.6 + .4 * kotlin.math.sin(2 * Math.PI * 3 * i / 16000))).toFloat()
+            }
+            if (hz >= 160) assertTrue("modulated $hz Hz", DesktopHumGuard.isHum(hum))
+            assertTrue("steady $hz Hz", DesktopHumGuard.isHum(FloatArray(6400) {
+                (.001 * kotlin.math.sin(2 * Math.PI * hz * it / 16000)).toFloat()
+            }))
+            val voice = FloatArray(6400) { i ->
+                (.02 * kotlin.math.sin(2 * Math.PI * (100.0 * i / 16000 + 80.0 * i * i / (16000.0 * 16000)))).toFloat()
+            }
+            assertFalse(DesktopHumGuard.isHum(voice))
+            assertFalse(DesktopHumGuard.isHum(hum + voice))
+            assertFalse(DesktopHumGuard.isHum(FloatArray(hum.size) { hum[it] + voice[it] }))
+        }
+        assertFalse(DesktopHumGuard.isHum(FloatArray(6400)))
+        assertFalse(DesktopHumGuard.isHum(FloatArray(6400) { .1f }))
+    }
+
     @Test fun punctuationNeverChangesWordsNegationOrNumbers() {
         for ((original, changed) in listOf("不要取消" to "要取消。", "128.5元" to "1285元。", ".NET" to "NET。"))
             assertEquals(original, DesktopVoiceRules.punctuate(original, changed))
@@ -27,6 +50,12 @@ class DesktopVoiceTest {
         assertFalse(DesktopVoiceRules.allowed("こんにちは"))
         assertFalse(DesktopVoiceRules.allowed("😀"))
         assertEquals("你好", DesktopVoiceRules.clean("<|zh|>你好<|NEUTRAL|>"))
+        assertEquals("你好", DesktopVoiceRules.clean("<|zh|><FIL/>你好<L/><IL/>"))
+        assertEquals("你好", DesktopVoiceRules.clean("< FIL / >你好< l / >"))
+        assertEquals("a < b / c > d <HTML/>", DesktopVoiceRules.clean("a < b / c > d <HTML/>"))
+        assertEquals("", DesktopVoiceRules.clean("<。"))
+        assertEquals("", DesktopVoiceRules.clean("<FIL/>。"))
+        assertEquals("", DesktopVoiceRules.clean("!!!"))
     }
 
     @Test fun dictionaryLongestLiteralReplacementAndWordEdges() {
@@ -37,6 +66,20 @@ class DesktopVoiceTest {
         assertEquals("APP and APP", dictionary.correct("app p and a p p"))
         assertEquals("forget upper GitHub", dictionary.correct("forget upper get up"))
         assertEquals("$1", dictionary.correct("cost"))
+    }
+
+    @Test fun shortReleaseRequiresVoicedAudioInsteadOfBroadbandNoise() {
+        assertFalse(DesktopVoiceRules.hasVoicedFrame(FloatArray(10400), 10400))
+        assertFalse(DesktopVoiceRules.hasVoicedFrame(FloatArray(320), 320))
+        assertFalse(DesktopVoiceRules.hasVoicedFrame(FloatArray(6400) { .1f }, 6400))
+        val random = java.util.Random(20261026)
+        repeat(16) {
+            val noise = FloatArray(10400) { (random.nextDouble() * .2 - .1).toFloat() }
+            assertFalse(DesktopVoiceRules.hasVoicedFrame(noise, noise.size))
+        }
+        val voiced = FloatArray(3200) { (.02 * kotlin.math.sin(2 * Math.PI * 220 * it / 16000)).toFloat() }
+        assertTrue(DesktopVoiceRules.hasVoicedFrame(voiced, voiced.size))
+        assertFalse(DesktopVoiceRules.hasVoicedFrame(FloatArray(3200).apply { this[1600] = .5f }, 3200))
     }
 
     @Test fun dictionaryContextAndSequentialRules() {

@@ -35,8 +35,11 @@ for(const name of ['compact centered panels','anchored management motion','geome
  const results=page.locator('.clip-search-result');
  try{
   const baseline=await key('letter','Q').boundingBox();
-  if(name==='locked search repeated paste')await type('mingtian');
-  await key('clipboard').click();
+  if(name==='locked search repeated paste'){
+   await type('mingtian');
+   // The candidate bar replaces the toolbar; use the shared page entry to retain the composition under test.
+   await page.locator('#quick-pages [data-value="clipboard"]').evaluate(button=>button.click());
+  }else await key('clipboard').click();
   const snippets=await page.evaluate(()=>localStorage.getItem('voxfix-snippets-v1'));
   if(name==='compact centered panels'){
    for(const width of [320,393,411]){

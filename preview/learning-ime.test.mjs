@@ -16,7 +16,7 @@ async function check(name,run){
   await page.addInitScript(()=>{
     window.calls=[];window.acceptCommit=true;
     const codes={'明天':'ming tian','下午':'xia wu','见':'jian','是':'shi','时':'shi'};
-    window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','gestureStart','gestureEnd','edit','haptic','ready','resize','refreshClipboard','importClipboard'].map(name=>[name,(...args)=>calls.push([name,...args])]));
+    window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','candidatesVisible','moveCursor','cursorPosition','gestureStart','gestureEnd','edit','haptic','ready','resize','refreshClipboard','importClipboard'].map(name=>[name,(...args)=>calls.push([name,...args])]));
     VoxFixIme.voiceReady=()=>true;VoxFixIme.pinyinReady=()=>true;
     VoxFixIme.pinyinCandidates=raw=>{
       const word=raw.startsWith('mingtian')?'明天':raw.startsWith('xiawu')?'下午':raw==='jian'?'见':'默认';
@@ -70,6 +70,47 @@ try{
   await check('learned continuation takes priority in the existing association bar',async({key,choose,reset,train})=>{
     await train();await reset();await choose('mingtian','明天');
     assert.equal(await key('association-candidate').getAttribute('data-value'),'下午见');
+  });
+  await check('voice association close keeps text, learning and the same session, without consuming space',async({page,key,type,records})=>{
+    await key('voice-toggle').click();await page.evaluate(()=>voxfixVoiceListening());
+    const original=await key('voice-toggle').elementHandle();
+    await page.evaluate(()=>voxfixVoiceTyping(true));
+    await type('mingtianxiawujian');await key('candidate','明天').click();
+    assert.equal(await page.getByRole('button',{name:'收起联想，继续语音'}).count(),0,'Partial pinyin must remain a selection state');
+    await key('candidate','下午').click();await key('candidate','见').click();
+    assert(await key('association-candidate').isVisible(),'Associations remain usable while voice is on');
+    const committed=await page.evaluate(()=>calls.filter(row=>['pinyinChoose','commit','commitAccepted'].includes(row[0])));
+    await page.waitForTimeout(180);
+    assert(await key('voice-toggle').locator('.voice-close-glyph').evaluate(el=>Number(getComputedStyle(el).opacity)>.95));
+    await page.screenshot({path:new URL('../.android/voice-ring-live-20261026.png',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1')});
+    const closeBox=await page.getByRole('button',{name:'收起联想，继续语音'}).boundingBox();
+    await page.mouse.move(closeBox.x+closeBox.width/2,closeBox.y+closeBox.height/2);await page.mouse.down();
+    assert(await key('voice-toggle').evaluate(el=>el.classList.contains('pressed')));
+    await page.mouse.up();
+    assert(await key('voice-toggle').evaluate(el=>!el.classList.contains('pressed')));
+    assert.equal(await key('association-candidate').count(),0);
+    assert.equal(await page.evaluate(()=>calls.filter(row=>row[0]==='candidatesVisible').at(-1)[1]),false);
+    assert.deepEqual(await page.evaluate(()=>calls.filter(row=>['pinyinChoose','commit','commitAccepted'].includes(row[0]))),committed,'Close must not edit the host');
+    assert.equal(await page.evaluate(()=>calls.filter(row=>row[0]==='stopVoice'||row[0]==='cancelVoice').length),0);
+    assert(await original.evaluate(el=>el===document.querySelector('.voice-toggle')),'Keep the same button for interruptible transitions');
+    assert(await key('voice-toggle').evaluate(el=>el.classList.contains('typing-paused')&&!el.classList.contains('active')),'Do not show green listening before native resume');
+    await page.evaluate(()=>voxfixVoiceTyping(false));
+    assert(await key('voice-toggle').evaluate(el=>el.classList.contains('active')));
+    assert((await records()).some(row=>row.word==='明天下午见'));
+    await type('shi');await page.evaluate(()=>acceptCommit=false);await key('candidate','时').click();
+    assert.equal(await page.getByRole('button',{name:'收起联想，继续语音'}).count(),0,'Failed selection cannot look finished');
+    await page.evaluate(()=>acceptCommit=true);await key('candidate','时').click();
+    await key('space').click();assert(await page.evaluate(()=>calls.some(row=>row[0]==='commit'&&row[1]===' ')),'Space keeps inserting a space');
+    await key('voice-toggle').click();assert.equal(await page.evaluate(()=>calls.filter(row=>row[0]==='stopVoice').length),1,'Microphone still ends the session after candidates close');
+  });
+  await check('existing associations are reported before voice starts and remain dismissible during warmup',async({page,key,choose})=>{
+    await choose('mingtian','明天');assert(await key('association-candidate').isVisible());
+    await key('voice-toggle').click();
+    const calls=await page.evaluate(()=>window.calls);
+    assert(calls.findIndex(row=>row[0]==='candidatesVisible'&&row[1]===true)<calls.findIndex(row=>row[0]==='startVoice'));
+    await page.getByRole('button',{name:'收起联想，继续语音'}).click();
+    assert.equal(await key('association-candidate').count(),0);
+    assert.equal(await page.evaluate(()=>calls.filter(row=>row[0]==='stopVoice'||row[0]==='cancelVoice').length),0);
   });
   await check('deletion, cursor move, field change and literal insertion stop phrase assembly',async({page,key,choose,reset,records})=>{
     for(const boundary of ['delete','cursor','field','literal']){

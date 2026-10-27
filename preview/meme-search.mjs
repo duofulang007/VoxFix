@@ -25,8 +25,8 @@ export function createMemeSearch({update, insert, request = (url, options) => fe
   function change(query,delay) {
     query=String(query).trim().slice(0,80);
     if(query===state.query&&(delay||state.page>0&&!state.loading))return;
-    cancel();state.query=query;state.page=0;state.more=false;state.error='';state.preview=null;
-    if(!query){state.items=[];state.loading=false;update();return;}
+    cancel();state.query=query;state.items=[];state.page=0;state.more=false;state.error='';state.preview=null;
+    if(!query){state.loading=false;update();return;}
     state.loading=active;
     if(active){if(delay)timer=setTimeout(()=>void load(),300);else void load();}
   }

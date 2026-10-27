@@ -37,6 +37,15 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
             if (modelCompare == "desktop-delivery") {
                 output.putString("result", DesktopVoiceDeliverySmoke.run(this)); finish(Activity.RESULT_OK, output); return
             }
+            if (modelCompare == "desktop-short") {
+                output.putString("result", DesktopVoiceDeliverySmoke.shortSpeech(this)); finish(Activity.RESULT_OK, output); return
+            }
+            if (modelCompare == "desktop-hum") {
+                output.putString("result", DesktopHumSmoke.run(this)); finish(Activity.RESULT_OK, output); return
+            }
+            if (modelCompare == "desktop-pause") {
+                output.putString("result", DesktopVoiceDeliverySmoke.pauseNoise(this)); finish(Activity.RESULT_OK, output); return
+            }
             if (modelCompare.startsWith("desktop-live-")) {
                 output.putString("result", DesktopVoiceLiveSmoke.run(targetContext, modelCompare.removePrefix("desktop-live-")))
                 finish(Activity.RESULT_OK, output); return

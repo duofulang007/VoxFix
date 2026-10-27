@@ -133,7 +133,7 @@ try{
     await click('menu');await click('custom');await page.locator('[data-setting="clipboardHistory"]').uncheck();await page.locator('dialog[open] > button').first().click();await page.evaluate(()=>{const key='voxfix-layout-v1';localStorage.setItem(key,JSON.stringify({...JSON.parse(localStorage.getItem(key)||'{}'),clipboardCandidate:true}));});await page.reload();await page.waitForFunction(()=>typeof voxfixReset==='function');await click('menu');await click('custom');
     await page.locator('dialog[open] > button').first().click();await click('return');await page.evaluate(()=>voxfixClipboard('X','new-copy'));
     assert.equal(await page.locator('.clip-candidate').count(),1);assert(!(await storage()).clips.includes('X'));
-    await click('clipboard');await click('clip-manage-menu');await click('system-paste');await page.evaluate(()=>voxfixClipboard('X','new-copy',true));
+    await click('clip-candidate-dismiss');await click('clipboard');await click('clip-manage-menu');await click('system-paste');await page.evaluate(()=>voxfixClipboard('X','new-copy',true));
     assert((await storage()).clips.includes('X'));
   });
   await check('failed rename, deletion and group undo preserve persisted content',async({page,key,click,storage,hold,deleteGroup})=>{
@@ -163,7 +163,7 @@ try{
   });
   await check('undo at the clipboard limit refuses to discard newer copies',async({page,click,remove,storage})=>{
     await click('clipboard');await remove('A');await click('return');await page.evaluate(()=>{for(let i=0;i<298;i++)voxfixClipboard('new-'+i,'copy-'+i);});
-    const before=(await storage()).clips;assert.equal(before.length,300);await click('clipboard');await click('clip-manage-menu');await click('undo-snippet');
+    const before=(await storage()).clips;assert.equal(before.length,300);await click('clip-candidate-dismiss');await click('clipboard');await click('clip-manage-menu');await click('undo-snippet');
     assert.deepEqual((await storage()).clips,before);assert.match(await page.locator('#toast').textContent(),/上限/);
   });
   await check('large candidate grids render in batches and keep every word reachable',async({page,click})=>{

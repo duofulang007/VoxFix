@@ -1,6 +1,6 @@
 package local.voxfix.debug
 
-internal data class DesktopVoiceBounds(val start: Int, val end: Int)
+internal data class DesktopVoiceBounds(val start: Int, val end: Int, val key: Int = start)
 internal data class DesktopVoiceFrame(val at: Int, val finals: List<DesktopVoiceBounds>, val key: Int,
                                       val draft: DesktopVoiceBounds?)
 
@@ -25,7 +25,7 @@ internal class DesktopVoiceSegments(private val audio: FloatArray) {
         fun queue(start: Int, end: Int, forced: Boolean) {
             if (end > start) {
                 check(start >= 0 && end <= samples)
-                finals.add(DesktopVoiceBounds(start, end)); lastEnd = end; carry = forced
+                finals.add(DesktopVoiceBounds(start, end, if (activeKey >= 0) activeKey else start)); lastEnd = end; carry = forced
             }
             activeKey = -1
         }

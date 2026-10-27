@@ -8,12 +8,36 @@ internal object DesktopVoiceRules {
     const val FRAME = 1600
     const val MAX_SAMPLES = RATE * 180
     private val marks = "，。！？；：、,.!?;:"
-    private val tags = Regex("<\\|[^|]*\\|>")
+    private val tags = Regex("<\\|[^|]*\\|>|<\\s*(?:FIL|L|IL)\\s*/\\s*>", RegexOption.IGNORE_CASE)
     private val tokens = Regex("[A-Za-z0-9_]+(?:[.'/:+-][A-Za-z0-9_]+)*|[^\\s\\u001c-\\u001f\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000，。！？；：、,.!?;:]")
 
     fun space(char: Char) = char.isWhitespace() || char == '\u0085' || char in '\u001c'..'\u001f'
     fun chinese(text: String) = text.any { it in '\u4e00'..'\u9fff' }
-    fun clean(text: String) = tags.replace(text, "").trim(::space)
+    fun clean(text: String): String {
+        val cleaned = tags.replace(text, "").trim(::space)
+        return cleaned.takeIf { it.any(Char::isLetterOrDigit) }.orEmpty()
+    }
+
+    /** A voiced 40 ms frame is required before the short-release VAD retry, never for normal speech. */
+    fun hasVoicedFrame(audio: FloatArray, samples: Int): Boolean {
+        for (start in 0..samples - 640 step 320) {
+            var mean = 0.0
+            for (i in start until start + 640) mean += audio[i]
+            mean /= 640
+            for (lag in 32..320 step 4) {
+                var cross = 0.0
+                var leftEnergy = 0.0
+                var rightEnergy = 0.0
+                for (i in start until start + 640 - lag) {
+                    val left = audio[i] - mean
+                    val right = audio[i + lag] - mean
+                    cross += left * right; leftEnergy += left * left; rightEnergy += right * right
+                }
+                if (cross > 0 && cross > .35 * sqrt(leftEnergy * rightEnergy)) return true
+            }
+        }
+        return false
+    }
     fun allowed(text: String) = text.all { char ->
         space(char) || char in "£¥©®°±µ·×÷€" || char.code in 0x20..0x7e ||
             char.code in 0x2000..0x206f || char.code in 0x3000..0x303f ||

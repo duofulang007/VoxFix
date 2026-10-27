@@ -56,7 +56,9 @@ internal class DesktopSpeechEngine(
 
     private fun decode(bounds: DesktopVoiceBounds, final: Boolean, committed: String): String {
         val engine = checkNotNull(recognizer)
-        val segment = DesktopQuietBoost().process(audio.copyOfRange(bounds.start, bounds.end))
+        val raw = audio.copyOfRange(bounds.start, bounds.end)
+        if (DesktopHumGuard.isHum(raw)) return ""
+        val segment = DesktopQuietBoost().process(raw)
         val stream = engine.createStream()
         var text = try {
             stream.acceptWaveform(segment, 16000)
@@ -79,6 +81,19 @@ internal class DesktopSpeechEngine(
     /** Rescue only ever looks at Latin words; Chinese has no acoustic path, as on the desktop. */
     private fun latin(word: String) = word.isNotEmpty() &&
         word.any { it.code in 'A'.code..'Z'.code || it.code in 'a'.code..'z'.code } && word.none { it in '\u3400'..'\u9fff' }
+
+    private fun confirmShortSpeech(detector: Vad, samples: Int, isCancelled: () -> Boolean): Boolean {
+        // Warm the recurrent VAD and drain its tail; padding never reaches the recognizer.
+        detector.reset()
+        val padded = FloatArray(1600 + samples + 16000)
+        audio.copyInto(padded, 1600, 0, samples)
+        for (start in padded.indices step DesktopVoiceRules.FRAME) {
+            if (isCancelled()) return false
+            detector.acceptWaveform(padded.copyOfRange(start, minOf(start + DesktopVoiceRules.FRAME, padded.size)))
+        }
+        detector.flush()
+        return !detector.empty()
+    }
 
     /**
      * Same PCM supplier shape as PcmCapture.next(); cancellation never emits a late draft.
@@ -129,7 +144,7 @@ internal class DesktopSpeechEngine(
                         } else null
                     }
                     if (output != null && !isCancelled()) onText(output)
-                    if (final && text.isNotEmpty() && !isCancelled()) onSettled(text, bounds.start)
+                    if (final && text.isNotEmpty() && !isCancelled()) onSettled(text, bounds.key)
                     if (!final && !isCancelled()) {
                         val live = synchronized(monitor) { if (cancelled) "" else preview }
                         if (live.isNotEmpty()) onDraft(live, bounds.start)
@@ -191,7 +206,11 @@ internal class DesktopSpeechEngine(
             if (!isCancelled()) {
                 if (used > 0) accept(frame.copyOf(used))
                 detector.flush()
-                publish(planner.frame(-1, completed(), flushing = true))
+                val finals = completed().toMutableList()
+                if (finals.isEmpty() && planner.samples in 1..10400 && DesktopVoiceRules.hasVoicedFrame(audio, planner.samples) &&
+                    confirmShortSpeech(detector, planner.samples, isCancelled))
+                    finals.add(DesktopVoiceBounds(0, planner.samples))
+                publish(planner.frame(-1, finals, flushing = true))
             }
             synchronized(monitor) {
                 cancelled = isCancelled(); ending = true; draft = null

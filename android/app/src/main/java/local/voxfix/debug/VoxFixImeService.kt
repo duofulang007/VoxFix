@@ -42,7 +42,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.FutureTask
 import java.util.concurrent.atomic.AtomicBoolean
 
-class VoxFixImeService : InputMethodService() {
+open class VoxFixImeService : InputMethodService() {
     private val lexicon by lazy { PersonalLexicon(this) }
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
@@ -104,8 +104,6 @@ class VoxFixImeService : InputMethodService() {
     }
     private var ticket = 0L
     private var voiceGeneration = 0L
-    private var voiceStart = 0
-    private var selectedBeforeVoice = ""
     private var streamedText = ""
     private var localVoice = false
     /**
@@ -118,11 +116,9 @@ class VoxFixImeService : InputMethodService() {
     /**
      * 打字那一刻已经把屏幕上这段草稿锁定成正文，那一段语音的**正式**定稿到此为止：它到货时直接
      * 丢掉，绝不再往输入框写一个字。留在输入框里的就是用户当时看到的文字（他自己取消语音看到的
-     * 那一份），不会重复，也不会出现「尾巴跑到打的字后面」。`-1` 表示没有待丢弃的段落；
-     * [voiceFinalizedUntil] 是这条标记的失效时刻（超时没等到就作废，避免误丢后面真正新说的话）。
+     * 那一份），不会重复，也不会出现「尾巴跑到打的字后面」。段号在本轮内唯一，保留到定稿到达。
      */
-    private var voiceFinalizedKey = -1
-    private var voiceFinalizedUntil = 0L
+    private val voiceFinalizedKeys = mutableSetOf<Int>()
     /** 已定稿但还没落进输入框的句子：用户正在拼拼音时先挂起，那个词一上屏就立刻补进去。 */
     private var voicePendingCommit = ""
     /**
@@ -144,6 +140,7 @@ class VoxFixImeService : InputMethodService() {
             if (!candidatesShown && composingStart == null) {
                 voiceTyping = false
                 voiceMuted.set(false)
+                script("globalThis.voxfixVoiceTyping?.(false)")
                 Log.i("VoxFix", "VOICE_RESUME")
             } else if (session.accepts(ticket)) main.postDelayed(this, VOICE_RESUME_DELAY_MS)
         }
@@ -394,7 +391,6 @@ class VoxFixImeService : InputMethodService() {
         /** 打完一个字后先静默这么久再恢复收音，避免词与词之间的空隙把半句话录进新段。 */
         private const val VOICE_RESUME_DELAY_MS = 400L
         /** 打字收尾把草稿锁定之后，那一段的正式定稿在多长时间内到货就丢掉（过了就当新话照常上屏）。 */
-        private const val VOICE_DROP_SETTLE_MS = 4_000L
         private const val ANCHOR_RETRY_MS = 900L
         private const val PILL_TEXT_SP = 19.4f
         private const val PILL_PADDING_X_DP = 12.1f
@@ -847,7 +843,7 @@ class VoxFixImeService : InputMethodService() {
      * 时的那个效果（停在 `finishComposingText()`，不是撤掉），所以「话说完了、识别还没转完就开始
      * 打字」不会把刚说的半句整段吞掉，横线消失即代表这段话已确定。
      * 这一段语音的正式定稿随后还会到货（VAD 静音 0.65 s + 解码），但屏幕上已经是锁定的正文，
-     * 它到此为止——[voiceFinalizedKey] 让**那一段**直接丢弃，既不再写一遍，也不往打的字后面补尾巴。
+     * 它到此为止——[voiceFinalizedKeys] 让**那一段**直接丢弃，既不再写一遍，也不往打的字后面补尾巴。
      * 然后把识别静音（麦克风照常挂着，样本换静音），打字期间说的话既不成段也不上屏；
      * 选完字 [VOICE_RESUME_DELAY_MS] 后自动恢复，从那个光标起算新的一句。
      */
@@ -857,13 +853,15 @@ class VoxFixImeService : InputMethodService() {
         main.removeCallbacks(resumeVoiceInput)
         if (voicePreviewWritten) {
             voicePreviewWritten = false
-            voiceFinalizedKey = voicePreviewKey
-            voiceFinalizedUntil = SystemClock.uptimeMillis() + VOICE_DROP_SETTLE_MS
+            voiceFinalizedKeys.add(voicePreviewKey)
             ownSelectionUntil = SystemClock.uptimeMillis() + 250
             runCatching { currentInputConnection?.finishComposingText() }
-            Log.i("VoxFix", "VOICE_FINALIZE key=$voiceFinalizedKey")
+            Log.i("VoxFix", "VOICE_FINALIZE key=$voicePreviewKey")
         }
-        if (voiceMuted.compareAndSet(false, true)) Log.i("VoxFix", "VOICE_MUTE")
+        if (voiceMuted.compareAndSet(false, true)) {
+            Log.i("VoxFix", "VOICE_MUTE")
+            script("globalThis.voxfixVoiceTyping?.(true)")
+        }
         scheduleVoiceResume()
     }
 
@@ -890,25 +888,19 @@ class VoxFixImeService : InputMethodService() {
         if (runCatching { connection.commitText(pending, 1) }.getOrDefault(false)) voicePendingCommit = ""
     }
 
-    private fun cancelRecording(restoreSelection: Boolean = false) {
-        if (!localVoice && session.accepts(ticket) && streamedText.isNotEmpty() && voiceGeneration == inputGeneration) {
-            currentInputConnection?.let { connection ->
-                if (restoreSelection) {
-                    connection.setComposingText(selectedBeforeVoice, 1)
-                    if (selectedBeforeVoice.isNotEmpty()) connection.setSelection(voiceStart, voiceStart + selectedBeforeVoice.length)
-                }
-                connection.finishComposingText()
-            }
+    private fun cancelRecording() {
+        // Cancel freezes only the visible voice draft; committed segments and user edits stay put.
+        if (!localVoice && session.accepts(ticket) && voicePreviewWritten && voiceGeneration == inputGeneration) {
+            runCatching { currentInputConnection?.finishComposingText() }
         }
         session.close()
         capturing.set(false)
         microphoneCapture?.stop()
         streamedText = ""
-        selectedBeforeVoice = ""
         localVoice = false
         voicePreviewWritten = false
         voicePreviewKey = -1
-        voiceFinalizedKey = -1
+        voiceFinalizedKeys.clear()
         voicePendingCommit = ""
         main.removeCallbacks(resumeVoiceInput)
         voiceMuted.set(false)
@@ -930,21 +922,16 @@ class VoxFixImeService : InputMethodService() {
         }
         val connection = currentInputConnection ?: run { voiceDone(); return }
         if (!local) { connection.finishComposingText(); composingStart = null }
-        selectedBeforeVoice = if (local) "" else connection.getSelectedText(0)?.toString().orEmpty()
-        if (selectedBeforeVoice.length > 10000) { selectedBeforeVoice = ""; voiceDone("选中文字过长，请先取消选区再说话"); return }
-        // 语音锚点必须是宿主真实光标：hintMaxChars=1 会让部分宿主把返回文本截到一个字，
-        // 随之偏移的 selectionStart 会把 voiceStart 算错，流式更新就被当成「用户挪了光标」。
-        val extracted = connection.getExtractedText(ExtractedTextRequest().apply { hintMaxChars = 0 }, 0)
-        voiceStart = extracted?.let { it.startOffset + minOf(it.selectionStart, it.selectionEnd) } ?: minOf(selectionStart, selectionEnd).coerceAtLeast(0)
         streamedText = ""
         localVoice = local
         voicePreviewWritten = false
         voicePreviewKey = -1
-        voiceFinalizedKey = -1
+        voiceFinalizedKeys.clear()
         voicePendingCommit = ""
         main.removeCallbacks(resumeVoiceInput)
-        voiceMuted.set(false)
-        voiceTyping = false
+        voiceTyping = !local && candidatesShown
+        voiceMuted.set(voiceTyping)
+        if (voiceTyping) script("globalThis.voxfixVoiceTyping?.(true)")
         voiceGeneration = inputGeneration
         val targetGeneration = voiceGeneration
         main.removeCallbacks(releaseVoice)
@@ -961,25 +948,10 @@ class VoxFixImeService : InputMethodService() {
             // 到这里为止，直接丢掉——不再写一遍（重复），也不往打的字后面补尾巴（顺序错乱）。
             // 别的段（含打字前就没转完的队列）照常上屏；打字静音期间到达的段仍然丢掉。
             val settle: (String, Int) -> Unit = { segment, key -> main.post {
-                if (session.accepts(current) && shown && inputGeneration == targetGeneration) {
-                    if (voiceFinalizedKey >= 0 && SystemClock.uptimeMillis() > voiceFinalizedUntil)
-                        voiceFinalizedKey = -1
-                    if (voiceFinalizedKey >= 0 && voiceFinalizedKey == key) {
-                        voiceFinalizedKey = -1
-                        // 这段话已经在屏幕上定稿了，只记进会话文本用于「有没有说过话」的判断。
-                        streamedText = DesktopVoiceRules.join(streamedText, segment)
-                        Log.i("VoxFix", "VOICE_SETTLE dropped=finalized key=$key")
-                        return@post
-                    }
-                    if (voiceMuted.get()) return@post
-                    streamedText = DesktopVoiceRules.join(streamedText, segment)
-                    commitVoiceSegment(segment); updates++
-                }
+                if (writeVoiceSettled(segment, key, current, targetGeneration)) updates++
             } }
             val draft: (String, Int) -> Unit = { text, key -> if (!voiceMuted.get()) main.post {
-                if (!voiceMuted.get() && session.accepts(current) && shown && inputGeneration == targetGeneration && composingStart == null) {
-                    if (currentInputConnection?.setComposingText(text, 1) == true) { voicePreviewWritten = true; voicePreviewKey = key; updates++ }
-                }
+                if (writeVoiceDraft(text, key, current, targetGeneration)) updates++
             } }
             try {
                 if (capturing.get() && session.accepts(current)) {
@@ -1013,7 +985,7 @@ class VoxFixImeService : InputMethodService() {
                                 Log.i("VoxFix", "IME_STREAM_FINISHED updates=$updates characters=${result.length}")
                                 voiceDone("")
                             } else voiceDone("没有识别到文字")
-                            streamedText = ""; selectedBeforeVoice = ""
+                            streamedText = ""
                         } else {
                             // 文字已经按段落了：这里只收尾最后一段可能挂起的内容和预览草稿。
                             ownSelectionUntil = SystemClock.uptimeMillis() + 250
@@ -1024,7 +996,7 @@ class VoxFixImeService : InputMethodService() {
                             }
                             val spoken = streamedText.isNotEmpty()
                             if (spoken) Log.i("VoxFix", "IME_STREAM_FINISHED updates=$updates characters=$result.length committed=true")
-                            streamedText = ""; selectedBeforeVoice = ""
+                            streamedText = ""
                             voiceDone(if (spoken) "" else "没有识别到文字")
                         }
                     }
@@ -1047,11 +1019,32 @@ class VoxFixImeService : InputMethodService() {
                             val spoken = streamedText.isNotEmpty() || retained.isNotBlank()
                             voiceDone(if (spoken) "已保留识别结果" else "录音或识别失败，请重试")
                         }
-                        streamedText = ""; selectedBeforeVoice = ""
+                        streamedText = ""
                     }
                 }
             } finally { main.post { busy = false; scheduleVoiceRelease() } }
         }
+    }
+
+    internal fun writeVoiceSettled(segment: String, key: Int, current: Long, generation: Long): Boolean {
+        if (localVoice || !session.accepts(current) || !shown || inputGeneration != generation) return false
+        if (voiceFinalizedKeys.remove(key)) {
+            streamedText = DesktopVoiceRules.join(streamedText, segment)
+            Log.i("VoxFix", "VOICE_SETTLE dropped=finalized key=$key")
+            return false
+        }
+        if (voiceMuted.get()) return false
+        streamedText = DesktopVoiceRules.join(streamedText, segment)
+        commitVoiceSegment(segment)
+        return true
+    }
+
+    internal fun writeVoiceDraft(text: String, key: Int, current: Long, generation: Long): Boolean {
+        if (localVoice || voiceMuted.get() || key in voiceFinalizedKeys || !session.accepts(current) || !shown ||
+            inputGeneration != generation || composingStart != null) return false
+        if (currentInputConnection?.setComposingText(text, 1) != true) return false
+        voicePreviewWritten = true; voicePreviewKey = key
+        return true
     }
 
     inner class KeyboardBridge(private val owner: WebView) {
@@ -1277,7 +1270,7 @@ class VoxFixImeService : InputMethodService() {
             Log.i("VoxFix", "IME_MIC_STOP_REQUESTED elapsedMs=${(System.nanoTime() - started) / 1_000_000}")
         }
         @JavascriptInterface fun stopVoice() = stopMicrophone()
-        @JavascriptInterface fun cancelVoice() { stopMicrophone(); editInput { cancelRecording(true) } }
+        @JavascriptInterface fun cancelVoice() { stopMicrophone(); editInput { cancelRecording() } }
         @JavascriptInterface fun cursorPosition() = editInput {
             currentInputConnection?.getExtractedText(ExtractedTextRequest(), 0)?.let { text -> script("globalThis.voxfixCursor?.(${text.selectionEnd},${text.text?.length ?: 0})") }
         }
