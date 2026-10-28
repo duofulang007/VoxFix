@@ -28,7 +28,6 @@ import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
-import android.view.inputmethod.CursorAnchorInfo
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -133,11 +132,12 @@ open class VoxFixImeService : InputMethodService() {
      * composing，但联想候选框还在——只按 composing 判断会提前恢复收音，把接着说的话打到候选里。
      */
     @Volatile private var candidatesShown = false
+    private var selectionEditingShown = false
     // 拼音还没上屏、或者候选框还挂着，就继续等（每 400 ms 看一次），两个都消失才真正恢复收音。
     private val resumeVoiceInput: Runnable = object : Runnable {
         override fun run() {
             if (!voiceTyping) { voiceMuted.set(false); return }
-            if (!candidatesShown && composingStart == null) {
+            if (!candidatesShown && !selectionEditingShown && composingStart == null) {
                 voiceTyping = false
                 voiceMuted.set(false)
                 script("globalThis.voxfixVoiceTyping?.(false)")
@@ -159,12 +159,6 @@ open class VoxFixImeService : InputMethodService() {
     private var ownSelectionUntil = 0L
     private var hostSelectionOpen: Runnable? = null
     private val hiddenSelection = HostSelectionRequest()
-    /** 标注浮层：锁定期间把起点/范围两端画到正文上（宿主自己的手柄这时不会出现）。 */
-    private val annotation by lazy { AnnotationOverlay(this).also { it.onHandleDrag = ::onAnnotationDrag } }
-    private var annotationDragFixed = -1
-    private var annotationDragging = false
-    private var anchorFrames = 0
-    private var anchorAttempt = 0
 
 
     override fun onCreate() {
@@ -387,11 +381,9 @@ open class VoxFixImeService : InputMethodService() {
          * 和汉字两侧各 ~2.6px 的字面留白，照抄 15.71 会让标签胖 7dp。
          */
         private const val PILL_HEIGHT_DP = 28.86f
-        private const val CONTEXT_CHARS = 80
         /** 打完一个字后先静默这么久再恢复收音，避免词与词之间的空隙把半句话录进新段。 */
         private const val VOICE_RESUME_DELAY_MS = 400L
         /** 打字收尾把草稿锁定之后，那一段的正式定稿在多长时间内到货就丢掉（过了就当新话照常上屏）。 */
-        private const val ANCHOR_RETRY_MS = 900L
         private const val PILL_TEXT_SP = 19.4f
         private const val PILL_PADDING_X_DP = 12.1f
         private const val PILL_MIN_WIDTH_DP = 126.3f
@@ -450,7 +442,6 @@ open class VoxFixImeService : InputMethodService() {
         script("globalThis.voxfixHostFocus?.($selectionChanged)")
     }
     private fun resetKeyboard() {
-        annotation.hide()
         script("globalThis.voxfixReset?.()")
         script("globalThis.voxfixInputType?.(${currentInputEditorInfo?.inputType ?: 1})")
     }
@@ -465,11 +456,10 @@ open class VoxFixImeService : InputMethodService() {
         val extracted = connection.getExtractedText(ExtractedTextRequest().apply { hintMaxChars = 1 }, 0)
         val end = composingStart?.plus(value.length) ?: extracted?.let { it.startOffset + minOf(it.selectionStart, it.selectionEnd) + value.length }
         if (!connection.commitText(value, 1)) return false
-        selectionDrag.clear(); selectionLockedAnchor = -1; annotation.hide()
+        selectionDrag.clear(); selectionLockedAnchor = -1
         composingStart = null
         if (end != null) { if (ownSelections.size >= 100) ownSelections.clear(); ownSelections.add(end) }
         // 用户刚把拼音词上屏：先补上打字期间挂起的句子，再恢复收音（400 ms 内不再打字才算打完）。
-        flushVoicePending()
         scheduleVoiceResume()
         return true
     }
@@ -501,10 +491,10 @@ open class VoxFixImeService : InputMethodService() {
         super.onStartInput(info, restarting)
         clipboardSplit = null
         if (!restarting) {
+            selectionEditingShown = false
             setSearchInputActive(false)
             selectionNavigation?.cancel()
             selectionDrag.clear(); selectionLockedAnchor = -1; selectionGestureActive = false
-            annotation.hide()
             inputGeneration++
             ownSelections.clear()
             composingStart = null
@@ -546,10 +536,8 @@ open class VoxFixImeService : InputMethodService() {
             ownSelectionUntil = SystemClock.uptimeMillis() + 900
             script("globalThis.voxfixSelectionOrigin?.()")
             reportSelection(anchor, head)
-            showAnnotation()
         }
         updateClipboard()
-        anchorFrames = 0; anchorAttempt = 0; requestCursorUpdates()
     }
 
     @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
@@ -558,138 +546,6 @@ open class VoxFixImeService : InputMethodService() {
         if (shown && searchInputActive) focusHostEditor()
     }
 
-    /**
-     * 「标注」浮层的数据源：请求宿主持续回插入点坐标与字符级边界框。
-     *
-     * 两个必须遵守的点（都踩过）：
-     *   1. **一次只能发一个模式**。连发 MONITOR 和 IMMEDIATE 会让后一次覆盖前一次的模式，
-     *      监视实际没开成——只见一帧一次性数据，而且那一帧发生在锁定之前、被丢掉。
-     *   2. MONITOR 要在每次 onStartInputView 重新请求（平台要求），锁定那一刻再请求一次，
-     *      宿主通常会立刻补发一帧，正好当作"立即给我一次"。
-     * 过滤位是 API 33/34 才有的；万一某个宿主不认这些位而从此不发数据，
-     * 就用 anchorFrames 计数兜一次：没有任何帧时退回不带过滤位的纯 MONITOR，并留日志。
-     */
-    private fun requestCursorUpdates() {
-        val ic = currentInputConnection ?: return
-        val mode = if (anchorAttempt == 0) {
-            InputConnection.CURSOR_UPDATE_MONITOR or
-                InputConnection.CURSOR_UPDATE_FILTER_CHARACTER_BOUNDS or
-                InputConnection.CURSOR_UPDATE_FILTER_INSERTION_MARKER
-        } else InputConnection.CURSOR_UPDATE_MONITOR
-        Log.i(selTag, "cursor-update request attempt=$anchorAttempt mode=$mode accepted=${ic.requestCursorUpdates(mode)}")
-        if (anchorAttempt == 0) {
-            main.postDelayed(anchorRetry, ANCHOR_RETRY_MS)
-        }
-    }
-
-    /** 锁定后一直没帧：退回不带过滤位的请求再试一次（有些宿主不认过滤位就干脆不发）。 */
-    private val anchorRetry = Runnable {
-        if (anchorFrames > 0 || selectionLockedAnchor < 0) return@Runnable
-        anchorAttempt = 1
-        Log.i(selTag, "cursor-update no frames, retrying without filters")
-        requestCursorUpdates()
-    }
-
-    override fun onUpdateCursorAnchorInfo(cursorAnchorInfo: CursorAnchorInfo) {
-        super.onUpdateCursorAnchorInfo(cursorAnchorInfo)
-        val start = minOf(cursorAnchorInfo.selectionStart, cursorAnchorInfo.selectionEnd)
-        val end = maxOf(cursorAnchorInfo.selectionStart, cursorAnchorInfo.selectionEnd)
-        if (start < 0) return
-        if (selectionLockedAnchor < 0) { annotation.hide(); return }
-        val view = web ?: return
-        anchorFrames++
-        val glyphs = collectGlyphs(cursorAnchorInfo, start, end)
-        val caret = insertionBox(cursorAnchorInfo, glyphs, start)
-        annotation.update(start, end, caret, caret != null, glyphs)
-        annotation.show(view, if (keyboardHeightPx > 0) keyboardHeightPx else view.height)
-        Log.i(selTag, "anchor sel=$start,$end glyphs=${glyphs.size} caret=${caret != null}")
-    }
-
-    /**
-     * 取端点附近的字符框。选区不长时整段连续取；很长时只取头尾两段——
-     * 宿主只为可见字符给边界框，取不到的自然跳过，但也不能为一次全选去查上万次。
-     */
-    private fun collectGlyphs(cursorAnchorInfo: CursorAnchorInfo, start: Int, end: Int): Map<Int, MarkBox> {
-        val map = HashMap<Int, MarkBox>()
-        val from = (start - CONTEXT_CHARS).coerceAtLeast(0)
-        val to = end + CONTEXT_CHARS
-        val headEnd = if (to - from <= CONTEXT_CHARS * 12) to else from + CONTEXT_CHARS * 6
-        for (index in from until headEnd) glyphBox(cursorAnchorInfo, index)?.let { map[index] = it }
-        if (headEnd < to) {
-            for (index in maxOf(headEnd, to - CONTEXT_CHARS * 6) until to) glyphBox(cursorAnchorInfo, index)?.let { map[index] = it }
-        }
-        return map
-    }
-
-    /** 宿主给的是编辑器坐标时用它的矩阵换算到屏幕坐标；单位阵说明已经是屏幕坐标。 */
-    private fun glyphBox(cursorAnchorInfo: CursorAnchorInfo, index: Int): MarkBox? {
-        val rect = runCatching { cursorAnchorInfo.getCharacterBounds(index) }.getOrNull() ?: return null
-        if (rect.isEmpty) return null
-        val matrix = cursorAnchorInfo.matrix
-        if (matrix.isIdentity) return MarkBox(rect.left, rect.top, rect.right, rect.bottom)
-        val points = floatArrayOf(rect.left, rect.top, rect.right, rect.bottom)
-        matrix.mapPoints(points)
-        return MarkBox(minOf(points[0], points[2]), minOf(points[1], points[3]), maxOf(points[0], points[2]), maxOf(points[1], points[3]))
-    }
-
-    /** 竖线位置：优先用宿主报的插入点，报不出来就退回该字框的相应一侧。 */
-    private fun insertionBox(cursorAnchorInfo: CursorAnchorInfo, glyphs: Map<Int, MarkBox>, caret: Int): MarkBox? {
-        val flags = cursorAnchorInfo.insertionMarkerFlags
-        val top = cursorAnchorInfo.insertionMarkerTop
-        val bottom = cursorAnchorInfo.insertionMarkerBottom
-        if (bottom > top && flags and CursorAnchorInfo.FLAG_HAS_VISIBLE_REGION != 0) {
-            val x = cursorAnchorInfo.insertionMarkerHorizontal
-            return MarkBox(x, top, x, bottom)
-        }
-        val after = glyphs[caret]
-        val before = if (caret > 0) glyphs[caret - 1] else null
-        val box = after ?: before ?: return null
-        val edge = if (after != null) after.left else box.right
-        return MarkBox(edge, box.top, edge, box.bottom)
-    }
-
-    private fun showAnnotation() {
-        val view = web ?: return
-        requestCursorUpdates()
-        annotation.show(view, if (keyboardHeightPx > 0) keyboardHeightPx else view.height)
-    }
-
-    /**
-     * 拖动水滴：阶段 0 记下"不动的那一端"，之后每一次移动把被拖的那一端直接写到宿主选区上。
-     * 未选中（只有起点）时拖动＝把起点挪过去，等价于在新位置重新锁定。
-     */
-    private fun onAnnotationDrag(which: Int, x: Float, y: Float, phase: Int) {
-        if (phase == 0) {
-            annotationDragging = true
-            annotationDragFixed = if (selectionDrag.anchor == selectionDrag.head) -1
-                else if (which == 0) maxOf(selectionDrag.anchor, selectionDrag.head) else minOf(selectionDrag.anchor, selectionDrag.head)
-        }
-        if (!annotationDragging) return
-        if (phase == 2) { annotationDragging = false; return }
-        val target = annotation.offsetAt(x, y) ?: return
-        if (!shown || destroyed) return
-        if (currentInputConnection == null) return
-        // 触摸回调本来就在主线程；和滑轨/方向盘共用一个串行队列，避免两边同时改选区。
-        val apply = applyLabel@{
-            val connection = currentInputConnection ?: return@applyLabel
-            ownSelectionUntil = SystemClock.uptimeMillis() + 400
-            if (annotationDragFixed < 0) {
-                // 未选中：移动光标并在新位置重新标定起点。
-                connection.setSelection(target, target)
-                selectionDrag.beginPositions(target, target)
-                selectionLockedAnchor = target
-                reportSelection(target, target)
-            } else {
-                connection.setSelection(annotationDragFixed, target)
-                selectionDrag.beginPositions(annotationDragFixed, target)
-                selectionLockedAnchor = annotationDragFixed
-                reportSelection(annotationDragFixed, target)
-            }
-            Log.i(selTag, "handle drag which=$which fixed=$annotationDragFixed target=$target")
-        }
-        val navigation = selectionNavigation
-        if (navigation != null) navigation.run(apply) else apply()
-    }
 
     override fun onWindowShown() {
         super.onWindowShown()
@@ -703,12 +559,12 @@ open class VoxFixImeService : InputMethodService() {
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        selectionEditingShown = false
         setSearchInputActive(false)
         finishClipboardSplit()
         hiddenSelection.cancel()
         selectionNavigation?.cancel()
         selectionDrag.clear(); selectionLockedAnchor = -1; selectionGestureActive = false
-        annotation.hide()
         shown = false
         inputGeneration++
         cancelRecording()
@@ -719,12 +575,12 @@ open class VoxFixImeService : InputMethodService() {
     }
 
     override fun onFinishInput() {
+        selectionEditingShown = false
         setSearchInputActive(false)
         finishClipboardSplit()
         hiddenSelection.cancel()
         selectionNavigation?.cancel()
         selectionDrag.clear(); selectionLockedAnchor = -1; selectionGestureActive = false
-        annotation.hide()
         shown = false
         inputGeneration++
         cancelRecording()
@@ -780,10 +636,9 @@ open class VoxFixImeService : InputMethodService() {
             selectionGestureActive, SystemClock.uptimeMillis() <= ownSelectionUntil)
         if (shown && changed) Log.i(selTag, "shown-update old=$oldSelStart,$oldSelEnd new=$newSelStart,$newSelEnd " +
             "word=$hostWord external=$external anchor=$selectionLockedAnchor gesture=$selectionGestureActive ownIn=${ownSelectionUntil - SystemClock.uptimeMillis()}")
-        if (hostWord) selectionLockedAnchor = -1
+        if (hostWord) { pauseVoiceForTyping(); selectionLockedAnchor = -1 }
         if (external) {
             selectionDrag.clear(); selectionLockedAnchor = -1; selectionGestureActive = false
-            annotation.hide()
             ownSelectionUntil = 0L
             script("globalThis.voxfixSelectionReleased?.()")
         } else {
@@ -804,7 +659,6 @@ open class VoxFixImeService : InputMethodService() {
                     selectionLockedAnchor = selectionDrag.anchor
                     script("globalThis.voxfixSelectionOrigin?.()")
                     reportSelection(selectionStart, selectionEnd)
-                    showAnnotation()
                 }
             }
             hostSelectionOpen = open
@@ -849,15 +703,20 @@ open class VoxFixImeService : InputMethodService() {
      */
     private fun pauseVoiceForTyping() {
         if (localVoice || !session.accepts(ticket)) return
+        for (text in voiceReveal.finals()) voicePendingCommit = DesktopVoiceRules.join(voicePendingCommit, text)
+        voiceDiscardBefore = maxOf(voiceDiscardBefore, engine?.samplePosition ?: 0)
+        voiceFinalizedKeys.addAll(voiceReveal.clear())
+        main.removeCallbacks(revealVoice)
         voiceTyping = true
         main.removeCallbacks(resumeVoiceInput)
         if (voicePreviewWritten) {
             voicePreviewWritten = false
             voiceFinalizedKeys.add(voicePreviewKey)
             ownSelectionUntil = SystemClock.uptimeMillis() + 250
-            runCatching { currentInputConnection?.finishComposingText() }
+            runCatching { voiceTarget?.freeze() ?: currentInputConnection?.finishComposingText() }
             Log.i("VoxFix", "VOICE_FINALIZE key=$voicePreviewKey")
         }
+        voiceTarget = null
         if (voiceMuted.compareAndSet(false, true)) {
             Log.i("VoxFix", "VOICE_MUTE")
             script("globalThis.voxfixVoiceTyping?.(true)")
@@ -872,27 +731,14 @@ open class VoxFixImeService : InputMethodService() {
         main.postDelayed(resumeVoiceInput, VOICE_RESUME_DELAY_MS)
     }
 
-    /** 一段话定稿：光标没在拼拼音就直接落到光标后面；正在拼就等这个词上屏立刻补，不攒整轮。 */
-    private fun commitVoiceSegment(segment: String) {
-        if (segment.isEmpty()) return
-        voicePendingCommit = DesktopVoiceRules.join(voicePendingCommit, segment)
-        flushVoicePending()
-    }
-
-    private fun flushVoicePending() {
-        val pending = voicePendingCommit
-        if (pending.isEmpty() || composingStart != null) return
-        val connection = currentInputConnection ?: return
-        ownSelectionUntil = SystemClock.uptimeMillis() + 250
-        voicePreviewWritten = false
-        if (runCatching { connection.commitText(pending, 1) }.getOrDefault(false)) voicePendingCommit = ""
-    }
-
     private fun cancelRecording() {
+        main.removeCallbacks(revealVoice)
+        voiceReveal.reset()
         // Cancel freezes only the visible voice draft; committed segments and user edits stay put.
         if (!localVoice && session.accepts(ticket) && voicePreviewWritten && voiceGeneration == inputGeneration) {
-            runCatching { currentInputConnection?.finishComposingText() }
+            runCatching { voiceTarget?.freeze() ?: currentInputConnection?.finishComposingText() }
         }
+        voiceTarget = null
         session.close()
         capturing.set(false)
         microphoneCapture?.stop()
@@ -928,8 +774,12 @@ open class VoxFixImeService : InputMethodService() {
         voicePreviewKey = -1
         voiceFinalizedKeys.clear()
         voicePendingCommit = ""
+        voiceReveal.reset()
+        voiceDiscardBefore = 0
+        main.removeCallbacks(revealVoice)
+        voiceTarget = if (local) null else VoiceTextTarget(connection)
         main.removeCallbacks(resumeVoiceInput)
-        voiceTyping = !local && candidatesShown
+        voiceTyping = !local && (candidatesShown || selectionEditingShown)
         voiceMuted.set(voiceTyping)
         if (voiceTyping) script("globalThis.voxfixVoiceTyping?.(true)")
         voiceGeneration = inputGeneration
@@ -948,10 +798,20 @@ open class VoxFixImeService : InputMethodService() {
             // 到这里为止，直接丢掉——不再写一遍（重复），也不往打的字后面补尾巴（顺序错乱）。
             // 别的段（含打字前就没转完的队列）照常上屏；打字静音期间到达的段仍然丢掉。
             val settle: (String, Int) -> Unit = { segment, key -> main.post {
-                if (writeVoiceSettled(segment, key, current, targetGeneration)) updates++
+                if (!local && session.accepts(current) && shown && inputGeneration == targetGeneration) {
+                    if (key in voiceFinalizedKeys || key < voiceDiscardBefore) writeVoiceSettled(segment, key, current, targetGeneration)
+                    else if (!voiceMuted.get()) {
+                        voiceReveal.offer(segment, key, true, SystemClock.uptimeMillis())
+                        revealVoice.run(); updates++
+                    }
+                }
             } }
-            val draft: (String, Int) -> Unit = { text, key -> if (!voiceMuted.get()) main.post {
-                if (writeVoiceDraft(text, key, current, targetGeneration)) updates++
+            val draft: (String, Int) -> Unit = { text, key -> if (!local && !voiceMuted.get()) main.post {
+                if (session.accepts(current) && shown && inputGeneration == targetGeneration && key !in voiceFinalizedKeys &&
+                    key >= voiceDiscardBefore && !voiceMuted.get() && (voiceTarget?.canPreview != false)) {
+                    voiceReveal.offer(text, key, false, SystemClock.uptimeMillis())
+                    revealVoice.run(); updates++
+                }
             } }
             try {
                 if (capturing.get() && session.accepts(current)) {
@@ -961,8 +821,8 @@ open class VoxFixImeService : InputMethodService() {
                         received = text
                         if (local && text.isNotBlank()) main.post {
                             if (session.accepts(current) && shown && inputGeneration == targetGeneration) {
-                                streamedText = text
-                                script("globalThis.voxfixVoiceText?.(${JSONObject.quote(text)})"); updates++
+                                voiceReveal.offer(text, 0, false, SystemClock.uptimeMillis())
+                                revealVoice.run(); updates++
                             }
                         }
                     }, { level -> main.post {
@@ -978,7 +838,10 @@ open class VoxFixImeService : InputMethodService() {
                 capturing.set(false)
                 val result = received
                 main.post {
-                    if (shown && inputGeneration == targetGeneration && session.consume(current)) {
+                    if (shown && inputGeneration == targetGeneration && session.accepts(current)) {
+                        if (local) voiceReveal.offer(result, 0, true, SystemClock.uptimeMillis())
+                        drainVoiceReveal()
+                        session.consume(current)
                         if (local) {
                             script("globalThis.voxfixVoiceText?.(${JSONObject.quote(result)})")
                             if (result.isNotBlank()) {
@@ -989,7 +852,6 @@ open class VoxFixImeService : InputMethodService() {
                         } else {
                             // 文字已经按段落了：这里只收尾最后一段可能挂起的内容和预览草稿。
                             ownSelectionUntil = SystemClock.uptimeMillis() + 250
-                            flushVoicePending()
                             if (voicePreviewWritten) {
                                 voicePreviewWritten = false
                                 runCatching { currentInputConnection?.finishComposingText() }
@@ -997,7 +859,7 @@ open class VoxFixImeService : InputMethodService() {
                             val spoken = streamedText.isNotEmpty()
                             if (spoken) Log.i("VoxFix", "IME_STREAM_FINISHED updates=$updates characters=$result.length committed=true")
                             streamedText = ""
-                            voiceDone(if (spoken) "" else "没有识别到文字")
+                            voiceDone(if (voicePendingCommit.isNotEmpty()) "部分文字未输入，已保留" else if (spoken) "" else "没有识别到文字")
                         }
                     }
                 }
@@ -1005,13 +867,15 @@ open class VoxFixImeService : InputMethodService() {
                 Log.e("VoxFix", "IME_CAPTURE_FAILED", error)
                 val retained = if (error is DesktopVoiceFailure) error.retained else received
                 main.post {
-                    if (shown && inputGeneration == targetGeneration && session.consume(current)) {
+                    if (shown && inputGeneration == targetGeneration && session.accepts(current)) {
+                        if (local) voiceReveal.offer(retained, 0, true, SystemClock.uptimeMillis())
+                        drainVoiceReveal()
+                        session.consume(current)
                         if (local) {
                             script("globalThis.voxfixVoiceText?.(${JSONObject.quote(retained)})")
                             voiceDone(if (retained.isBlank()) "录音或识别失败，请重试" else "已保留识别结果")
                         } else {
                             ownSelectionUntil = SystemClock.uptimeMillis() + 250
-                            flushVoicePending()
                             if (voicePreviewWritten) {
                                 voicePreviewWritten = false
                                 runCatching { currentInputConnection?.finishComposingText() }
@@ -1028,23 +892,62 @@ open class VoxFixImeService : InputMethodService() {
 
     internal fun writeVoiceSettled(segment: String, key: Int, current: Long, generation: Long): Boolean {
         if (localVoice || !session.accepts(current) || !shown || inputGeneration != generation) return false
-        if (voiceFinalizedKeys.remove(key)) {
+        if (key in voiceFinalizedKeys || key < voiceDiscardBefore) {
             streamedText = DesktopVoiceRules.join(streamedText, segment)
             Log.i("VoxFix", "VOICE_SETTLE dropped=finalized key=$key")
             return false
         }
         if (voiceMuted.get()) return false
         streamedText = DesktopVoiceRules.join(streamedText, segment)
-        commitVoiceSegment(segment)
-        return true
+        if (composingStart != null) {
+            voicePendingCommit = DesktopVoiceRules.join(voicePendingCommit, segment)
+            voiceFinalizedKeys.add(key)
+            return false
+        }
+        val target = voiceTarget ?: currentInputConnection?.let { VoiceTextTarget(it).also { value -> voiceTarget = value } } ?: return false
+        ownSelectionUntil = SystemClock.uptimeMillis() + 250
+        val success = runCatching { target.write(segment, key, true) }.getOrDefault(false)
+        if (!success) voicePendingCommit = DesktopVoiceRules.join(voicePendingCommit, segment)
+        voicePreviewWritten = false
+        voiceFinalizedKeys.add(key)
+        return success
     }
 
     internal fun writeVoiceDraft(text: String, key: Int, current: Long, generation: Long): Boolean {
         if (localVoice || voiceMuted.get() || key in voiceFinalizedKeys || !session.accepts(current) || !shown ||
-            inputGeneration != generation || composingStart != null) return false
-        if (currentInputConnection?.setComposingText(text, 1) != true) return false
+            inputGeneration != generation || composingStart != null || key < voiceDiscardBefore) return false
+        val target = voiceTarget ?: currentInputConnection?.let { VoiceTextTarget(it).also { value -> voiceTarget = value } } ?: return false
+        ownSelectionUntil = SystemClock.uptimeMillis() + 250
+        if (!runCatching { target.write(text, key, false) }.getOrDefault(false)) return false
         voicePreviewWritten = true; voicePreviewKey = key
         return true
+    }
+
+    private var voiceTarget: VoiceTextTarget? = null
+    private var voiceDiscardBefore = 0
+    private val voiceReveal = VoiceTextReveal { text, key, final ->
+        if (localVoice) {
+            streamedText = text
+            script("globalThis.voxfixVoiceText?.(${JSONObject.quote(text)})")
+            true
+        } else if (final) {
+            writeVoiceSettled(text, key, ticket, voiceGeneration)
+            true // A rejected final was retained, never replay it at a different cursor.
+        } else writeVoiceDraft(text, key, ticket, voiceGeneration)
+    }
+    private val revealVoice: Runnable = object : Runnable {
+        override fun run() {
+            main.removeCallbacks(this)
+            if (!session.accepts(ticket) || !shown || inputGeneration != voiceGeneration || voiceMuted.get()) return
+            val animations = android.animation.ValueAnimator.areAnimatorsEnabled()
+            if (voiceReveal.tick(SystemClock.uptimeMillis(), !animations || voiceTarget?.canPreview == false || voiceTarget?.blocked == true))
+                main.postDelayed(this, 15)
+            else if (voiceTarget?.blocked == true) voiceReveal.tick(SystemClock.uptimeMillis(), true)
+        }
+    }
+    private fun drainVoiceReveal() {
+        main.removeCallbacks(revealVoice)
+        voiceReveal.tick(SystemClock.uptimeMillis(), true)
     }
 
     inner class KeyboardBridge(private val owner: WebView) {
@@ -1077,7 +980,7 @@ open class VoxFixImeService : InputMethodService() {
                 action()
             } } }
         }
-        @JavascriptInterface fun ready() { main.post { if (web === owner) { currentInputEditorInfo?.let { startKeyboard(it, false) } ?: resetKeyboard(); Log.i(selTag, "page-ready anchor=$selectionLockedAnchor drag=${selectionDrag.anchor},${selectionDrag.head}"); if (selectionLockedAnchor >= 0 && selectionDrag.anchor >= 0) { script("globalThis.voxfixSelectionOrigin?.()"); reportSelection(selectionDrag.anchor, selectionDrag.head); showAnnotation() }; updateClipboard(); if (pinyinFailed) script("globalThis.voxfixPinyinReady?.(true)") } } }
+        @JavascriptInterface fun ready() { main.post { if (web === owner) { currentInputEditorInfo?.let { startKeyboard(it, false) } ?: resetKeyboard(); Log.i(selTag, "page-ready anchor=$selectionLockedAnchor drag=${selectionDrag.anchor},${selectionDrag.head}"); if (selectionLockedAnchor >= 0 && selectionDrag.anchor >= 0) { script("globalThis.voxfixSelectionOrigin?.()"); reportSelection(selectionDrag.anchor, selectionDrag.head);  }; updateClipboard(); if (pinyinFailed) script("globalThis.voxfixPinyinReady?.(true)") } } }
         @JavascriptInterface fun pinyinReady() = pinyin != null
         @JavascriptInterface fun lexiconMigrate(value: String): String = lexiconReply {
             require(value.toByteArray().size <= PersonalLexicon.MAX_BYTES)
@@ -1140,7 +1043,7 @@ open class VoxFixImeService : InputMethodService() {
             if (state.id != id || !splitMatches(connection, state)) { clipboardSplit = null; return@inputReply "{}" }
             ownSelectionUntil = SystemClock.uptimeMillis() + 250
             hostSelectionOpen?.let { main.removeCallbacks(it) }; hostSelectionOpen = null
-            selectionDrag.clear(); selectionLockedAnchor = -1; annotation.hide()
+            selectionDrag.clear(); selectionLockedAnchor = -1
             val oldStart = if (state.text == null) state.start else state.end
             val oldEnd = state.end
             var updated = false
@@ -1184,7 +1087,6 @@ open class VoxFixImeService : InputMethodService() {
                 keyboardHeightPx = pixels
                 val viewport = view.parent as? FrameLayout ?: return@post
                 if (viewport.layoutParams.height != pixels) viewport.layoutParams = viewport.layoutParams.apply { this.height = pixels }
-                annotation.reposition(view, pixels)
                 repositionClipHint()
                 restoreKeyboardVisibility(view)
                 // Wait for the new DOM to be drawable before invalidating the IME window.
@@ -1219,7 +1121,7 @@ open class VoxFixImeService : InputMethodService() {
             }
         }
         @JavascriptInterface fun delete() = editInput(typing = true) {
-            selectionDrag.clear(); selectionLockedAnchor = -1; annotation.hide()
+            selectionDrag.clear(); selectionLockedAnchor = -1
             val connection = currentInputConnection ?: return@editInput
             val selected = !connection.getSelectedText(0).isNullOrEmpty()
             val extracted = connection.getExtractedText(ExtractedTextRequest().apply { hintMaxChars = 1 }, 0)
@@ -1234,7 +1136,7 @@ open class VoxFixImeService : InputMethodService() {
             scheduleVoiceResume()
         }
         @JavascriptInterface fun enter() = editInput(typing = true) {
-                selectionDrag.clear(); selectionLockedAnchor = -1; annotation.hide()
+                selectionDrag.clear(); selectionLockedAnchor = -1
             val info = currentInputEditorInfo ?: return@editInput
             val action = info.imeOptions and EditorInfo.IME_MASK_ACTION
             if (info.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION == 0 && action != EditorInfo.IME_ACTION_NONE && action != EditorInfo.IME_ACTION_UNSPECIFIED) currentInputConnection?.performEditorAction(action)
@@ -1242,12 +1144,9 @@ open class VoxFixImeService : InputMethodService() {
             composingStart = null
             scheduleVoiceResume()
         }
-        @JavascriptInterface fun hide() = editInput { hiddenSelection.cancel(); annotation.hide(); requestHideSelf(0) }
+        @JavascriptInterface fun hide() = editInput { hiddenSelection.cancel(); requestHideSelf(0) }
         @JavascriptInterface fun switcher() = editInput { getSystemService(InputMethodManager::class.java).showInputMethodPicker() }
         @JavascriptInterface fun startVoice() = editInput { beginVoice() }
-        // 兼容旧前端：点按语音曾经是「语音攒在会话起点」的并发模式，用户明确要求不要那样——
-        // 语音只落当前光标，不能把打字期间的话留到打完字再倒进旧位置。现在它就是普通语音。
-        @JavascriptInterface fun startMixedVoice() = editInput { beginVoice() }
         /**
          * 前端每帧上报候选框是否显示。选完第一个候选后输入框里已经没有 composing，但联想候选框
          * 还挂着——只按 composing 判断会提前恢复识别，把接着说的话打进候选里。以框在不在为准。
@@ -1262,6 +1161,11 @@ open class VoxFixImeService : InputMethodService() {
             }
         }
         @JavascriptInterface fun startLocalVoice() = editInput { beginVoice(true) }
+        @JavascriptInterface fun selectionEditing(visible: Boolean) = editInput(false) {
+            if (selectionEditingShown == visible) return@editInput
+            selectionEditingShown = visible
+            if (visible) pauseVoiceForTyping() else scheduleVoiceResume()
+        }
         private fun stopMicrophone() {
             if (web !== owner || !shown || destroyed) return
             val started = System.nanoTime()
@@ -1356,7 +1260,7 @@ open class VoxFixImeService : InputMethodService() {
         }
         private fun selectionHead(start: Int, end: Int): Int =
             if (selectionDrag.anchor >= 0 && minOf(start, end) == minOf(selectionDrag.anchor, selectionDrag.head) && maxOf(start, end) == maxOf(selectionDrag.anchor, selectionDrag.head)) selectionDrag.head else end
-        @JavascriptInterface fun gestureStart(selecting: Boolean) = editInput {
+        @JavascriptInterface fun gestureStart(selecting: Boolean) = editInput(typing = true) {
             navigation.resetBoundary()
             val connection = currentInputConnection ?: return@editInput
             val extracted = connection.getExtractedText(ExtractedTextRequest(), 0)
@@ -1375,7 +1279,6 @@ open class VoxFixImeService : InputMethodService() {
             gestureEpoch++; selectionSteps.clear(); cursorSteps = 0
             if (selecting) {
                 reportSelection(selectionDrag.anchor, selectionDrag.head)
-                showAnnotation()
             }
         }
         @JavascriptInterface fun gestureMove(steps: Int) = editInput {
@@ -1400,7 +1303,6 @@ open class VoxFixImeService : InputMethodService() {
             selectionLockedAnchor = head
             connection.setSelection(head, head)
             reportSelection(head, head)
-            showAnnotation()
         }
         // 解除起点锁定：把选区收成「活动终点」处的光标。反向拖选后 selectionDrag.head 才是
         // 手指那一端，不能取较大的索引 —— 那会跳到起点那一侧。
@@ -1408,7 +1310,6 @@ open class VoxFixImeService : InputMethodService() {
             val connection = currentInputConnection ?: return@editInput
             val head = if (selectionDrag.anchor >= 0) selectionDrag.head else selectionEnd
             selectionDrag.clear(); selectionLockedAnchor = -1
-            annotation.hide()
             selectionGestureActive = false; gestureSelecting = false; gestureOrigin = -1
             gestureEpoch++; selectionSteps.clear(); cursorSteps = 0
             if (head >= 0) { connection.setSelection(head, head); reportSelection(head, head) }
@@ -1496,7 +1397,7 @@ open class VoxFixImeService : InputMethodService() {
         }
         @JavascriptInterface fun edit(action: String) = editInput {
             if (action != "copy-text") selectionDrag.clear()
-            if (action != "copy-text" && action != "select-all") { selectionLockedAnchor = -1; annotation.hide() }
+            if (action != "copy-text" && action != "select-all") { selectionLockedAnchor = -1 }
             val id = when (action) {
                 "select-all" -> android.R.id.selectAll
                 "copy-text" -> android.R.id.copy

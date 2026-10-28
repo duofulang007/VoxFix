@@ -102,15 +102,15 @@ class DesktopVoiceTest {
     }
 
     @Test fun forcedCutCarriesRemainderWithoutGap() {
-        val audio = FloatArray(200000) { .1f }
+        val audio = FloatArray(80000) { .1f }
         val planner = DesktopVoiceSegments(audio)
-        repeat(100) { planner.append(FloatArray(1600) { .1f }) }
-        audio.fill(0f, 137920, 138080)
-        val first = planner.frame(-1, listOf(DesktopVoiceBounds(0, 160000))).finals.single()
-        assertEquals(138000, first.end)
+        repeat(40) { planner.append(FloatArray(1600) { .1f }) }
+        audio.fill(0f, 53920, 54080)
+        val first = planner.frame(-1, listOf(DesktopVoiceBounds(0, 64000))).finals.single()
+        assertEquals(54000, first.end)
         val last = planner.frame(-1, emptyList(), true).finals.single()
         assertEquals(first.end, last.start)
-        assertEquals(160000, last.end)
+        assertEquals(64000, last.end)
     }
 
     @Test fun vadPositionTracksNativePruningAndStart() {

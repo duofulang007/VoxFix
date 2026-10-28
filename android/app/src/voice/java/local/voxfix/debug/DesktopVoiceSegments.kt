@@ -33,10 +33,10 @@ internal class DesktopVoiceSegments(private val audio: FloatArray) {
             var start = if (carry) lastEnd else maxOf(lastEnd, segment.start - 6400)
             if (flushing && lastEnd == 0 && samples <= 6 * DesktopVoiceRules.RATE) start = 0
             var end = minOf(samples, segment.end + 6400)
-            val forced = segment.end - segment.start >= 152000 && !flushing
+            val forced = segment.end - segment.start >= (DesktopVoiceRules.SEGMENT_SECONDS * DesktopVoiceRules.RATE - 8000) && !flushing
             if (forced) {
                 val target = minOf(samples, segment.end)
-                val search = maxOf(start + DesktopVoiceRules.RATE, target - 24000)
+                val search = maxOf(start + DesktopVoiceRules.RATE, target - 12000)
                 val count = (target - search) / 160
                 if (count > 0) {
                     var best = Double.POSITIVE_INFINITY

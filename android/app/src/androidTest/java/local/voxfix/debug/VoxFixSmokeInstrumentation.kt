@@ -30,6 +30,12 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
     override fun onStart() {
         val output = Bundle()
         try {
+            if (modelCompare == "desktop-parity") {
+                output.putString("result", VoiceTextParitySmoke.run(this)); finish(Activity.RESULT_OK, output); return
+            }
+            if (modelCompare == "desktop-continuous") {
+                output.putString("result", VoiceTextParitySmoke.continuous(this)); finish(Activity.RESULT_OK, output); return
+            }
             if (modelCompare == "ascend-eval") {
                 output.putString("result", DesktopCorpusEval.run(targetContext, evalMode, evalOffset, evalLimit))
                 finish(Activity.RESULT_OK, output); return

@@ -15,7 +15,7 @@ internal object VoiceRecorder {
      * 但打字期间说的话不会进 VAD、不会成段上屏。用户选完字立刻恢复。
      */
     fun record(onLevel: (Int) -> Unit, shouldContinue: () -> Boolean, isCancelled: () -> Boolean,
-               onReady: () -> Unit, onCapture: (PcmCapture?) -> Unit, maxSamples: Int,
+               onReady: () -> Unit, onCapture: (PcmCapture?) -> Unit, maxSamples: Long,
                isMuted: () -> Boolean = { false }, transcribe: (() -> FloatArray?) -> String): String {
         val started = System.nanoTime()
         val minimum = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -31,14 +31,14 @@ internal object VoiceRecorder {
             check(microphone.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "麦克风未进入录音状态" }
             Log.i("VoxFix", "ASR_MIC_STARTED elapsedMs=${(System.nanoTime() - started) / 1_000_000}")
             val pcm = ShortArray(320)
-            var total = 0
+            var total = 0L
             capture = PcmCapture(300, read@{
-                val received = microphone.read(pcm, 0, minOf(pcm.size, maxSamples - total))
+                val received = microphone.read(pcm, 0, minOf(pcm.size.toLong(), maxSamples - total).toInt())
                 check(received > 0) { "麦克风采样失败：$received" }
                 val count = minOf(received.toLong(), (stopFrame.get() - total).coerceAtLeast(0)).toInt()
                 if (count == 0) return@read null
                 total += count
-                if (total == count) {
+                if (total == count.toLong()) {
                     Log.i("VoxFix", "ASR_MIC_READY elapsedMs=${(System.nanoTime() - started) / 1_000_000}")
                     onReady()
                 }

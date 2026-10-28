@@ -165,7 +165,7 @@ internal object DesktopVoiceDeliverySmoke {
                 check(host.editable.toString().endsWith("pin") && host.finishes == 1)
                 checks++
 
-                open(false)
+                ticket = open(false)
                 field("voiceTyping").set(ime, true)
                 val muted = field("voiceMuted").get(ime) as java.util.concurrent.atomic.AtomicBoolean
                 muted.set(true)
@@ -176,6 +176,11 @@ internal object DesktopVoiceDeliverySmoke {
                 field("composingStart").set(ime, 0)
                 resume.run(); check(muted.get())
                 field("composingStart").set(ime, null)
+                field("selectionEditingShown").set(ime, true)
+                resume.run(); check(muted.get())
+                check(!ime.writeVoiceDraft("选字期间不得写入", 64000, ticket, 1L))
+                check(!ime.writeVoiceSettled("选字期间不得替换。", 64000, ticket, 1L))
+                field("selectionEditingShown").set(ime, false)
                 resume.run(); check(!muted.get() && !(field("voiceTyping").get(ime) as Boolean))
                 cancel()
                 checks++

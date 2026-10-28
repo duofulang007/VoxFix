@@ -7,6 +7,7 @@ internal object DesktopVoiceRules {
     const val RATE = 16000
     const val FRAME = 1600
     const val MAX_SAMPLES = RATE * 180
+    const val SEGMENT_SECONDS = 4
     private val marks = "，。！？；：、,.!?;:"
     private val tags = Regex("<\\|[^|]*\\|>|<\\s*(?:FIL|L|IL)\\s*/\\s*>", RegexOption.IGNORE_CASE)
     private val tokens = Regex("[A-Za-z0-9_]+(?:[.'/:+-][A-Za-z0-9_]+)*|[^\\s\\u001c-\\u001f\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000，。！？；：、,.!?;:]")

@@ -27,6 +27,8 @@ internal class DesktopSpeechEngine(
     // ~3 s session build again.
     private val rescue = sharedRescue()
     internal var observeFrame: ((DesktopVoiceFrame) -> Unit)? = null
+    @Volatile internal var samplePosition = 0
+        private set
 
     init {
         val loadedAt = System.nanoTime()
@@ -48,7 +50,7 @@ internal class DesktopSpeechEngine(
                 ctTransformer = "punctuation/model.int8.onnx", numThreads = 2)))
             val config = VadModelConfig(sileroVadModelConfig = SileroVadModelConfig(
                 model = "silero_vad.onnx", threshold = .30f, minSilenceDuration = .65f,
-                minSpeechDuration = .12f, windowSize = 512, maxSpeechDuration = 10f), sampleRate = 16000, numThreads = 1)
+                minSpeechDuration = .12f, windowSize = 512, maxSpeechDuration = DesktopVoiceRules.SEGMENT_SECONDS.toFloat()), sampleRate = 16000, numThreads = 1)
             vad = Vad(assets, config)
             Log.i("VoxFix", "ASR_MODEL_READY model=desktop-r5 elapsedMs=${(System.nanoTime() - loadedAt) / 1_000_000}")
         } catch (failure: Throwable) { close(); throw failure }
@@ -106,6 +108,22 @@ internal class DesktopSpeechEngine(
     fun transcribe(nextChunk: () -> FloatArray?, onText: (String) -> Unit, isCancelled: () -> Boolean = { false },
                    onSettled: (String, Int) -> Unit = { _, _ -> }, onDraft: (String, Int) -> Unit = { _, _ -> }): String {
         synchronized(this) { check(!closed && !running) { "语音模块正在使用或已释放" }; running = true }
+        var text = ""
+        samplePosition = 0
+        try {
+            DesktopVoiceRounds.run(nextChunk, isCancelled) { next, offset ->
+                text = transcribeRound(next, onText, isCancelled,
+                    { value, key -> onSettled(value, Math.addExact(offset, key)) },
+                    { value, key -> onDraft(value, Math.addExact(offset, key)) }, text, offset)
+            }
+            return if (isCancelled()) "" else text
+        } catch (error: DesktopVoiceFailure) { throw error }
+        catch (error: Throwable) { throw DesktopVoiceFailure(text, error) }
+        finally { synchronized(this) { running = false } }
+    }
+
+    private fun transcribeRound(nextChunk: () -> FloatArray?, onText: (String) -> Unit, isCancelled: () -> Boolean,
+                               onSettled: (String, Int) -> Unit, onDraft: (String, Int) -> Unit, initialText: String, sampleOffset: Int): String {
         val detector = checkNotNull(vad)
         val positions = DesktopVadPosition()
         val planner = DesktopVoiceSegments(audio)
@@ -114,7 +132,7 @@ internal class DesktopSpeechEngine(
         val pending = java.util.ArrayDeque<DesktopVoiceBounds>()
         var draft: DesktopVoiceBounds? = null
         var activeKey = -1
-        var committed = ""
+        var committed = initialText
         var preview = ""
         var emitted = ""
         var ending = false
@@ -144,7 +162,7 @@ internal class DesktopSpeechEngine(
                         } else null
                     }
                     if (output != null && !isCancelled()) onText(output)
-                    if (final && text.isNotEmpty() && !isCancelled()) onSettled(text, bounds.key)
+                    if (final && !isCancelled()) onSettled(text, bounds.key)
                     if (!final && !isCancelled()) {
                         val live = synchronized(monitor) { if (cancelled) "" else preview }
                         if (live.isNotEmpty()) onDraft(live, bounds.start)
@@ -180,6 +198,7 @@ internal class DesktopSpeechEngine(
         }
         fun accept(frame: FloatArray) {
             planner.append(frame)
+            samplePosition = Math.addExact(sampleOffset, planner.samples)
             detector.acceptWaveform(gain.process(frame))
             val segments = completed()
             positions.accepted(frame.size, detector.isSpeechDetected(), segments)
@@ -227,7 +246,6 @@ internal class DesktopSpeechEngine(
             throw DesktopVoiceFailure(committed, error)
         } finally {
             audio.fill(0f, 0, planner.samples)
-            synchronized(this) { running = false }
         }
     }
 
@@ -271,7 +289,7 @@ internal class DesktopSpeechEngine(
                    onReady: () -> Unit = {}, onCapture: (PcmCapture?) -> Unit = {},
                    onSettled: (String, Int) -> Unit = { _, _ -> }, onDraft: (String, Int) -> Unit = { _, _ -> },
                    isMuted: () -> Boolean = { false }): String =
-            VoiceRecorder.record(onLevel, shouldContinue, isCancelled, onReady, onCapture, DesktopVoiceRules.MAX_SAMPLES,
+            VoiceRecorder.record(onLevel, shouldContinue, isCancelled, onReady, onCapture, Long.MAX_VALUE,
                 isMuted) { next -> engine().transcribe(next, onText, isCancelled, onSettled, onDraft) }
     }
 }

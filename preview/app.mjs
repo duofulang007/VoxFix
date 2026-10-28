@@ -255,7 +255,7 @@ let cursorFeedback={clientX:0,visible:false,selecting:false};
 //   已锁定：拖动 = 只调整选区终点（起点不动），长按 = 把选区收成活动终点处的光标并解除锁定。
 // 键盘底部主轨与编辑框内小轨共用这套手势，区别只有尺寸和位置。
 // 锁定只活在本次输入会话里：换输入框、结束输入或正文让旧起点失效时静默清理。
-let selectedCount=0,localSelection=null,lockedSelection=null,selectionLocked=false;
+let selectedCount=0,localSelection=null,lockedSelection=null,selectionLocked=false,selectionEditingCache=null;
 const selectionRowStep=28;
 function releaseSelectionLock(){selectionLocked=false;lockedSelection=null;localSelection=null;selectedCount=0;}
 function clearSelectionLock(){releaseSelectionLock();state.selectionActions=false;}
@@ -627,7 +627,7 @@ function footer() {
 }
 function canDismissVoiceAssociations(){return Boolean(state.voice?.tap&&state.voice.phase!=='recognizing'&&!localInput&&!clipSearch&&!state.comp&&!englishPrefix&&state.language==='zh'&&!privateField&&associatedWords.length);}
 function selectionEditor(){
-  if(!state.selectionActions||state.voice||state.hidden)return '';
+  if(!state.selectionActions||(state.voice&&!state.voice.tap)||state.hidden)return '';
   // 面板只由外部点击关闭：左边选中字数、右边空白处放删除钮，中间不留空位。
   // 左侧四个操作钮仍是原来的按钮与命中区，只把文字换成图标（中文名保留在 aria-label）。
   const locked=lockedNow(),mode=locked?'起点锁定 · 拖动调整终点':'移动光标 · 长按锁定起点';
@@ -1352,6 +1352,8 @@ function render() {
   nativeSettings?.classList.toggle('night',state.night);
   document.querySelectorAll('#quick-pages button').forEach(b=>b.setAttribute('aria-pressed', b.dataset.value===state.page));
   reportCandidatesVisible();
+  const editing=!state.hidden&&!localInput&&(state.selectionActions||gesture?.action==='cursor-gesture');
+  if(editing!==selectionEditingCache){selectionEditingCache=editing;nativeIme?.selectionEditing?.(editing);}
 }
 function feedback(message) { $('feedback').textContent=message; }
 function toast(message) { clearTimeout(toastTimer); $('toast').textContent=message; $('toast').hidden=false; toastTimer=setTimeout(()=>$('toast').hidden=true,2600); feedback(message); }
@@ -2132,7 +2134,7 @@ if(nativeIme){
     clearSelectionLock();state.cursorDrag=null;cursorFeedback.visible=false;render();
   };
   // 宿主自己长按选中的文字：那里本来就有固定起点，按「已锁定」处理。
-  globalThis.voxfixSelectionOrigin=()=>{if(localInput||state.voice||gesture||clipboardSplit)return;kbArrivedAt=performance.now();selectionLocked=true;state.selectionActions=true;render();};
+  globalThis.voxfixSelectionOrigin=()=>{if(localInput||(state.voice&&!state.voice.tap)||gesture||clipboardSplit)return;kbArrivedAt=performance.now();selectionLocked=true;state.selectionActions=true;render();};
   globalThis.voxfixSelectionUnavailable=()=>toast('当前输入框暂不提供段落文本，请使用滑轨框选。');
   globalThis.voxfixSelectionBlocked=()=>{if(gesture?.selecting){gesture.blockedDirection=gesture.direction?.slice();haltJoystick(gesture);}};
   globalThis.voxfixReset=()=>{memeSearch.reset();memeInput.value='';endClipboardSplit();if(gesture)haltJoystick(gesture);releaseSelectionLock();state.selectionActions=false;state.cursorDrag=null;cursorFeedback.visible=false;closeLocalEditor(true);quoteEditor=null;candidateContact=null;clearTimeout(referenceTimer);referenceWanted='' ;clipReference='';latestClipboard='';stopVoiceLoop();englishPrefix='';context='';learningChain=[];associatedWords=[];clearTimeout(gesture?.timer);clearTimeout(gesture?.repeatTimer);gesture=null;itemHold=null;state.voice=null;state.comp=null;state.popup=null;state.locked=false;state.hidden=false;state.page='letters';state.clipManage=false;state.clipSelected=[];state.clipConfirm=null;state.clipCandidate='';clearToolbarDrag();state.clipGroupMenu=null;applyText({text:'',cursor:0});render();};
