@@ -15,9 +15,13 @@ VoxFix 是一个安装后可在系统里独立选择的自有 Android 输入法�
   词库为 luna_pinyin 加个人词条，并保留 speller `algebra` 简拼修复。
 - **语音走桌面R5的本地流程**：sherpa-onnx 1.13.8 + SenseVoiceSmall R5 INT8（两线程、自动语种、ITN 关闭）
   + silero VAD + CT-Transformer 标点；不再打包 Zipformer，旧的流式+二遍引擎已删除。
-  长按空格240ms进入，上滑取消、松手完成定稿；键盘出现即预热，空闲5分钟释放模型，单轮最多3分钟。
+  长按空格240ms进入，上滑取消、松手完成定稿；键盘出现即预热，空闲5分钟释放模型。
   文本层只有一条管线：定稿 → CTC 热词救援 → 个人词典 → 标点。不保存日常录音或转写。
   见[接入与安装](docs/桌面R5语音接入与安装-2026-10-25.md)；旧双遍机制保留为[历史参考](docs/archive/安卓双遍语音链路-2026-10-25迁移前.md)。
+- **逐字出字与长录音接续**（2026-10-29，对齐桌面 1.6.80）：定稿候选按 Unicode 文字元素逐字上屏，
+  15ms 调度、35ms 步进，积压按桌面公式追赶，旧草稿不排队播放；VAD 最长段从 10 秒收到 4 秒，
+  每 180 秒内部切识别缓冲、麦克风不重启；当前段纠错只改本轮语音的组合范围，框选替换以初选范围为界。
+  见[桌面语音交互同步](docs/桌面语音交互同步-2026-10-29.md)。
 - **语音常驻与联想共存**：语音未结束时联想照常展开，主键盘右下角麦克风切成半透明环形 ×；
   点一下只收起联想并按原生条件恢复同一轮识别，空格行为不变，见[联想收起](docs/联想收起与语音常驻-2026-10-26.md)。
 - **低频嗡声拦截**：解码前拦掉高度重复的周期波形，草稿、定稿与短句补救共用同一门禁，
@@ -27,6 +31,9 @@ VoxFix 是一个安装后可在系统里独立选择的自有 Android 输入法�
   见[词典与 CTC 救援](docs/桌面词典与CTC热词救援迁移-2026-10-25.md)。
 - 底部滑轨：碰一下即可拖动光标，离触控点越远走得越快（跟手 / 高速两档）；长按在「起点锁定」与「自由移动」
   之间切换，锁定时把光标钉成起点并呼出右侧编辑框，收起面板不等于解锁。
+  编辑框、八方向盘与宿主选区弹出完整保留；正文上的黄色标记条与水滴标注（`AnnotationOverlay.kt`）
+  已于 2026-10-29 整体删除，见[更正记录](docs/移除框选浮层-2026-10-29.md)。
+  右下角常驻语音开启时滑轨与宿主选区仍可打开编辑框，选字期间暂停语音送字，见[冲突修复](docs/常驻语音与滑轨编辑冲突修复-2026-10-29.md)。
 - **删除键有独立连删曲线**（90ms 起步到 30ms 封底），与滑轨摇杆分档速度互不影响，见
   [删除连删速度](docs/删除连删速度-2026-10-18.md)。
 - **工具栏**：长按图标 380ms 直接抬起，拖到别的图标上松手即落位并持久保存；没有排序模式或提示行，
@@ -85,7 +92,7 @@ node preview/core.test.mjs
 | 分组 | 脚本 |
 |---|---|
 | 布局与按压 | `fixed-layout`、`key-press`、`focus-ring`、`interaction-transitions`、`candidates`、`letter-hold`、`toolbar-drag` |
-| 滑轨与编辑框 | `selection-lock`、`selection-drag`、`selection-direction`、`selection-editor`、`selection-delete`、`selection-pad` |
+| 滑轨与编辑框 | `selection-lock`、`selection-drag`、`selection-direction`、`selection-editor`、`selection-delete`、`selection-pad`、`voice-selection` |
 | 剪贴板与词库 | `clipboard-search`、`clipboard-match-ime`、`clipboard-reference`、`clipboard-panel-search`、`split`、`learning`、`learning-ime`、`lexicon`、`lexicon-browser` |
 | 核心与语言 | `core`（连删与摇杆曲线）、`pinyin`、`english` |
 | 横屏与表情包 | `landscape`、`meme-search`、`meme-search-ime` |
@@ -99,7 +106,8 @@ node preview/core.test.mjs
 ## 结构自检
 
 `node tools/check_module_boundaries.mjs` 一次查完循环依赖、叶子模块越层或反向依赖、单文件体积与孤儿模块；
-当前 0 越线。红线与拆分路线见[模块边界与拆分策略](docs/模块边界与拆分策略-2026-10-26.md)。
+当前 0 越线、1 处体积预警（`app.mjs` 2195 行 / 189KB，预警线 2200 行 / 180KB，未到强制拆分线）。
+红线与拆分路线见[模块边界与拆分策略](docs/模块边界与拆分策略-2026-10-26.md)。
 
 ## 网页试用页（与手机功能面对齐）
 
