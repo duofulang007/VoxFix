@@ -5,6 +5,7 @@ models/
 .android/
 android/.gradle/
 android/app/build/
+android/screenTextUiTest/build/
 android/local.properties
 android/.kotlin/
 __pycache__/
