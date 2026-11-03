@@ -86,7 +86,6 @@
 .keyboard>:not(.selection-editor):not(.selection-editor-backdrop):not(.voice-ghost):not(.clip-preview):not(.joy-guide):not(.popup){transition:filter .3s cubic-bezier(.22,1,.36,1)}
 .keyboard.kb-recede>:not(.selection-editor):not(.selection-editor-backdrop):not(.voice-ghost):not(.clip-preview):not(.joy-guide):not(.popup){filter:brightness(.94)}
 @media (prefers-reduced-motion:reduce){.keyboard>:not(.selection-editor):not(.selection-editor-backdrop):not(.voice-ghost):not(.clip-preview):not(.joy-guide):not(.popup){transition:none}}
-.gesture-note{font-size:12px;line-height:1.8;color:#647989;margin:0 0 22px}
 @media(prefers-contrast:more){.cursor-hint{opacity:.65}}
 
 .key-rows{padding:5px 0 8px}.candidate-bar{padding:0;overflow:hidden;gap:0}.candidate-visible{display:flex;flex:1;min-width:0;overflow-x:auto;scrollbar-width:none;touch-action:pan-x;overscroll-behavior-x:contain;cursor:grab}.candidate-visible::-webkit-scrollbar{display:none}.candidate-visible:active{cursor:grabbing}.candidate-visible button{flex:0 0 auto;min-width:44px;text-align:left;font-size:var(--candidate-font);padding:9px 14px;white-space:nowrap;touch-action:pan-x}.candidate-expand{width:28px;flex-shrink:0;height:40px;padding:0!important;display:grid;place-items:center}.candidate-expand svg{width:16px;height:16px;color:var(--muted)}.candidate-grid{display:flex;flex-wrap:wrap;align-content:flex-start;flex:1;min-height:0;overflow:auto;touch-action:pan-y;background:var(--key-bg);border-radius:6px;margin:0 0 5px}.candidate-grid button{text-align:left;flex:1 0 auto;min-width:25%;max-width:100%;font-size:var(--candidate-font,17px);min-height:44px;padding:10px 7px;overflow-wrap:anywhere;border-bottom:1px solid #8881}.candidate-grid button:first-child{color:#5796c4}.shift-key svg{width:18px;height:18px}.shift-key[aria-pressed=true]{color:#111}.symbol-grid button:active,.candidate-grid button:active{background:#c7dbea}
@@ -257,10 +256,7 @@
 
 /* 「来自剪贴板」候选条。 */
 .candidate-bar.clip-candidate{gap:8px;padding:0 10px}
-.clip-candidate .clip-source{font-size:11px;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:3px 9px;flex-shrink:0}
 .clip-candidate [data-action="clip-candidate-insert"]{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font-size:14px;padding:6px 4px}
-.clip-candidate .clip-hint{font-size:11px;color:var(--danger);flex-shrink:0}
-.clip-candidate .toolbar-done{flex:0 0 auto;font-size:13px;color:var(--accent);padding:0 12px;white-space:nowrap}
 
 /* 工具栏长按排序：只有被按住的那块图标抬起（底色+投影），落位目标淡蓝高亮。
    不铺提示行、也不给整条工具栏换底色——提示行会挡候选区，这是本次被要求去掉的东西。 */
