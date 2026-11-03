@@ -51,7 +51,8 @@
 .cursor-hint{position:absolute;left:calc(50% - 14px);top:calc(50% - 1px);width:28px;height:2px;border-radius:3px;background:#818a98;opacity:.23;pointer-events:none}
 .cursor-contact,.cursor-focus{position:absolute;left:0;top:50%;opacity:0;pointer-events:none;will-change:transform,opacity}
 .cursor-contact{width:36px;height:3px;margin-top:-1.5px;border-radius:3px;background:#86929f}
-.cursor-focus{width:66px;height:16px;margin-top:-8px;border-radius:50%;background:#7896a515}
+.cursor-focus{width:56px;height:12px;margin-top:-6px;border-radius:999px;background:#7896a518}
+.keyboard.night .cursor-focus{background:#c2cedd18}
 .cursor-zone.selecting .cursor-contact{background:#6298b7}.cursor-zone.selecting .cursor-focus{background:#68a1c918}
 /* 起点已锁定：中间那条短线转成主色，作为「滑轨现在调的是终点」的克制提示。 */
 .cursor-zone.locked .cursor-hint{background:var(--accent);opacity:1}
@@ -122,6 +123,7 @@
 .panel-title.clip-header{position:relative;display:grid;grid-template-columns:78px minmax(0,1fr) 78px;height:44px}
 .clip-header .tabs-pill{width:min(190px,100%);margin:0;justify-self:center;justify-content:center;transition:opacity 130ms cubic-bezier(.23,1,.32,1)}
 .clip-header .tabs-pill button{flex:1;min-width:0;padding:6px 2px;white-space:nowrap}
+.clip-header .tabs-pill .clip-lock{right:0;top:0;width:9px;height:9px;transform:none}
 .clip-header-leading,.clip-header-actions{display:flex;gap:6px;align-items:center}
 .clip-header-actions{justify-content:flex-end}
 .clip-header .clip-search-toggle{position:relative;z-index:1;isolation:isolate;background:transparent}
@@ -179,6 +181,18 @@
 .clip-list{gap:4px;padding:2px 8px 4px}
 .clip-list>button{background:var(--key-bg);border-radius:8px;padding:10px 12px;font-size:14px;line-height:1.45;min-height:44px}
 .clip-list .empty-state{padding-top:0;margin:auto;font-size:13px;color:var(--muted)}
+.clip-header.image-header{grid-template-columns:42px minmax(0,1fr) 42px}
+.clip-image-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-content:start}
+.clip-image-grid>.clip-image-card{padding:5px;min-width:0;text-align:center;overflow:hidden}
+.clip-image-card img{display:block;width:100%;height:88px;object-fit:contain;border-radius:5px}
+.clip-image-card span{font-size:11px;color:var(--muted)}
+.clip-image-grid>.empty-state{grid-column:1/-1;text-align:center;padding:30px 10px;line-height:1.8}
+.clip-image-preview{display:flex;flex:1;min-height:0;flex-direction:column;margin:2px 8px 4px;border-radius:8px;background:var(--key-bg);overflow:hidden}
+.keyboard .clip-image-canvas{width:100%;height:auto;flex:1;min-height:0;touch-action:none;user-select:none;pointer-events:auto}
+.clip-image-actions{display:flex;justify-content:space-around;flex:none;border-top:1px solid var(--line)}
+.clip-image-actions button{min-height:44px;flex:1;padding:4px;font-size:13px}
+.clip-image-hint{text-align:center;font-size:11px;color:var(--muted);padding:0 4px 5px}
+.clip-image-send{flex:none;min-height:44px;margin:0 8px 4px;border-radius:8px;background:var(--accent-soft);color:var(--accent)}
 .clip-list .clip-pick{display:flex;align-items:center;gap:10px;padding-left:12px}
 .clip-list .pick-box{flex:0 0 auto;width:18px;height:18px;border:1.5px solid var(--line);border-radius:50%;background:transparent;color:#fff;font-size:11px;line-height:15px;text-align:center}
 .clip-list .clip-pick.picked .pick-box{background:var(--accent);border-color:var(--accent)}

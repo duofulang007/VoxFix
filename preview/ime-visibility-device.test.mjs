@@ -36,13 +36,18 @@ async function evaluate(expression) {
   return result.result.value;
 }
 try {
-  assert.equal(await evaluate('document.visibilityState'),'hidden','Inject the visibility mismatch first');
+  await new Promise(resolve=>setTimeout(resolve,300));
+  assert.equal(await evaluate('document.visibilityState'),'visible','A shown keyboard must recover from a late hidden notification without another keypress');
   await evaluate('globalThis.voxfixRedraw()');
   await new Promise(resolve=>setTimeout(resolve,300));
   assert.equal(await evaluate('document.visibilityState'),'visible','A render/resize must restore the shown native WebView');
   assert(await evaluate('document.querySelectorAll(".key").length>0'));
   assert((await call('Page.captureScreenshot',{format:'png'})).data,'The restored page must produce a frame');
-  console.log('PASS: native hidden-page mismatch recovers through the real render/resize bridge and produces a frame');
+  for(let i=0;i<4;i++) {
+    probe('hidden');
+    assert.equal(await evaluate('document.visibilityState'),'visible','Repeated late hidden notifications must not blank a shown keyboard');
+  }
+  console.log('PASS: five late hidden notifications keep the shown keyboard visible without a keypress; redraw produces a frame');
 } finally {socket.close();probe('repair');}
 for(let i=0;i<2;i++) {
   const before=(await (await fetch(endpoint+'/json/list')).json()).find(p=>JSON.parse(p.description).attached);

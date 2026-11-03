@@ -329,6 +329,25 @@ try{
   await page.evaluate(()=>voxfixSelection(5,5));
   assert.equal(await page.locator('.selection-editor').count(),1,'A collapsed locked origin keeps the editing panel');
   assert(!requests.some(url=>url.includes('/api/')),'Native keyboard must not call the PC service');
+  await page.evaluate(()=>{
+    voxfixReset();
+    window.screenTextOn=false;
+    VoxFixIme.screenTextEnabled=()=>window.screenTextOn;
+    VoxFixIme.toggleScreenText=()=>{window.screenTextOn=!window.screenTextOn;voxfixScreenTextChanged();};
+  });
+  await page.locator('#keyboard [data-action="menu"]').first().click();
+  const screenText=page.locator('#keyboard [data-action="screen-text"]');
+  await screenText.getByText('开启截图工具').waitFor();
+  await screenText.click();
+  await screenText.getByText('关闭截图工具').waitFor();
+  await screenText.click();
+  await screenText.getByText('开启截图工具').waitFor();
+  await page.evaluate(()=>{VoxFixIme.screenshotList=()=>JSON.stringify({items:[]});});
+  await page.locator('#keyboard [data-action="return"]').first().click();
+  await page.locator('#keyboard [data-action="clipboard"]').first().click();
+  await page.locator('#keyboard [data-action="clip-tab"][data-value="images"]').click();
+  assert.equal(await page.locator('.clip-image-grid').count(),1);
+  assert.deepEqual(await page.locator('.tabs-pill button').allTextContents(),['文本','图片','常用']);
   assert.deepEqual(errors,[]);
   await page.screenshot({path:new URL('../docs/native-ime-browser.png',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1')});
   console.log('PASS: native bridge composition/candidates, English, editing, hold/release/cancel, clipboard, layout and no desktop service');

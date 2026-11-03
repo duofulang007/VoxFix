@@ -8,7 +8,7 @@ import { createMemeSearch } from './meme-search.mjs';
 
 const $ = id => document.getElementById(id);
 const hostEditor=$('editor'), keyboard=$('keyboard');
-let editor=hostEditor,localInput=null,consumedClick=null,enterLabel='换行',privateField=false,noPersonalizedLearning=false,englishPrefix='',fieldPreference=null;
+let editor=hostEditor,localInput=null,consumedClick=null,englishCandidateTap=null,enterLabel='换行',privateField=false,noPersonalizedLearning=false,englishPrefix='',fieldPreference=null;
 let clipSearch=null;
 const clipSearchInput=document.createElement('input');
 clipSearchInput.className='clip-search-input';clipSearchInput.type='text';clipSearchInput.inputMode='none';clipSearchInput.autocomplete='off';clipSearchInput.spellcheck=false;clipSearchInput.maxLength=100;
@@ -108,7 +108,9 @@ function clipboardSplitPanel(){
   const backLabel=session.fromEditor?'返回编辑框，保留拆词草稿':'返回剪贴板，保留已选文字';
   return `<div class="clip-split-title"><span>拆词</span>${button(backLabel,'split-return','','clip-split-return',icon('split-back'))}</div><section class="clip-split-card"><div class="clip-split-grid" role="group" aria-label="${session.fromEditor?'拆词词块，点选修改草稿，保存后提交':'拆词词块，点选上屏，再点撤回'}"><div class="clip-split-flow">${session.words.map((word,i)=>button(word.trim()?'词块：'+word:'空白词块','split-word',String(i),'clip-split-chip',esc(word.trim()?word:word.includes('\n')?'↵':'␣'),`aria-pressed="${selected.has(i)}"`)).join('')}</div></div><div class="clip-split-actions">${button('全选','split-all','','clip-split-all','<span class="clip-split-dot" aria-hidden="true">✓</span>全选',`aria-pressed="${all}"`)}${button(session.selected.length?'复制所选词块':'复制原文','split-copy','','clip-split-return',icon('split-cards'))}</div></section><div class="clip-split-space"></div>${footer()}`;
 }
-function closeLocalEditor(keepDraft=false){if(!localInput&&!clipSearch)return;if(localInput===memeInput)nativeIme?.searchFocus?.(false);if(clipSearch){nativeIme?.searchFocus?.(false);const host=clipSearch.target==='host'?state:clipSearch.inputs.host;Object.assign(state,{language:host.language,layout:host.layout});clipSearch=null;}if(state.voice){if(keepDraft)preserveVoice(state.voice);else cancelVoice();}if(keepDraft&&!quoteEditor&&localInput===$('snippet-content'))snippetDraft={edit:snippetEdit,text:localInput.value};state.comp=null;context='';learningChain=[];associatedWords=[];editor=hostEditor;localInput=null;snippetDialog.append(snippetForm);localPanel.replaceChildren();localPanel.hidden=true;if(quoteEditor){snippetForm.querySelector('button[type=submit]').textContent='保存';snippetForm.querySelector('.note').hidden=false;if(snippetDialog.open)snippetDialog.close();}}
+function closeLocalEditor(keepDraft=false){if(!localInput&&!clipSearch)return;
+  if(localInput===$('snippet-content')){const source=quoteEditor||snippetEdit;if(source){state.language=source.language;state.layout=source.layout;}}
+  if(localInput===memeInput)nativeIme?.searchFocus?.(false);if(clipSearch){nativeIme?.searchFocus?.(false);const host=clipSearch.target==='host'?state:clipSearch.inputs.host;Object.assign(state,{language:host.language,layout:host.layout});clipSearch=null;}if(state.voice){if(keepDraft)preserveVoice(state.voice);else cancelVoice();}if(keepDraft&&!quoteEditor&&localInput===$('snippet-content'))snippetDraft={edit:snippetEdit,text:localInput.value};state.comp=null;context='';learningChain=[];associatedWords=[];editor=hostEditor;localInput=null;snippetDialog.append(snippetForm);localPanel.replaceChildren();localPanel.hidden=true;if(quoteEditor){snippetForm.querySelector('button[type=submit]').textContent='保存';snippetForm.querySelector('.note').hidden=false;if(snippetDialog.open)snippetDialog.close();}}
 const nativeSettings=nativeIme?document.createElement('dialog'):null;
 if(nativeSettings){nativeSettings.className='snippet-dialog settings-dialog';nativeSettings.setAttribute('aria-label','键盘设置');const close=document.createElement('button');close.className='settings-back';close.textContent='‹ 返回键盘';close.onclick=()=>nativeSettings.close();nativeSettings.append(close,$('custom-panel'));document.body.append(nativeSettings);}
 let settings = structuredClone(defaults);
@@ -117,7 +119,7 @@ if(nativeIme&&!settings.toolbar.includes('menu'))settings.toolbar.unshift('menu'
 const state = { page: 'letters', returnPage:'letters', symbolReturn:'letters', language: 'zh', shift: 0, symbol: '常用', locked: false, night: false, clipTab: 'clipboard', clipLocked: false, popup: null, comp: null, voice: null, hidden: false, layout: '26', voiceTimer: null, cursorDrag: null, selectionActions: false, clipGroup: 0, clipManage: false, clipSelected: [], clipConfirm: null, clipCandidate: '', clipGroupMenu: null };
 let clipTabTap=null;
 let latestClipboard='',clipReference='',referenceWanted='',referenceTimer=0,candidateContact=null,candidateRenderPending=false,quoteEditor=null;
-let referenceMatches=[],referencePopup=null,referenceCache=null;
+let referenceMatches=[],referencePopup=null,referenceCache=null,candidateRestoreScroll=null;
 function syncClipboardReference(){
   const eligible=settings.clipboardMatch&&!clipSearch&&!privateField&&!noPersonalizedLearning&&!localInput&&!state.voice&&!state.hidden&&!document.hidden&&state.page==='letters'&&state.language==='zh'&&state.layout==='26'&&state.comp;
   if(!eligible){referencePopup=null;referenceMatches=[];clipReference='';referenceWanted='';clearTimeout(referenceTimer);paintClipboardReference();return;}
@@ -196,7 +198,7 @@ function insertClipboardReference(text){
 function openClipboardEditor(text){
   if(localInput||quoteEditor||privateField)return;
   splitRequest++;
-  quoteEditor={comp:state.comp,context,associatedWords,referencePopup,query:state.comp?.raw||'',hit:referenceMatches.find(hit=>hit.text===text)};referencePopup=null;state.comp=null;context='';learningChain=[];associatedWords=[];
+  quoteEditor={comp:state.comp,context,associatedWords,referencePopup,referenceMatches,clipReference,referenceWanted,candidateScroll:keyboard.querySelector('.candidate-visible')?.scrollLeft||0,language:state.language,layout:state.layout,query:state.comp?.raw||'',hit:referenceMatches.find(hit=>hit.text===text)};referencePopup=null;state.comp=null;context='';learningChain=[];associatedWords=[];
   $('snippet-title').textContent='编辑本次引用';$('snippet-content').value=text;$('snippet-error').textContent='';snippetForm.querySelector('.note').hidden=true;snippetForm.querySelector('button[type=submit]').textContent='保存';
   localInput=$('snippet-content');editor=localInput;
   if(nativeIme)localPanel.append(snippetForm);else snippetDialog.showModal();
@@ -220,10 +222,10 @@ function paintReferenceHighlight(locate=false){
 }
 function finishClipboardEditor(apply){
   if(apply){if(state.comp){commit(currentCandidates()[0]||state.comp.raw);if(state.comp)commit(state.comp.raw);}if(editor.value.trim())insertClipboardReference(editor.value);return;}
-  const prior=quoteEditor;closeLocalEditor();quoteEditor=null;state.comp=prior.comp;context=prior.context;associatedWords=prior.associatedWords;referencePopup=prior.referencePopup;render();
+  const prior=quoteEditor;closeLocalEditor();quoteEditor=null;state.comp=prior.comp;state.language=prior.language;state.layout=prior.layout;context=prior.context;associatedWords=prior.associatedWords;referencePopup=prior.referencePopup;referenceMatches=prior.referenceMatches;clipReference=prior.clipReference;referenceWanted=prior.referenceWanted;candidateRestoreScroll=prior.candidateScroll;render();
 }
 try{const saved=JSON.parse(localStorage.getItem('voxfix-keyboard-v1'));if(saved){if(['9','26'].includes(saved.layout))state.layout=saved.layout;if(['zh','en'].includes(saved.language))state.language=saved.language;if(typeof saved.night==='boolean')state.night=saved.night;}}catch{}
-function saveKeyboard(){const preference=clipSearch?(clipSearch.target==='host'?state:clipSearch.inputs.host):fieldPreference||state;try{localStorage.setItem('voxfix-keyboard-v1',JSON.stringify({layout:preference.layout,language:preference.language,night:state.night}));return true;}catch{return false;}}
+function saveKeyboard(){const source=localInput===$('snippet-content')?(quoteEditor||snippetEdit):null;const preference=clipSearch?(clipSearch.target==='host'?state:clipSearch.inputs.host):source||fieldPreference||state;try{localStorage.setItem('voxfix-keyboard-v1',JSON.stringify({layout:preference.layout,language:preference.language,night:state.night}));return true;}catch{return false;}}
 let clips = ['有没有免费的', 'https://example.com/演示链接', 'obsidian'];
 // 常用语按官方结构分组存放：每个分组有自己的名称和条目。
 let phraseGroups = [{name:'常用语',items:['常用语示例','example@example.com','稍后回复你']}];
@@ -231,7 +233,7 @@ let nativeClipSignature='';
 if(nativeIme){clips=[];phraseGroups=[{name:'常用语',items:[]}];}
 try{const saved=JSON.parse(localStorage.getItem('voxfix-snippets-v1'));if(saved){clips=validateSnippets(saved.clips);phraseGroups=migratePhraseGroups(saved.phrases);if(/^[a-f0-9]{64}$/.test(saved.clipSignature||''))nativeClipSignature=saved.clipSignature;}}catch{/* Keep malformed stored data untouched. */}
 function currentGroup(){return phraseGroups[Math.min(state.clipGroup,phraseGroups.length-1)]||phraseGroups[0];}
-function currentList(){return state.clipTab==='clipboard'?clips:currentGroup().items;}
+function currentList(){return state.clipTab==='images'?[]:state.clipTab==='clipboard'?clips:currentGroup().items;}
 function allPhrases(){return flattenPhrases(phraseGroups);}
 // 常用语新增：官方是"到上限就提示失败"（与剪贴板丢最旧的策略不同）。
 function addPhraseItem(group,text){
@@ -507,6 +509,7 @@ const icons = {
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   more: '<circle cx="5" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.7" fill="currentColor" stroke="none"/>',
   check: '<path d="m5 13 5 5 9-11"/>',
+  refresh: '<path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/>',
 };
 function icon(name, cls = '') { return `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.menu}</svg>`; }
 function esc(value) { return String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -528,8 +531,9 @@ function clipHeader() {
     const remove = `<button type="button" class="ctl danger" data-action="clip-manage-delete" aria-label="删除所选"${state.clipSelected.length ? '' : ' disabled'}>${icon('trash')}</button>`;
     return `<div class="panel-title">${ctl('clip-manage', '完成', 'check')}<span class="title-note">已选 ${state.clipSelected.length} 条</span>${state.clipSelected.length < list.length ? button('全选', 'clip-select-all', '', 'text-action') : ''}${remove}</div>`;
   }
-  const clipTab = `<button type="button" class="${state.clipTab === 'clipboard' ? 'selected' : ''}${state.clipLocked ? ' clip-locked' : ''}" data-action="clip-tab" data-value="clipboard" aria-label="剪贴板，${state.clipLocked ? '已锁定，双击解锁' : '双击锁定'}" aria-pressed="${state.clipLocked}">剪贴板${state.clipLocked ? icon('lock', 'clip-lock') : ''}</button>`;
-  const tabs = `<div class="tabs-pill">${clipTab}${button('常用语', 'clip-tab', 'phrases', state.clipTab === 'phrases' ? 'selected' : '')}</div>`;
+  const clipTab = `<button type="button" class="${state.clipTab === 'clipboard' ? 'selected' : ''}${state.clipLocked ? ' clip-locked' : ''}" data-action="clip-tab" data-value="clipboard" aria-label="文本，${state.clipLocked ? '已锁定，双击解锁' : '双击锁定'}" aria-pressed="${state.clipLocked}">文本${state.clipLocked ? icon('lock', 'clip-lock') : ''}</button>`;
+  const tabs = `<div class="tabs-pill">${clipTab}${button('图片','clip-tab','images',state.clipTab==='images'?'selected':'')}${button('常用', 'clip-tab', 'phrases', state.clipTab === 'phrases' ? 'selected' : '')}</div>`;
+  if(state.clipTab==='images')return `<div class="panel-title clip-header image-header"><div class="clip-header-leading">${ctl('return','返回键盘','hide')}</div>${tabs}<div class="clip-header-actions">${ctl('image-refresh','刷新图片','refresh')}</div></div>`;
   const add=state.clipTab==='phrases'?button('添加常用语','snippet-add','','ctl',icon('add')):'';
   const more=button(state.clipTab==='phrases'?'清空当前分组的常用语':'更多管理操作','clip-manage-menu','','ctl'+(clipMenu?.index===-1?' clip-more-open':''),icon(state.clipTab==='phrases'?'trash':'more'),`aria-haspopup="menu" aria-expanded="${clipMenu?.index===-1}" aria-controls="clip-management-menu"`);
   return `<div class="panel-title clip-header"><div class="clip-header-leading">${ctl('return', '返回键盘', 'hide')}${add?more:''}</div>${tabs}<div class="clip-header-actions">${button('展开搜索','clip-search-toggle','','ctl clip-search-toggle',icon('search','clip-search-glass')+icon('close','clip-search-close'),'aria-expanded="false"')}${add||more}</div><div class="clip-search-surface"><span class="clip-search-input-slot"></span></div></div>`;
@@ -571,7 +575,7 @@ function setClipSearchTarget(target,selectionChanged=false){
   if(target==='search')clipSearchInput.focus({preventScroll:true});else if(nativeIme)clipSearchInput.blur();else hostEditor.focus({preventScroll:true});
 }
 function updateClipSearchHeader(header,open){
-  const slot=header.querySelector('.clip-search-input-slot');if(slot.firstElementChild!==clipSearchInput)slot.replaceChildren(clipSearchInput);
+  const slot=header.querySelector('.clip-search-input-slot');if(!slot)return;if(slot.firstElementChild!==clipSearchInput)slot.replaceChildren(clipSearchInput);
   const label=state.clipTab==='clipboard'?'剪贴板':'常用语';clipSearchInput.placeholder='搜索'+label;clipSearchInput.setAttribute('aria-label','搜索'+label);clipSearchInput.disabled=!open;
   header.querySelector('.tabs-pill').inert=open;
   const toggle=header.querySelector('.clip-search-toggle');toggle.setAttribute('aria-expanded',String(open));toggle.setAttribute('aria-label',open?'关闭搜索':'展开搜索');
@@ -620,12 +624,13 @@ function footer() {
   const total=nativeIme&&!localInput?nativeCursor.total:editor.value.length,cursor=nativeIme&&!localInput?nativeCursor.position:editor.selectionEnd;
   const drag=state.cursorDrag,locked=lockedNow(),zoneClass='cursor-zone'+(drag?drag.selecting?' selecting':' dragging':'')+(locked?' locked':'');
   const label=locked?'起点锁定，左右拖动调整终点，长按解除锁定':'底部中间空白可左右拖动光标、点按两侧精调一个字，长按后拖动框选文字';
-  const voice=state.voice,dismiss=canDismissVoiceAssociations(),paused=Boolean(voice?.typingPaused||dismiss),voiceClass='voice-toggle'+(voice?.tap&&voice.phase==='loading'&&!paused?' arming':'')+(voice?.tap&&voice.micReady&&voice.phase==='listening'&&!paused?' active':'')+(voice?.tap&&voice.phase==='recognizing'?' recognizing':'')+(paused?' typing-paused':'')+(dismiss?' dismiss-associations':'');
+  const voice=state.voice,dismiss=canDismissVoiceAssociations(),paused=Boolean(voice?.typingPaused||dismiss||voicePanelPaused()),voiceClass='voice-toggle'+(voice?.tap&&voice.phase==='loading'&&!paused?' arming':'')+(voice?.tap&&voice.micReady&&voice.phase==='listening'&&!paused?' active':'')+(voice?.tap&&voice.phase==='recognizing'?' recognizing':'')+(paused?' typing-paused':'')+(dismiss?' dismiss-associations':'');
   const micGlyph=voice?.tap&&['loading','listening','recognizing'].includes(voice.phase)?'mic-filled':'mic';
   const right=clipSearch?button('收起键盘查看结果','clip-search-keys','','',icon('hide')):localInput||voice&&!voice.tap?'<span class="empty"></span>':button(dismiss?'收起联想，继续语音':voice?.phase==='recognizing'?'识别中':voice?'结束语音并上屏':'开始语音输入','voice-toggle','',voiceClass,`<span class="voice-mic-disc"><span class="voice-mic-glyph">${icon(micGlyph)}</span><span class="voice-close-glyph">${icon('close')}</span></span>`);
   return `<div class="keyboard-footer">${settings.footerSwitcher ? button('底部输入法菜单', 'switcher', '', '', icon('keyboard')) : '<span class="empty"></span>'}<div class="${zoneClass}" data-action="cursor-gesture" role="slider" tabindex="0" aria-label="${label}" aria-valuemin="0" aria-valuenow="${cursor}"><span class="cursor-hint"></span><span class="cursor-focus"></span><span class="cursor-contact"></span></div>${right}</div>${joyGuide()}`;
 }
 function canDismissVoiceAssociations(){return Boolean(state.voice?.tap&&state.voice.phase!=='recognizing'&&!localInput&&!clipSearch&&!state.comp&&!englishPrefix&&state.language==='zh'&&!privateField&&associatedWords.length);}
+function voicePanelPaused(){return Boolean(state.voice?.tap&&!localInput&&['numbers','symbols'].includes(state.page));}
 function selectionEditor(){
   if(!state.selectionActions||(state.voice&&!state.voice.tap)||state.hidden)return '';
   // 面板只由外部点击关闭：左边选中字数、右边空白处放删除钮，中间不留空位。
@@ -682,6 +687,7 @@ function setHintOpacity(zone,value){
   else hint.style.opacity=String(value);
 }
 function syncCursorFeedback() {
+  cancelAnimationFrame(cursorFeedbackRaf);cursorFeedbackRaf=0;
   syncJoyGuide();
   const zone=feedbackZone();if(!zone||!cursorFeedback.visible)return;
   if(gesture?.padCenter){
@@ -694,9 +700,13 @@ function syncCursorFeedback() {
   zone.classList.toggle('selecting',cursorFeedback.selecting);zone.classList.toggle('dragging',!cursorFeedback.selecting);
   const line=zone.querySelector('.cursor-contact'),focus=zone.querySelector('.cursor-focus');
   if(!line||!focus)return;
-  line.style.transform=`translateX(${x-18}px) scaleX(${cursorFeedback.selecting?1.12:1})`;focus.style.transform=`translateX(${x-33}px)`;
-  line.style.opacity='.88';focus.style.opacity='.7';setHintOpacity(zone,0);
+  // Reused nodes retain the previous fade's fill; a new drag must take opacity back.
+  for(const node of [line,focus])for(const animation of node.getAnimations())animation.cancel();
+  line.style.transform=`translateX(${x-18}px) scaleX(${cursorFeedback.selecting?1.12:1})`;focus.style.transform=`translateX(${x-28}px)`;
+  line.style.opacity='.88';focus.style.opacity=gesture?.joy?.level>0?'.7':'0';setHintOpacity(zone,0);
 }
+let cursorFeedbackRaf=0;
+function requestCursorFeedback(){if(!cursorFeedbackRaf)cursorFeedbackRaf=requestAnimationFrame(()=>{cursorFeedbackRaf=0;syncCursorFeedback();syncSelectionFeedback();});}
 function fadeCursorFeedback() {
   syncCursorFeedback();cursorFeedback.visible=false;
   const zone=feedbackZone();if(!zone)return;
@@ -758,7 +768,7 @@ function reportCandidatesVisible(){
 }
 function candidateStrip(words,action='candidate') {
   const referenceSlot=action==='candidate'&&!clipSearch&&state.language==='zh'&&state.layout==='26'&&!localInput&&settings.clipboardMatch;
-  const rows=words.map(word=>button('候选：'+word,action,word,'candidate-hold',esc(word)));
+  const rows=words.map(word=>button('候选：'+word,action,word,'candidate-hold',esc(word),action==='english-candidate'?` data-prefix="${esc(englishPrefix)}"`:''));
   const reference=referenceSlot?`<div class="clipboard-slot" inert aria-hidden="true">${button('展开剪贴板匹配','clipboard-reference','','clipboard-reference','<span class="clipboard-preview"></span><span class="clipboard-count" aria-hidden="true"></span>','disabled aria-hidden="true" aria-expanded="false"')}</div>`:'';
   return `<div class="candidate-visible${state.language==='zh'&&state.layout==='26'?' natural-candidates':''}" tabindex="0" aria-label="候选字，左右滑动浏览" data-query="${esc(state.comp?.raw||words.join(','))}">${rows.join('')}</div>${reference}`;
 
@@ -964,10 +974,60 @@ function removeCustomToolbar(id){
   persist();render();if(row)toast('已移除「'+row.label+'」');
 }
 function clipboard() {
+  if(state.clipTab==='images')return imageClipboard();
   const list = currentList();
   const managing = state.clipManage && state.clipTab==='clipboard';
   return `${clipHeader()}${state.clipTab==='phrases'?phraseGroupPills():''}<div class="clip-list" aria-label="长按内容或空白处管理">${list.length?list.map((text,i)=>clipRow(text,i,managing)).join(''):`<div class="empty-state">${state.clipTab==='clipboard'?'还没有复制内容':'这个分组还是空的'}</div>`}</div>${footer()}${clipMenu?clipContextMenu():''}${state.clipGroupMenu?groupMenuPanel():''}${state.clipConfirm?clipConfirmPanel():''}`;
 }
+let screenshotRows=[],screenshotPreview=null,screenshotCrop=null,screenshotDelete=false,screenshotError='';
+function screenshotCall(method,...args){
+  if(!nativeIme?.[method])return {items:[]};
+  const result=JSON.parse(nativeIme[method](...args));
+  if(result.error)throw Error(result.error);
+  return result;
+}
+function refreshScreenshots(){
+  try{screenshotRows=screenshotCall('screenshotList').items||[];screenshotError='';}
+  catch(error){screenshotError=error.message;}
+}
+function screenshotUrl(id,kind){return `https://voxfix.local/screenshots/${id}/${kind}`;}
+function imageClipboard(){
+  const row=screenshotRows.find(item=>item.id===screenshotPreview);
+  let body;
+  if(row){
+    const crop=screenshotCrop;
+    body=`<div class="clip-image-preview"><svg class="clip-image-canvas" viewBox="0 0 ${row.width} ${row.height}" aria-label="图片预览${crop?'，拖动选择裁剪范围':''}"><image href="${screenshotUrl(row.id,'image')}" width="${row.width}" height="${row.height}"/>${crop?`<rect x="${crop[0]}" y="${crop[1]}" width="${crop[2]-crop[0]}" height="${crop[3]-crop[1]}" fill="#4096ff22" stroke="#4096ff" stroke-width="2" vector-effect="non-scaling-stroke"/>`:''}</svg><div class="clip-image-actions">${screenshotDelete?`${button('取消','image-cancel','','text-action')}${button('确定删除','image-delete-confirm','','text-action danger')}`:crop?`${button('取消裁剪','image-cancel','','text-action')}${button('另存裁剪','image-crop-save','','text-action')}`:`${button('返回列表','image-back','','text-action')}${button('复制','image-copy','','text-action')}${button('裁剪','image-crop','','text-action')}${button('删除','image-delete','','text-action danger')}`}</div>${screenshotDelete?'<div class="clip-image-hint">删除这张图片？</div>':crop?'<div class="clip-image-hint">拖动选择范围，另存后保留原图</div>':''}</div>`;
+  }else body=`<div class="clip-list clip-image-grid" aria-label="图片剪贴板">${screenshotError?`<div class="empty-state">${esc(screenshotError)}</div>`:screenshotRows.length?screenshotRows.map(item=>button(`查看图片 ${item.width}×${item.height}`,'image-open',item.id,'clip-image-card',`<img src="${screenshotUrl(item.id,'thumb')}" loading="lazy" alt="截图缩略图"><span>${item.width} × ${item.height}</span>`)).join(''):'<div class="empty-state">还没有图片<br>圆弧截图保存后会出现在这里</div>'}</div>`;
+  return clipHeader()+body+(row&&!screenshotCrop&&!screenshotDelete?button('插入聊天','image-send','','clip-image-send text-action'):'')+footer();
+}
+globalThis.voxfixOpenImages=()=>{if(localInput||state.voice)return;state.clipTab='images';screenshotPreview=null;screenshotCrop=null;screenshotDelete=false;refreshScreenshots();showPage('clipboard');};
+globalThis.voxfixImageInserted=(message)=>toast(message);
+function imageAction(action,value){
+  if(action==='image-send'&&screenshotPreview){nativeIme?.screenshotInsert?.(screenshotPreview);return;}
+  try{
+    const row=screenshotRows.find(item=>item.id===screenshotPreview);
+    if(action==='image-refresh')refreshScreenshots();
+    if(action==='image-open'){screenshotPreview=value;screenshotCrop=null;screenshotDelete=false;}
+    if(action==='image-back'){screenshotPreview=null;screenshotCrop=null;screenshotDelete=false;}
+    if(action==='image-copy'&&row){const result=screenshotCall('screenshotCopy',row.id);if(!result.ok)throw Error('复制失败，请重试');toast('已复制图片，可在原应用粘贴');}
+    if(action==='image-delete')screenshotDelete=true;
+    if(action==='image-cancel'){screenshotDelete=false;screenshotCrop=null;}
+    if(action==='image-delete-confirm'&&row){screenshotRows=screenshotCall('screenshotDelete',row.id).items;screenshotPreview=null;screenshotDelete=false;}
+    if(action==='image-crop'&&row)screenshotCrop=[0,0,row.width,row.height];
+    if(action==='image-crop-save'&&row){screenshotRows=screenshotCall('screenshotCrop',row.id,...screenshotCrop).items;screenshotCrop=null;screenshotPreview=null;toast('已另存裁剪，原图已保留');}
+  }catch(error){toast(error.message||'图片操作失败，请重试');}
+  render();
+}
+keyboard.addEventListener('pointerdown',event=>{
+  const svg=event.target.closest('.clip-image-canvas');if(!svg||!screenshotCrop)return;
+  const row=screenshotRows.find(item=>item.id===screenshotPreview);if(!row)return;
+  event.preventDefault();event.stopPropagation();svg.setPointerCapture(event.pointerId);
+  const point=e=>{const p=new DOMPoint(e.clientX,e.clientY).matrixTransform(svg.getScreenCTM().inverse());return [Math.round(Math.max(0,Math.min(row.width,p.x))),Math.round(Math.max(0,Math.min(row.height,p.y)))];};
+  const start=point(event),before=[...screenshotCrop];
+  const move=e=>{const end=point(e);screenshotCrop=[Math.min(start[0],end[0]),Math.min(start[1],end[1]),Math.max(start[0],end[0]),Math.max(start[1],end[1])];const r=svg.querySelector('rect');['x','y','width','height'].forEach((key,i)=>r.setAttribute(key,[screenshotCrop[0],screenshotCrop[1],screenshotCrop[2]-screenshotCrop[0],screenshotCrop[3]-screenshotCrop[1]][i]));};
+  const end=e=>{svg.removeEventListener('pointermove',move);svg.removeEventListener('pointerup',end);svg.removeEventListener('pointercancel',end);if(e.type==='pointercancel'||screenshotCrop[2]-screenshotCrop[0]<2||screenshotCrop[3]-screenshotCrop[1]<2)screenshotCrop=before;render();};
+  svg.addEventListener('pointermove',move);svg.addEventListener('pointerup',end);svg.addEventListener('pointercancel',end);
+});
 function clipContextMenu(){
   const item=clipMenu.index>=0;
   const rows=item
@@ -1010,7 +1070,7 @@ function openSnippet(index=-1){
   splitRequest++;
   if(localInput){state.page='letters';render();localInput.focus();toast('请先保存或取消当前编辑');return;}
   const original=index<0?'':currentList()[index];
-  snippetEdit=snippetDraft?.edit||{tab:state.clipTab,index,original,group:state.clipGroup};
+  snippetEdit={...(snippetDraft?.edit||{tab:state.clipTab,index,original,group:state.clipGroup}),language:state.language,layout:state.layout};
   $('snippet-title').textContent=(snippetEdit.index<0?'添加':'编辑')+(snippetEdit.tab==='clipboard'?'剪贴板内容':`常用语 · ${currentGroup().name}`);
   $('snippet-content').value=snippetDraft?.text??original;snippetDraft=null;$('snippet-error').textContent='';
   if(nativeIme){if(state.comp)commit(state.comp.raw);localInput=$('snippet-content');editor=localInput;localPanel.append(snippetForm);localPanel.hidden=false;state.page='letters';}
@@ -1054,8 +1114,9 @@ memeInput.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isCo
 localPanel.addEventListener('click',event=>{if(localInput!==memeInput)return;const button=event.target.closest('[data-action^="meme-"]');if(button){event.preventDefault();activate(button.dataset.action,button.dataset.value);}});
 globalThis.voxfixMemeInsertion=(message,accepted)=>{if(accepted){state.page='letters';render();}toast(message);};
 // 功能菜单里符号/数字/编辑/设置没有专属图标，用方形字标代替，避免四个一模一样的方块。
-const menuGlyphs={symbols:'符',numbers:'123',edit:'编',lexicon:'典',custom:'设'};
-function menuPanel() { return `<div class="panel-title"><span>${nativeIme?'功能菜单':'功能菜单 · 未展开页面的补充入口'}</span>${button('返回键盘','return','','',icon('back'))}</div><div class="menu-grid">${[...toolbarItems.filter(([id])=>!['menu','hide'].includes(id)),['symbols','符号'],['numbers','数字'],['edit','编辑文字'],['lexicon','词典'],['custom','键盘设置']].map(([id,label])=>button(label,id,'','',`<span class="menu-glyph">${menuGlyphs[id]||icon(id)}</span><span>${label}</span>`)).join('')}</div>${footer()}`; }
+const menuGlyphs={symbols:'符',numbers:'123',edit:'编',lexicon:'典',custom:'设','screen-text':'截'};
+globalThis.voxfixScreenTextChanged=()=>{if(state.page==='menu')render();};
+function menuPanel() { return `<div class="panel-title"><span>${nativeIme?'功能菜单':'功能菜单 · 未展开页面的补充入口'}</span>${button('返回键盘','return','','',icon('back'))}</div><div class="menu-grid">${[...toolbarItems.filter(([id])=>!['menu','hide'].includes(id)),['symbols','符号'],['numbers','数字'],['edit','编辑文字'],['lexicon','词典'],['custom','键盘设置'],['screen-text',nativeIme?.screenTextEnabled?.()?'关闭截图工具':'开启截图工具']].map(([id,label])=>button(label,id,'','',`<span class="menu-glyph">${menuGlyphs[id]||icon(id)}</span><span>${label}</span>`)).join('')}</div>${footer()}`; }
 function editPanel() { return `<div class="panel-title"><span>${nativeIme?'编辑文字':'编辑文字 · 补充试用'}</span>${button('返回键盘','return','','',icon('back'))}</div><div class="menu-grid">${[['select-all','全选'],['copy-text','复制'],['cut-text','剪切'],['paste-last','粘贴'],['cursor-left','左移'],['cursor-right','右移'],['delete','删除'],['enter',localInput?'换行':enterLabel]].map(([id,label])=>button(label,id,'',id==='delete'?'key':'',icon(id==='delete'?'delete':'copy')+`<span>${label}</span>`)).join('')}</div>${footer()}`; }
 const VOICE_PHASES=['loading','listening','paused','cancel','recognizing'];
 const VOICE_TITLES={loading:'正在开启麦克风',listening:'倾听中',paused:'已暂停',cancel:'松手取消',recognizing:'识别中'};
@@ -1077,7 +1138,7 @@ function voicePanel() {
 function paintVoice() {
   const panel=keyboard.querySelector('.voice-panel'), phase=state.voice?.phase;
   const mic=keyboard.querySelector('.keyboard-footer .voice-toggle');
-  const dismiss=canDismissVoiceAssociations(),paused=Boolean(state.voice?.typingPaused||dismiss);
+  const dismiss=canDismissVoiceAssociations(),paused=Boolean(state.voice?.typingPaused||dismiss||voicePanelPaused());
   mic?.classList.toggle('arming',Boolean(state.voice?.tap&&phase==='loading'&&!paused));
   mic?.classList.toggle('active',Boolean(state.voice?.tap&&state.voice.micReady&&phase==='listening'&&!paused));
   mic?.classList.toggle('recognizing',Boolean(state.voice?.tap&&phase==='recognizing'));
@@ -1176,7 +1237,7 @@ function popup() {
 }
 function preserveVoiceToggle(previous) {
   const next=keyboard.querySelector('.keyboard-footer .voice-toggle');
-  if(!previous||!next)return;
+  if(!previous||!next||previous===next)return;
   const attributes=[...next.attributes],oldDisc=previous.querySelector('.voice-mic-disc'),newDisc=next.querySelector('.voice-mic-disc');
   if(!oldDisc||!newDisc)return;
   next.replaceWith(previous);
@@ -1192,15 +1253,11 @@ function preserveVoiceToggle(previous) {
 // 编辑框里的删除、复制、方向键每按一次都会走 render()，以前每次都整块重写 .keyboard 的 innerHTML，
 // 几十个键节点连同 .kb-recede 的亮度滤镜层要整体重新栅格化，用户看到的就是「背景字母闪一下」。
 // 现在页内容没变就一个节点都不动，只按需换覆盖层。
-let lastPageSignature=null,pageChildCount=0,lastOverlayHtml=null;
+let lastPageSignature=null,pageChildCount=0,lastOverlayHtml=null,lastPageParts=[];
 // 底部滑轨的开标签带着锁定/选择/光标位置，删一个字就会变；它由 syncPageDrift 原地抄过去，
 // 不参与「页内容变没变」的比较，否则每次删除又会整块重建。
 const CURSOR_ZONE_TAG=/<div class="cursor-zone[^>]*>/;
 function pageSignature(html){return html.replace(CURSOR_ZONE_TAG,'<div class="cursor-zone">');}
-function topLevelCount(html){
-  const box=document.createElement('template');box.innerHTML=html||'';
-  return box.content.children.length;
-}
 function syncPageDrift(pageHtml){
   const box=document.createElement('template');box.innerHTML=pageHtml;
   const next=box.content.querySelector('.keyboard-footer .cursor-zone');
@@ -1211,20 +1268,27 @@ function syncPageDrift(pageHtml){
 }
 function paintKeyboardContent(pageHtml,overlayHtml,previousEditor,previousBackdrop){
   const signature=pageSignature(pageHtml);
-  if(signature!==lastPageSignature){
-    keyboard.innerHTML=pageHtml+overlayHtml;
-    lastPageSignature=signature;lastOverlayHtml=overlayHtml;
-    pageChildCount=topLevelCount(pageHtml);
-    // 保留动画目标，只更新内容，避免原生重绘把入场动画截成最终帧。
-    const nextEditor=keyboard.querySelector(':scope > .selection-editor');
-    if(previousEditor&&nextEditor){
-      previousEditor.innerHTML=nextEditor.innerHTML;nextEditor.replaceWith(previousEditor);
-      if(previousBackdrop)keyboard.querySelector(':scope > .selection-editor-backdrop')?.replaceWith(previousBackdrop);
+  const changed=signature!==lastPageSignature;
+  if(changed){
+    const box=document.createElement('template');box.innerHTML=pageHtml;
+    const fresh=[...box.content.children],live=[...keyboard.children].slice(0,pageChildCount),parts=fresh.map(node=>node.outerHTML);
+    if(state.page!=='letters'||localInput||state.voice&&!state.voice.tap){
+      keyboard.innerHTML=pageHtml+overlayHtml;
+      lastPageSignature=signature;lastOverlayHtml=overlayHtml;lastPageParts=parts;pageChildCount=fresh.length;
+      const nextEditor=keyboard.querySelector(':scope > .selection-editor');
+      if(previousEditor&&nextEditor){previousEditor.innerHTML=nextEditor.innerHTML;nextEditor.replaceWith(previousEditor);if(previousBackdrop)keyboard.querySelector(':scope > .selection-editor-backdrop')?.replaceWith(previousBackdrop);}
+      return true;
     }
-    return true;
+    // Compare generated markup, not live pressed/scroll/animation state; unchanged keys stay mounted.
+    for(let i=0;i<fresh.length;i++){
+      if(live[i]&&parts[i]===lastPageParts[i])continue;
+      if(live[i])live[i].replaceWith(fresh[i]);else keyboard.insertBefore(fresh[i],keyboard.children[i]||null);
+    }
+    for(const node of live.slice(fresh.length))node.remove();
+    lastPageSignature=signature;lastPageParts=parts;pageChildCount=fresh.length;
   }
   syncPageDrift(pageHtml);
-  if(overlayHtml===lastOverlayHtml)return false;
+  if(overlayHtml===lastOverlayHtml)return changed;
   lastOverlayHtml=overlayHtml;
   const box=document.createElement('template');box.innerHTML=overlayHtml;
   const fresh=[...box.content.children];
@@ -1233,11 +1297,15 @@ function paintKeyboardContent(pageHtml,overlayHtml,previousEditor,previousBackdr
   // 同一个编辑框/遮罩节点继续沿用，只换内部 HTML：入场动画不重放、面板位置也不跳。
   for(const selector of ['.selection-editor','.selection-editor-backdrop']){
     const oldNode=stale.find(node=>node.matches(selector)),newNode=fresh.find(node=>node.matches(selector));
-    if(oldNode&&newNode)newNode.replaceWith(oldNode);
+    if(oldNode&&newNode){
+      const oldTrack=oldNode.querySelector('.selection-mini-track'),newTrack=newNode.querySelector('.selection-mini-track');
+      if(oldTrack&&newTrack){oldTrack.className=newTrack.className;oldTrack.setAttribute('aria-label',newTrack.getAttribute('aria-label'));}
+      newNode.replaceWith(oldNode);
+    }
   }
   for(const node of stale)if(node.isConnected)node.remove();
   keyboard.append(...fresh);
-  return false;
+  return changed;
 }
 function pageLabel() {
   if(state.page==='clipboard-split')return '剪贴板拆词';
@@ -1249,7 +1317,8 @@ function render() {
   for(const node of keyboard.querySelectorAll('[data-scroll-key]'))scrollPositions.set(node.dataset.scrollKey,node.scrollTop);
   const previousVoiceToggle=keyboard.querySelector('.keyboard-footer .voice-toggle');
   const previousCandidates=keyboard.querySelector('.candidate-visible'),previousReference=keyboard.querySelector('.clipboard-slot');
-  const candidateScroll=previousCandidates?.scrollLeft||0;
+  const restoredScroll=candidateRestoreScroll;candidateRestoreScroll=null;
+  const candidateScroll=restoredScroll??previousCandidates?.scrollLeft??0;
   // 呼出动效前置采样：「键盘是否刚从收起态回来」「上一帧有没有编辑框」（innerHTML 重建前抓，别放后面）。
   const wasHidden=keyboard.hidden;
   const previousEditor=keyboard.querySelector(':scope > .selection-editor');
@@ -1317,7 +1386,7 @@ function render() {
     if(held&&held!==gesture.target){held.classList.add('pressed');gesture.target=held;}
   }
   const candidates=keyboard.querySelector('.candidate-visible');
-  if(candidates && previousCandidates?.dataset.query===candidates.dataset.query)candidates.scrollLeft=candidateScroll;
+  if(candidates && (restoredScroll!==null||previousCandidates?.dataset.query===candidates.dataset.query))candidates.scrollLeft=candidateScroll;
   if(previousReference&&!privateField&&!noPersonalizedLearning&&keyboard.querySelector('.clipboard-slot'))keyboard.querySelector('.clipboard-slot').replaceWith(previousReference);
   syncClipboardReference();
   layoutCandidateGrid();
@@ -1352,7 +1421,7 @@ function render() {
   nativeSettings?.classList.toggle('night',state.night);
   document.querySelectorAll('#quick-pages button').forEach(b=>b.setAttribute('aria-pressed', b.dataset.value===state.page));
   reportCandidatesVisible();
-  const editing=!state.hidden&&!localInput&&(state.selectionActions||gesture?.action==='cursor-gesture');
+  const editing=!state.hidden&&!localInput&&(state.selectionActions||gesture?.action==='cursor-gesture'||voicePanelPaused());
   if(editing!==selectionEditingCache){selectionEditingCache=editing;nativeIme?.selectionEditing?.(editing);}
 }
 function feedback(message) { $('feedback').textContent=message; }
@@ -1421,7 +1490,7 @@ function deleteText(keepPanel=false) {
   if(nativeIme&&!localInput&&!state.comp)nativeIme.compose('');
   if(!state.comp && !associatedWords.length && state.page==='candidates'){state.page='letters';render();}
 }
-function showPage(page) { endClipboardSplit();if(state.voice) cancelVoice();clipMenu=null;state.clipGroupMenu=null;state.clipConfirm=null;clearTimeout(clipHold?.timer);clipHold=null;if(['letters','numbers','symbols'].includes(state.page))state.returnPage=state.page;if(page==='symbols'){const origin=['letters','numbers'].includes(state.page)?state.page:state.returnPage;if(origin!=='symbols')state.symbolReturn=origin;}state.popup=null;state.page=page;state.hidden=false;render(); }
+function showPage(page) { endClipboardSplit();if(state.voice&&!(state.voice.tap&&!localInput&&['numbers','symbols'].includes(page))) cancelVoice();clipMenu=null;state.clipGroupMenu=null;state.clipConfirm=null;clearTimeout(clipHold?.timer);clipHold=null;if(['letters','numbers','symbols'].includes(state.page))state.returnPage=state.page;if(page==='symbols'){const origin=['letters','numbers'].includes(state.page)?state.page:state.returnPage;if(origin!=='symbols')state.symbolReturn=origin;}state.popup=null;state.page=page;state.hidden=false;render(); }
 function showTab(name) { if(nativeIme&&name==='custom'){$('custom-panel').hidden=false;nativeSettings.showModal();return;} $('try-panel').hidden=name!=='try'; $('custom-panel').hidden=name!=='custom'; document.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected',b.dataset.tab===name)); }
 function startVoice(tap=false) {
   if(state.voice)return;
@@ -1453,7 +1522,8 @@ function finishVoice(cancelled) {
   const session=state.voice; session.phase='recognizing'; render();
   setTimeout(()=>{ if(state.voice!==session) return; applyText(voiceResult(session.snapshot,settings.voiceText)); exitVoice(); feedback('语音演示结束；本页未使用真实语音识别。'); },900);
 }
-function activate(action,value='') {
+function activate(action,value='',prefix=englishPrefix) {
+  if(action.startsWith('image-')){imageAction(action,value);return;}
   if(action==='voice-toggle'){if(canDismissVoiceAssociations()){context='';learningChain=[];associatedWords=[];if(state.page==='candidates')state.page='letters';render();return;}if(state.voice){if(state.voice.phase!=='recognizing')finishVoice(false);}else startVoice(true);return;}
   if(action==='meme-done'||localInput===memeInput&&['enter','return','emoji'].includes(action)){closeMemeSearch();return;}
   if(localInput===memeInput&&['clipboard','menu','layouts','hide'].includes(action))closeMemeSearch();
@@ -1496,7 +1566,7 @@ function activate(action,value='') {
     if(!localInput&&['select-all','copy-text','cut-text','paste-text','cursor-left','cursor-right'].includes(action)){if(state.comp)commit(state.comp.raw);nativeIme.edit(action);render();return;}
   }
   switch(action) {
-    case 'english-candidate': nativeIme.completeEnglish(englishPrefix,value);englishPrefix='';break;
+    case 'english-candidate': nativeIme.completeEnglish(prefix,value);englishPrefix='';break;
     case 'letter': inputLetter(value); break;
     case 'insert': case 'long-insert': insert(value); state.popup=null; break;
     case 'candidate': commit(value); break;
@@ -1545,11 +1615,13 @@ function activate(action,value='') {
         if(clipTabTap!==null&&now-clipTabTap<=350){state.clipLocked=!state.clipLocked;clipTabTap=null;}
         else clipTabTap=now;
       }
-      state.clipTab=value;clipMenu=null;state.clipConfirm=null;state.clipGroupMenu=null;state.clipManage=false;state.clipSelected=[];break;
+      if(!['clipboard','images','phrases'].includes(value))return;
+      state.clipTab=value;clipMenu=null;state.clipConfirm=null;state.clipGroupMenu=null;state.clipManage=false;state.clipSelected=[];
+      if(value==='images'){screenshotPreview=null;screenshotCrop=null;screenshotDelete=false;refreshScreenshots();}break;
     }
     case 'paste': insert(value); clipMenu=null; if(!state.clipManage&&!(state.clipTab==='clipboard'&&state.clipLocked))state.page=state.returnPage; break;
     case 'clip-candidate-insert': state.clipCandidate='';insert(value);break;
-    case 'clipboard-results': case 'clipboard-reference': if(referencePopup)closeReferencePopup();else if(referenceMatches.length){referencePopup={query:state.comp?.raw,matches:referenceMatches,scroll:0};paintClipboardReference();}return;
+    case 'clipboard-results': case 'clipboard-reference': if(referencePopup)closeReferencePopup();else if(referenceMatches.length){referencePopup={query:state.comp?.raw,matches:referenceMatches,scroll:0,candidateScroll:keyboard.querySelector('.candidate-visible')?.scrollLeft||0};paintClipboardReference();}return;
     case 'clipboard-result': if(!clips.includes(value)&&latestClipboard!==value){closeReferencePopup();syncClipboardReference();toast('这条内容已移除，请重新选择');return;}insertClipboardReference(value);return;
     case 'clip-candidate-dismiss': state.clipCandidate='';break;
     case 'toolbar-custom': { const row=settings.customToolbar.find(item=>item.id===value); if(row)insert(row.text); break; }
@@ -1596,6 +1668,7 @@ function activate(action,value='') {
     case 'custom': showTab('custom'); state.popup=null; feedback('设置自动保存。'); break;
     // 词典入口：手机上打开与电脑版同构的词语/错法编辑器；试用页没有该窗口时回到设置里的词库区。
     case 'lexicon': if(nativeIme?.openDictionary){nativeIme.openDictionary();return;} showTab('custom'); state.popup=null; $('lexicon-actions').hidden=false; feedback('试用页没有词典窗口，个人词库在这里导入导出。'); break;
+    case 'screen-text': if(nativeIme?.toggleScreenText){nativeIme.toggleScreenText();return;} toast('屏幕取字需在安卓输入法中开启。');return;
     case 'cancel-recognition': if(state.voice?.tap||state.voice?.phase==='recognizing') { cancelVoice(); } return;
     case 'select-all': editor.setSelectionRange(0,editor.value.length);localSelection=null;selectedCount=characterCount(editor.value); state.comp=null; break;
     case 'copy-text': case 'cut-text': { const text=editor.value.slice(editor.selectionStart,editor.selectionEnd); if(selectedCount===0||!text)break; {try{clips=addSnippet(clips,text);snippetUndo=null;saveSnippets();}catch(error){toast(error.message);return;} if(settings.clipboardCandidate)state.clipCandidate=text; if(action==='cut-text') { if(editor.selectionStart===editor.selectionEnd) applyText({text:'',cursor:0}); else insert(''); } if(nativeIme)nativeIme.copy(text);else navigator.clipboard?.writeText(text).catch(()=>toast('已存入本页剪贴板，系统复制未获授权。')); } break; }
@@ -1639,6 +1712,15 @@ function paintHoldChoice(choice){
 }
 keyboard.addEventListener('pointerdown',e=>{if(referencePopup&&!e.target.closest('.clipboard-results,.clipboard-slot')){closeReferencePopup();consumedClick={id:e.pointerId,until:Date.now()+700};e.preventDefault();e.stopImmediatePropagation();}},true);
 keyboard.addEventListener('pointerdown',e=>{if(e.target.closest('.candidate-visible,.clipboard-slot')&&e.button===0)candidateContact=e.pointerId;},true);
+// 触屏 click 可能晚于宿主回调引发的重绘：在有效抬手时提交，滚动的 pointercancel 不选词。
+keyboard.addEventListener('pointerdown',e=>{const target=e.target.closest('[data-action="english-candidate"]');if(e.pointerType==='touch'&&target)englishCandidateTap={id:e.pointerId,target,x:e.clientX,y:e.clientY};});
+keyboard.addEventListener('pointerup',e=>{
+  const tap=englishCandidateTap;if(!tap||tap.id!==e.pointerId)return;englishCandidateTap=null;
+  if(Math.hypot(e.clientX-tap.x,e.clientY-tap.y)>8||!tap.target.contains(document.elementFromPoint(e.clientX,e.clientY)))return;
+  consumedClick={id:e.pointerId,until:Date.now()+500};activate('english-candidate',tap.target.dataset.value,tap.target.dataset.prefix);
+});
+keyboard.addEventListener('pointercancel',()=>{englishCandidateTap=null;});
+window.addEventListener('blur',()=>{englishCandidateTap=null;});
 keyboard.addEventListener('pointerdown',e=>{
   if(e.button!==0||!e.target.closest('.keyboard-footer [data-action="voice-toggle"]'))return;
   e.preventDefault();
@@ -1779,7 +1861,7 @@ keyboard.addEventListener('pointermove',e=>{
     const delta=e.clientX-gesture.x;
     const previousX=gesture.lastX,previousY=gesture.lastY;
     gesture.lastX=e.clientX;gesture.lastY=e.clientY;
-    cursorFeedback.clientX=e.clientX;syncCursorFeedback();
+    cursorFeedback.clientX=e.clientX;requestCursorFeedback();
     // 解除锁定的那一次长按到此为止：后续拖动不再移动任何东西，抬手后恢复自由移动。
     if(gesture.ceased)return;
     if(gesture.tapDirection){if(Math.hypot(delta,e.clientY-gesture.y)>=8)gesture.moved=true;return;}
@@ -1793,7 +1875,7 @@ keyboard.addEventListener('pointermove',e=>{
       if(!gesture.selectionMoved&&Math.hypot(dx,dy)<5)return;
       gesture.selectionMoved=true;clearTimeout(gesture.timer);
       // 点按与拖动分开，转向后只输出新八方向。
-      dragSelection(gesture,e.clientX-previousX,e.clientY-previousY);syncSelectionFeedback();return;
+      dragSelection(gesture,e.clientX-previousX,e.clientY-previousY);return;
     }
     // 未锁定时同样支持八方向移动光标。
     dragSelection(gesture,e.clientX-previousX,e.clientY-previousY);
@@ -1832,7 +1914,7 @@ function endGesture(e,cancelled=false) {
     g.row.classList.remove('candidate-dragging');
     if(itemHold?.fired)return;
     if(g.dragged || cancelled)candidateSuppressUntil=Date.now()+350;
-    else {const target=document.elementFromPoint(e.clientX,e.clientY)?.closest('.candidate-visible button');if(target && g.row.contains(target))activate(target.dataset.action,target.dataset.value);}
+    else {const target=document.elementFromPoint(e.clientX,e.clientY)?.closest('.candidate-visible button');if(target && g.row.contains(target))activate(target.dataset.action,target.dataset.value,target.dataset.prefix);}
     return;
   }
   if(g.action==='cursor-gesture') {
@@ -1875,10 +1957,10 @@ keyboard.addEventListener('click',e=>{
   if(target.closest('.candidate-visible') && pointerClick && (e.pointerType==='mouse'||Date.now()<candidateSuppressUntil))return;
   if(target.dataset.action==='paste'&&Date.now()<clipSuppressUntil)return;
   if(target.classList.contains('key') && pointerClick) return;
-  activate(target.dataset.action,target.dataset.value);
+  activate(target.dataset.action,target.dataset.value,target.dataset.prefix);
 });
 keyboard.addEventListener('contextmenu',e=>e.preventDefault());
-keyboard.addEventListener('scroll',e=>{if(e.target.matches('.candidate-grid')){const grid=e.target;if(grid.scrollTop+grid.clientHeight>=grid.scrollHeight-grid.clientHeight)appendCandidates();updateCandidatePages();}else if(referencePopup&&e.target.matches('.candidate-visible'))closeReferencePopup();},true);
+keyboard.addEventListener('scroll',e=>{if(e.target.matches('.candidate-grid')){const grid=e.target;if(grid.scrollTop+grid.clientHeight>=grid.scrollHeight-grid.clientHeight)appendCandidates();updateCandidatePages();}else if(referencePopup&&e.target.matches('.candidate-visible')&&e.target.scrollLeft!==referencePopup.candidateScroll)closeReferencePopup();},true);
 // 剪贴板引用长按编辑：滑动即取消。
 function clearItemHold(){if(!itemHold)return;clearTimeout(itemHold.timer);itemHold=null;}
 keyboard.addEventListener('pointerdown',e=>{
@@ -1912,7 +1994,7 @@ function toolbarNodes(){return [...keyboard.querySelectorAll('.toolbar [data-act
 const toolbarKeyOf=node=>node.dataset.action==='toolbar-custom'?node.dataset.value:node.dataset.action;
 function beginToolbarDrag(hold){
   if(!hold.node.isConnected)return;
-  toolbarDrag={id:hold.id,key:hold.key,node:hold.node,moved:false,startX:hold.x,startY:hold.y,over:null,remove:false};
+  toolbarDrag={id:hold.id,key:hold.key,node:hold.node,moved:false,startX:hold.x,startY:hold.y,x:hold.x,y:hold.y,over:null,remove:false,raf:0,items:toolbarNodes().map(node=>({node,rect:node.getBoundingClientRect()})),removeTop:keyboard.querySelector('.toolbar').getBoundingClientRect().top-TOOLBAR_REMOVE_GAP};
   hold.node.classList.add('toolbar-drag');
   consumedClick={id:hold.id,until:Date.now()+800};
   try{keyboard.setPointerCapture(hold.id);}catch{}
@@ -1921,16 +2003,27 @@ function clearToolbarDrag(){
   clearTimeout(toolbarHold?.timer);toolbarHold=null;
   if(!toolbarDrag)return null;
   const drag=toolbarDrag;toolbarDrag=null;
+  cancelAnimationFrame(drag.raf);
   toolbarNodes().forEach(node=>node.classList.remove('toolbar-drag','drop-target','drop-remove'));
   return drag;
 }
 function endToolbarDrag(){
+  paintToolbarDrag();
   const drag=clearToolbarDrag();if(!drag)return;
   if(!drag.moved)return;                                  // 只按住没动：当作取消，不换位也不触发原功能
   if(drag.remove&&String(drag.key).startsWith('custom:')){removeCustomToolbar(drag.key);return;}
   const keys=toolbarNodes().map(toolbarKeyOf),from=keys.indexOf(drag.key);
   if(drag.over===null||from<0)return;
   moveToolbarItem(from,drag.over);
+}
+function paintToolbarDrag(){
+  const drag=toolbarDrag;if(!drag)return;
+  cancelAnimationFrame(drag.raf);drag.raf=0;
+  if(!drag.node.isConnected){clearToolbarDrag();return;}
+  const over=drag.items.find(({rect:r})=>drag.x>=r.left&&drag.x<=r.right&&drag.y>=r.top&&drag.y<=r.bottom)?.node;
+  drag.over=over&&over!==drag.node?drag.items.findIndex(item=>item.node===over):null;
+  drag.remove=String(drag.key).startsWith('custom:')&&drag.y<drag.removeTop;
+  for(const {node} of drag.items){node.classList.toggle('drop-target',node===over&&node!==drag.node);node.classList.toggle('drop-remove',drag.remove&&node===drag.node);}
 }
 keyboard.addEventListener('pointerdown',e=>{
   if(e.button!==0||gesture||e.target.closest('.candidate-bar'))return;
@@ -1943,14 +2036,8 @@ keyboard.addEventListener('pointermove',e=>{
   if(toolbarHold&&e.pointerId===toolbarHold.id&&Math.hypot(e.clientX-toolbarHold.x,e.clientY-toolbarHold.y)>10){clearTimeout(toolbarHold.timer);toolbarHold=null;}
   if(!toolbarDrag||toolbarDrag.id!==e.pointerId)return;
   if(Math.hypot(e.clientX-toolbarDrag.startX,e.clientY-toolbarDrag.startY)>6)toolbarDrag.moved=true;
-  const nodes=toolbarNodes(),bar=keyboard.querySelector('.toolbar');
-  const over=nodes.find(node=>{const r=node.getBoundingClientRect();return e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom;});
-  toolbarDrag.over=over&&over!==toolbarDrag.node?nodes.indexOf(over):null;
-  toolbarDrag.remove=String(toolbarDrag.key).startsWith('custom:')&&Boolean(bar)&&e.clientY<bar.getBoundingClientRect().top-TOOLBAR_REMOVE_GAP;
-  nodes.forEach(node=>{
-    node.classList.toggle('drop-target',node===over&&node!==toolbarDrag.node);
-    node.classList.toggle('drop-remove',toolbarDrag.remove&&node===toolbarDrag.node);
-  });
+  toolbarDrag.x=e.clientX;toolbarDrag.y=e.clientY;
+  if(!toolbarDrag.raf)toolbarDrag.raf=requestAnimationFrame(paintToolbarDrag);
 });
 for(const event of ['pointerup','pointercancel'])keyboard.addEventListener(event,e=>{
   if(toolbarHold&&toolbarHold.id===e.pointerId){clearTimeout(toolbarHold.timer);toolbarHold=null;}
@@ -1960,10 +2047,12 @@ for(const event of ['pointerup','pointercancel'])keyboard.addEventListener(event
 });
 keyboard.addEventListener('lostpointercapture',e=>{if(toolbarDrag&&toolbarDrag.id===e.pointerId)clearToolbarDrag();});
 window.addEventListener('blur',()=>clearToolbarDrag());
+window.addEventListener('resize',()=>clearToolbarDrag());
 document.addEventListener('visibilitychange',()=>{if(document.hidden)clearToolbarDrag();});
 keyboard.addEventListener('pointerdown',e=>{
   if(e.button!==0||!e.target.closest('.clip-list'))return;
   clearTimeout(clipHold?.timer);
+  if(state.clipTab==='images')return;
   const target=e.target.closest('.clip-text'),hold={id:e.pointerId,x:e.clientX,y:e.clientY,tab:state.clipTab,text:target?.dataset.value};clipHold=hold;
   hold.timer=setTimeout(()=>{if(clipHold!==hold||state.clipTab!==hold.tab)return;const index=hold.text===undefined?-1:currentList().indexOf(hold.text);if(hold.text!==undefined&&index<0)return;hold.fired=true;consumedClick={id:hold.id,until:Date.now()+700};clipSuppressUntil=Date.now()+700;openClipMenu(index);},500);
 });

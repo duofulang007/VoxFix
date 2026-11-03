@@ -15,7 +15,7 @@ public class ImeVisibilityProbe {
         return object.invokeMethod(thread, object.referenceType().methodsByName(name, signature).get(0), args, ObjectReference.INVOKE_SINGLE_THREADED);
     }
     public static void main(String[] args) throws Exception {
-        if(args.length!=2 || !List.of("hidden","repair","recreate").contains(args[0])) throw new IllegalArgumentException("mode and local WebView socket required");
+        if(args.length!=2 || !List.of("inspect","hidden","repair","recreate").contains(args[0])) throw new IllegalArgumentException("mode and local WebView socket required");
         URI uri=URI.create(args[1]);
         if(!uri.getScheme().equals("ws") || !uri.getHost().equals("127.0.0.1")) throw new IllegalArgumentException("Local debug socket only");
         AttachingConnector connector=Bootstrap.virtualMachineManager().attachingConnectors().stream().filter(c->c.name().equals("com.sun.jdi.SocketAttach")).findFirst().orElseThrow();
@@ -28,9 +28,9 @@ public class ImeVisibilityProbe {
             var values=((ArrayReference)field((ObjectReference)field(current,"mServices"),"mArray")).getValues();
             var service=(ObjectReference)values.stream().filter(v->v instanceof ObjectReference && ((ObjectReference)v).referenceType().name().equals("local.voxfix.debug.VoxFixImeService")).findFirst().orElseThrow();
             var info=(ObjectReference)field(service,"mInputEditorInfo");
-            if(!((StringReference)field(info,"packageName")).value().equals("local.voxfix.debug") || ((BooleanValue)field(service,"busy")).value()) throw new IllegalStateException("Use the idle own-app test editor");
+            if(!args[0].equals("inspect") && (!((StringReference)field(info,"packageName")).value().equals("local.voxfix.debug") || ((BooleanValue)field(service,"busy")).value())) throw new IllegalStateException("Use the idle own-app test editor");
             var web=(ObjectReference)field(service,"web");
-            if(!web.equals(field(service,"mInputView")) || ((IntegerValue)field((ObjectReference)field(web,"mAttachInfo"),"mWindowVisibility")).value()!=0) throw new IllegalStateException("Shown input view required");
+            if(((IntegerValue)field((ObjectReference)field(web,"mAttachInfo"),"mWindowVisibility")).value()!=0) throw new IllegalStateException("Shown input view required");
             var main=vm.allThreads().stream().filter(t->t.name().equals("main")).findFirst().orElseThrow();
             var ws=HttpClient.newHttpClient().newWebSocketBuilder().buildAsync(uri,new WebSocket.Listener(){}).get(5,TimeUnit.SECONDS);
             var request=vm.eventRequestManager().createMethodEntryRequest();
@@ -44,7 +44,9 @@ public class ImeVisibilityProbe {
             if(event==null)throw new IllegalStateException("No main Handler event");
             try {
                 if(!((BooleanValue)invoke(web,main,"isShown","()Z",List.of())).value())throw new IllegalStateException("Keyboard must be shown");
-                if(args[0].equals("recreate")) {
+                if(args[0].equals("inspect")) {
+                    System.out.println("shown="+field(service,"shown")+" isShown="+invoke(web,main,"isShown","()Z",List.of())+" windowVisibility="+invoke(web,main,"getWindowVisibility","()I",List.of()));
+                } else if(args[0].equals("recreate")) {
                     var replacement=invoke(service,main,"onCreateInputView","()Landroid/view/View;",List.of());
                     invoke(service,main,"setInputView","(Landroid/view/View;)V",List.of(replacement));
                 } else invoke(web,main,"dispatchWindowVisibilityChanged","(I)V",List.of(vm.mirrorOf(args[0].equals("hidden")?4:0)));

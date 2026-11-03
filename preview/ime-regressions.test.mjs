@@ -69,6 +69,20 @@ try{
   await check('night dims without intercepting cursor',async({page,click})=>{await page.setViewportSize({width:393,height:351});const before=await page.locator('.key').first().evaluate(e=>getComputedStyle(e).color);await click('night');assert(!(await page.locator('#toast').isVisible()));assert(await page.locator('#night-shade').isVisible());assert.equal(await page.locator('#night-shade').evaluate(e=>e.getBoundingClientRect().height),351);assert.equal(await page.locator('.key').first().evaluate(e=>getComputedStyle(e).color),before);const hit=await page.locator('.cursor-zone').evaluate(e=>{const r=e.getBoundingClientRect();return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.closest('.cursor-zone')!==null;});assert(hit);await click('night');assert(!(await page.locator('#keyboard').evaluate(e=>e.classList.contains('night'))));});
   await check('explicit clipboard import does not revive automatic refresh',async({page,click})=>{const openMenu=async()=>{await page.locator('.clip-list').click({button:'right',position:{x:3,y:3}});};await page.evaluate(()=>voxfixClipboard('sample','b'.repeat(64)));await click('clipboard');await openMenu();await click('clear-snippets');assert(await page.locator('.clip-menu-sheet').count(),'清空列表需要先确认');await click('clip-confirm-ok');await page.evaluate(()=>voxfixClipboard('sample','b'.repeat(64)));assert.equal(await page.locator('.clip-text').count(),0);await openMenu();await click('system-paste');assert.equal(await page.locator('.clip-menu-sheet').count(),0);assert(await page.evaluate(()=>calls.some(c=>c[0]==='importClipboard')));await page.evaluate(()=>voxfixClipboard('sample','b'.repeat(64),true));assert.equal(await page.locator('.clip-text').count(),1);});
   await check('English cursor echo does not leave old candidates',async({page,click})=>{await click('language');for(const l of 'hel')await click('letter',l);await page.evaluate(()=>voxfixClearComposition());assert.equal(await page.locator('[data-action="english-candidate"]').count(),0);});
+  await check('English candidate keeps its prefix while a cursor callback arrives during touch',async({page,click})=>{
+    await click('language');for(const l of 'hell')await click('letter',l);
+    const candidate=page.locator('[data-action="english-candidate"][data-value="hello"]'),box=await candidate.boundingBox(),touch=await page.context().newCDPSession(page);
+    await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:box.x+box.width/2,y:box.y+box.height/2}]});
+    await page.evaluate(()=>voxfixClearComposition());
+    await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await page.waitForTimeout(100);await touch.detach();
+    assert.deepEqual(await page.evaluate(()=>calls.filter(c=>c[0]==='completeEnglish')),[['completeEnglish','hell','hello']],'Visible candidate must retain its prefix and commit exactly once');
+    for(const l of 'hell')await click('letter',l);
+    const next=await candidate.boundingBox(),scroll=await page.context().newCDPSession(page),x=next.x+next.width/2,y=next.y+next.height/2;
+    await scroll.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+    await scroll.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x-35,y}]});
+    await scroll.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await page.waitForTimeout(100);await scroll.detach();
+    assert.equal(await page.evaluate(()=>calls.filter(c=>c[0]==='completeEnglish').length),1,'Swiping candidates must not select a word');
+  });
   await check('settings cannot strand its own entry',async({page,click})=>{await click('menu');await click('custom');assert.equal(await page.locator('#feature-toggles').count(),0);assert.equal(await page.locator('#clipboard-toggles input').count(),2);await page.locator('dialog[open] > button').click();await click('return');assert.equal(await page.locator('#keyboard [data-action="menu"]').count(),1);});
   await check('lexicon entry opens from the function menu',async({page,click})=>{await click('menu');assert.equal(await page.locator('#keyboard .menu-grid [data-action="lexicon"]').count(),1,'功能菜单需要可见的词典入口');await click('lexicon');assert(await page.evaluate(()=>calls.some(c=>c[0]==='openDictionary')),'点击词典应打开原生词典窗口');assert.equal(await page.locator('#keyboard .menu-grid').count(),1,'原生词典窗口由系统页面呈现，键盘保持原位');});
   await check('space release outside cancels',async({page,key})=>{const r=await key('space').boundingBox();await page.mouse.move(r.x+r.width/2,r.y+r.height/2);await page.mouse.down();await page.mouse.move(-10,r.y+r.height/2);await page.mouse.up();assert(!(await page.evaluate(()=>calls.some(c=>c[0]==='commit'))));});
@@ -284,12 +298,12 @@ try{
   await check('panel header keeps the three-shape layout',async({page,click})=>{
     await click('clipboard');
     assert.equal(await page.locator('.panel-title .ctl').count(),3,'剪贴板页保留返回、搜索与更多管理操作三个圆形图标钮');
-    assert.equal(await page.locator('.panel-title .tabs-pill button').count(),2,'分段控件应仍有两个页签');
-    assert.equal(await page.locator('.panel-title button').count(),5,'剪贴板页页头＝返回＋两页签＋搜索＋更多');
+    assert.equal(await page.locator('.panel-title .tabs-pill button').count(),3,'剪贴板有文本、图片、常用语三个页签');
+    assert.equal(await page.locator('.panel-title button').count(),6,'剪贴板页页头＝返回＋三页签＋搜索＋更多');
     assert.equal(await page.locator('.panel-title .manage-open,.panel-title .clip-more,.panel-title .group-add-title,.panel-title .manage-delete,.clip-manage-count').count(),0,'页头不应再有文字按钮');
-    assert.equal(await page.locator('.tabs-pill button.selected').textContent(),'剪贴板');
+    assert.equal(await page.locator('.tabs-pill button.selected').textContent(),'文本');
     await click('clip-tab','phrases');
-    assert.equal(await page.locator('.panel-title button').count(),6,'常用语页＝返回＋两页签＋添加常用语＋搜索＋更多');
+    assert.equal(await page.locator('.panel-title button').count(),7,'常用语页＝返回＋三页签＋添加常用语＋搜索＋更多');
     assert.equal(await page.locator('.group-pill.group-add').count(),1,'分组行末尾应保留新建分组');
     assert.equal(await page.locator('.group-pill.group-add svg').count(),1,'新建分组应是圆形图标钮而不是文字 pill');
     await click('clip-tab','clipboard');
