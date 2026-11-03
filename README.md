@@ -43,6 +43,16 @@ VoxFix 是一个安装后可在系统里独立选择的自有 Android 输入法�
   点条目引用、长按编辑。引用与剪贴板编辑共用「取消 / 拆词 / 保存」编辑框。
 - **拼音个性化学习**：原生成功选词同步到本地记忆，补齐分段短语、全拼／简拼／混拼共享召回与接续联想；
   全量个人词库默认开启并支持完整备份／通用文本导出与合并导入，不保存日常上屏文本，不联网。
+- **屏幕取字**：同包内独立无障碍服务 `ScreenTextService`，暗色细弧入口向内滑展开胶囊面板，支持整屏／框选取字、
+  结果原位编辑与失败保护（多指框选取消、重选框移动拉边、超时或配置变化保留已出文字）。
+  识别走本机 ML Kit 行级文字块，不上传图片；PP-OCRv6 small/medium 的独立对照评测见
+  [离线模型对比](docs/屏幕取字离线模型对比-2026-11-03.md)，主包尚未更换模型。
+- **截图工具条**：按用户所装 Snow Shot 1.1.8 源码重做（32dp 按钮、24dp 图标、8dp 圆角），分组为
+  `[整屏] | [识别 保存] | [取消 复制] | [眼睛 编辑]`；识别模式下复制文字、眼睛看原图对照，
+  复制与眼睛只在出字后出现，保存不复制。见[工具条与文字层](docs/截图工具条与文字层-2026-11-03.md)。
+- **截图并入剪贴板**：标签为「文本 / 图片 / 常用」，圆弧入口只留截图；图片支持键盘内预览、复制、
+  裁剪另存与确认删除，并按宿主能力插入聊天。独立截图管理页已移除，见
+  [剪贴板图片整合](docs/剪贴板图片整合-2026-11-03.md)。
 - **表情包同屏搜索**：工具栏笑脸进入，搜索框、结果与自有键盘同屏，停顿300ms 自动查询；无分组、相关标签
   与 Emoji/颜文字分区。图源按用户选择暂留搜狗，微信 App 内同源未确认，
   见[同屏搜索](docs/表情包同屏搜索-2026-10-19.md)。
@@ -60,7 +70,7 @@ VoxFix 是一个安装后可在系统里独立选择的自有 Android 输入法�
 
 | 目录 | 作用 |
 |---|---|
-| `android/` | 原生输入法工程：Kotlin 源码、librime JNI、拼音 schema、许可与测试 |
+| `android/` | 原生输入法工程：Kotlin 源码、librime JNI、拼音 schema、许可与测试；`screenTextUiTest/` 是独立无联网的 OCR 对照宿主 |
 | `preview/` | 键盘前端源码（同时是浏览器原型）、交互测试、官方参考截图 |
 | `tools/` | 构建、模型与词库准备、APK 检查等脚本 |
 | `docs/` | 当前文档；历史材料在 `docs/archive/`（索引见其 README） |
@@ -93,20 +103,22 @@ node preview/core.test.mjs
 |---|---|
 | 布局与按压 | `fixed-layout`、`key-press`、`focus-ring`、`interaction-transitions`、`candidates`、`letter-hold`、`toolbar-drag` |
 | 滑轨与编辑框 | `selection-lock`、`selection-drag`、`selection-direction`、`selection-editor`、`selection-delete`、`selection-pad`、`voice-selection` |
-| 剪贴板与词库 | `clipboard-search`、`clipboard-match-ime`、`clipboard-reference`、`clipboard-panel-search`、`split`、`learning`、`learning-ime`、`lexicon`、`lexicon-browser` |
+| 剪贴板与词库 | `clipboard-search`、`clipboard-match-ime`、`clipboard-reference`、`clipboard-panel-search`、`clipboard-images`、`split`、`learning`、`learning-ime`、`lexicon`、`lexicon-browser` |
 | 核心与语言 | `core`（连删与摇杆曲线）、`pinyin`、`english` |
 | 横屏与表情包 | `landscape`、`meme-search`、`meme-search-ime` |
+| 交互体验 | `cursor-feedback`、`input-experience` |
 | 原生桥与语音 | `native-ime`、`voice-orb`、`system-audit`、`ime-regressions` |
 | 按键与剪贴板审计 | `functional-audit`（双指交错输入、共享编辑框原生候选、保存失败、长按生命周期） |
 | 启动与加载 | `startup`（入口与依赖延迟加载时都不闪出试用页） |
 
-真机脚本（`preview/*-device.test.mjs`）需要先用 `adb forward` 把 IME WebView 的 devtools 端口转到本机，
+当前共 45 个脚本，其中 7 个是 `*-device` 真机脚本，需要先用 `adb forward` 把 IME WebView 的 devtools 端口转到本机，
 并且手机操作要由使用者实际完成。
 
 ## 结构自检
 
 `node tools/check_module_boundaries.mjs` 一次查完循环依赖、叶子模块越层或反向依赖、单文件体积与孤儿模块；
-当前 0 越线、1 处体积预警（`app.mjs` 2195 行 / 189KB，预警线 2200 行 / 180KB，未到强制拆分线）。
+当前 0 越线、1 处体积预警（`app.mjs` 2284 行 / 199KB，预警线 2200 行 / 180KB，未到强制拆分线 3000 行）。
+`preview/test-lexicon.mjs` 会被列为「未接入」，它是测试共用模块、由 `*.test.mjs` 直接 import，不进产物。
 红线与拆分路线见[模块边界与拆分策略](docs/模块边界与拆分策略-2026-10-26.md)。
 
 ## 网页试用页（与手机功能面对齐）
@@ -132,6 +144,7 @@ node preview/core.test.mjs
 ## 真实性边界
 
 - 语音不是讯飞引擎移植，全部在本机离线运行；录音只在内存处理，不保存录音或文字日志，不联网识别。
+- 屏幕取字与截图在本机完成，图片不出设备；ML Kit 与 PP-OCR 的对照数字来自固定测试图，不代表日常页面准确率。
 - 拼音是 librime + 固定版本公开词库，词频排序和上下文预测不能等同于成熟商用引擎；不宣称与讯飞一致。
 - 手写（含电脑端原型手写）与安卓端本地润色都已移除；历史说明在 `docs/archive/`，删除的代码由Git历史保留。
 - 电脑端结果不能证明手机效果；延迟、内存、发热与耗电仍需真机实测。
