@@ -30,6 +30,12 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
     override fun onStart() {
         val output = Bundle()
         try {
+            if (modelCompare == "screen-text") {
+                output.putString("result", ScreenTextSmoke.run(this)); finish(Activity.RESULT_OK, output); return
+            }
+            if (modelCompare == "screenshot-toolbar") {
+                output.putString("result", ScreenshotToolbarSmoke.run(this)); finish(Activity.RESULT_OK, output); return
+            }
             if (modelCompare == "desktop-parity") {
                 output.putString("result", VoiceTextParitySmoke.run(this)); finish(Activity.RESULT_OK, output); return
             }
@@ -80,7 +86,12 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
             output.putString("result", "ARM64_DESKTOP_R5_LOAD_PASS")
             finish(Activity.RESULT_OK, output)
         } catch (error: Throwable) {
-            output.putString("result", if (pinyin) "ARM64_PINYIN_SMOKE_FAIL" else "ARM64_ASR_LOAD_FAIL")
+            output.putString("result", when {
+                modelCompare == "screenshot-toolbar" -> "SCREENSHOT_TOOLBAR_FAIL"
+                modelCompare.startsWith("screen-text") -> "SCREEN_TEXT_SMOKE_FAIL"
+                pinyin -> "ARM64_PINYIN_SMOKE_FAIL"
+                else -> "ARM64_ASR_LOAD_FAIL"
+            })
             output.putString("error", error.toString())
             finish(Activity.RESULT_CANCELED, output)
         }

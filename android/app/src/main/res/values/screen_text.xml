@@ -1,0 +1,3 @@
+<resources>
+    <string name="screen_text_description">从贴边弧线向内滑动打开截图工具，框选后可以移动和拉边调整，确认后保存或复制到本机截图剪贴板。长按弧线可拖动位置。未保存画面退出即释放，不持续扫描，不读取界面节点；受保护页面无法截屏。</string>
+</resources>

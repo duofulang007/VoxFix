@@ -48,6 +48,7 @@ open class VoxFixImeService : InputMethodService() {
     private val voiceWarmup = Executors.newSingleThreadExecutor()
     private val pinyinLoader = Executors.newSingleThreadExecutor()
     private val memeSearch = MemeSearch()
+    private val screenshotKeyboard by lazy { ScreenshotKeyboard(this) }
     // 收起键盘后的选区入口诊断：只打端点/时长/分支，不打正文。
     private val selTag = "VoxFixSel"
     @Volatile private var pinyin: PinyinEngine? = null
@@ -132,8 +133,9 @@ open class VoxFixImeService : InputMethodService() {
      * composing，但联想候选框还在——只按 composing 判断会提前恢复收音，把接着说的话打到候选里。
      */
     @Volatile private var candidatesShown = false
+    // 前端统一持有手动编辑暂停：选区编辑、滑轨手势、常驻语音下的数字/符号面板。
     private var selectionEditingShown = false
-    // 拼音还没上屏、或者候选框还挂着，就继续等（每 400 ms 看一次），两个都消失才真正恢复收音。
+    // 组合、候选和手动编辑都结束后，沿用 400ms 空闲等待恢复收音。
     private val resumeVoiceInput: Runnable = object : Runnable {
         override fun run() {
             if (!voiceTyping) { voiceMuted.set(false); return }
@@ -229,7 +231,12 @@ open class VoxFixImeService : InputMethodService() {
             }
         }
         keyboardHeightPx = ((if (resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) 258 else 351) * resources.displayMetrics.density).toInt()
-        val keyboard = WebView(this).apply {
+        val keyboard = object : WebView(this) {
+            override fun onWindowVisibilityChanged(visibility: Int) {
+                // MIUI 偶尔在窗口已显示后补发隐藏通知，不能让 Chromium 停在隐藏态。
+                super.onWindowVisibilityChanged(if (shown && isShown && windowVisibility == View.VISIBLE) View.VISIBLE else visibility)
+            }
+        }.apply {
             web = this
             setBackgroundColor(0xffedeff2.toInt())
             isFocusable = false
@@ -244,6 +251,7 @@ open class VoxFixImeService : InputMethodService() {
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse {
                     val uri = request.url
                     memeSearch.route(uri)?.let { return it }
+                    screenshotKeyboard.route(uri)?.let { return it }
                     val path = uri.path.orEmpty().removePrefix("/")
                     if (uri.scheme != "https" || uri.host != "voxfix.local" || !path.startsWith("keyboard/") || path.contains("..")) return missing()
                     val mime = when (path.substringAfterLast('.')) {
@@ -1008,6 +1016,40 @@ open class VoxFixImeService : InputMethodService() {
         @JavascriptInterface fun openLexicon() { main.post {
             if (web === owner) startActivity(android.content.Intent(this@VoxFixImeService, LexiconActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
         } }
+        @JavascriptInterface fun screenTextEnabled() = ScreenTextSettingsActivity.enabled(this@VoxFixImeService)
+        @JavascriptInterface fun toggleScreenText() = editInput {
+            ScreenTextSettingsActivity.toggle(this@VoxFixImeService)
+            script("globalThis.voxfixScreenTextChanged?.()")
+        }
+        @JavascriptInterface fun screenshotList(): String = screenshotReply { screenshotKeyboard.list() }
+        @JavascriptInterface fun screenshotDelete(id: String): String = screenshotReply {
+            screenshotKeyboard.store.delete(id); screenshotKeyboard.list()
+        }
+        @JavascriptInterface fun screenshotCrop(id: String, left: Int, top: Int, right: Int, bottom: Int): String = screenshotReply {
+            screenshotKeyboard.crop(id,left,top,right,bottom)
+        }
+        @JavascriptInterface fun screenshotCopy(id: String): String = inputReply {
+            try { screenshotKeyboard.store.copy(id); "{\"ok\":true}" }
+            catch (error: Exception) { JSONObject().put("error",error.message ?: "复制失败").toString() }
+        }
+        @JavascriptInterface fun screenshotInsert(id: String) = editInput {
+            var accepted = false
+            try {
+                val store = screenshotKeyboard.store
+                check(store.file(id).isFile) { "图片已删除，请刷新" }
+                val types = currentInputEditorInfo?.contentMimeTypes.orEmpty()
+                if (types.any { android.content.ClipDescription.compareMimeTypes("image/png",it) }) {
+                    val content = android.view.inputmethod.InputContentInfo(store.uri(id),android.content.ClipDescription("截图",arrayOf("image/png")),null)
+                    currentInputConnection?.finishComposingText()
+                    accepted = currentInputConnection?.commitContent(content,android.view.inputmethod.InputConnection.INPUT_CONTENT_GRANT_READ_URI_PERMISSION,null) == true
+                }
+                if (!accepted) store.copy(id)
+                script("globalThis.voxfixImageInserted?.(${JSONObject.quote(if (accepted) "已交给聊天应用，请确认发送" else "当前应用不支持直接插入，已复制图片，可尝试粘贴")},$accepted)")
+            } catch (error: Exception) { script("globalThis.voxfixImageInserted?.(${JSONObject.quote(error.message ?: "图片插入失败")},false)") }
+        }
+        private fun screenshotReply(action: () -> JSONObject): String = try {
+            check(web === owner && !destroyed); action().toString()
+        } catch (error: Exception) { JSONObject().put("error",error.message ?: "图片操作失败").toString() }
         private fun lexiconReply(action: () -> JSONObject): String = try {
             check(web === owner && !destroyed); action().toString()
         } catch (error: Exception) { JSONObject().put("error", error.message ?: "个人词库操作失败").toString() }

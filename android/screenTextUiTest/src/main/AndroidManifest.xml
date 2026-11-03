@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <queries><package android:name="local.voxfix.debug" /></queries>
+    <application android:label="VoxFix 取字流程测试" android:allowBackup="false">
+        <activity android:name=".ScreenshotChatActivity" android:exported="true" />
+        <activity android:name=".ScreenTextUiInstrumentation$BenchmarkActivity" android:exported="true" />
+    </application>
+    <instrumentation android:name=".ScreenTextUiInstrumentation" android:targetPackage="local.voxfix.screentest" />
+</manifest>

@@ -43,6 +43,7 @@ class MainActivity : Activity() {
         Button(this).apply { text = "启用 VoxFix 输入法"; layout.addView(this); setOnClickListener { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) } }
         Button(this).apply { text = "系统选择输入法"; layout.addView(this); setOnClickListener { getSystemService(InputMethodManager::class.java).showInputMethodPicker() } }
         Button(this).apply { text = "个人词库与迁移"; layout.addView(this); setOnClickListener { startActivity(Intent(this@MainActivity, LexiconActivity::class.java)) } }
+        Button(this).apply { text = "截图工具设置"; layout.addView(this); setOnClickListener { startActivity(Intent(this@MainActivity, ScreenTextSettingsActivity::class.java)) } }
         Button(this).apply { text = "允许麦克风"; layout.addView(this); setOnClickListener { requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1) } }
         EditText(this).apply { hint = "在这里试用 VoxFix 输入法"; contentDescription = "VoxFix输入法试用框"; layout.addView(this) }
         label("中文语音输入 · 本地离线\n停止后自动补全标点。", 16f)

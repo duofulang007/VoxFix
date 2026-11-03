@@ -60,6 +60,7 @@ val stagePinyin by tasks.registering(Sync::class) {
 }
 tasks.named("preBuild") { dependsOn(stageModels, stageKeyboard, buildPinyinNative, stagePinyin) }
 dependencies {
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
     // 1.13.8 brings the silence-hallucination fixes from 1.13.7/1.13.8; its Kotlin API is
     // identical to 1.13.6 for everything this app calls (Vad, OnlineRecognizer, SenseVoice).
     implementation(files("../../.android/app-tools/sherpa-onnx-static-link-onnxruntime-1.13.8.aar"))

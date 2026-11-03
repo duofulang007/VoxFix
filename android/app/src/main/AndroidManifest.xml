@@ -7,9 +7,15 @@
             <intent-filter><action android:name="android.view.InputMethod" /></intent-filter>
             <meta-data android:name="android.view.im" android:resource="@xml/input_method" />
         </service>
+        <service android:name=".ScreenTextService" android:label="VoxFix 截图工具" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:exported="true">
+            <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/screen_text_service" />
+        </service>
+        <activity android:name=".ScreenTextSettingsActivity" android:exported="false" />
         <activity android:name=".LexiconActivity" android:exported="false" />
         <activity android:name=".DictionaryActivity" android:exported="false" />
         <provider android:name=".MemeContentProvider" android:authorities="${applicationId}.memes" android:exported="false" android:grantUriPermissions="true" />
+        <provider android:name=".ScreenshotContentProvider" android:authorities="${applicationId}.screenshots" android:exported="false" android:grantUriPermissions="true" />
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
