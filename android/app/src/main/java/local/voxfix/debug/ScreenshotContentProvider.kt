@@ -12,7 +12,13 @@ import android.provider.OpenableColumns
 class ScreenshotContentProvider : ContentProvider() {
     override fun onCreate() = true
     private fun file(uri: Uri): java.io.File {
-        require(uri.authority == "${requireNotNull(context).packageName}.screenshots" && uri.pathSegments.size == 1)
+        require(uri.authority == "${requireNotNull(context).packageName}.screenshots")
+        if(uri.pathSegments.size==2 && uri.pathSegments[0]=="exports") {
+            val name=uri.pathSegments[1]
+            require(name.matches(Regex("[a-f0-9]{32}\\.png")))
+            return java.io.File(requireNotNull(context).cacheDir,"screenshot-exports/$name")
+        }
+        require(uri.pathSegments.size == 1)
         return ScreenshotStore(requireNotNull(context)).file(uri.lastPathSegment.orEmpty())
     }
     override fun getType(uri: Uri): String { file(uri); return "image/png" }

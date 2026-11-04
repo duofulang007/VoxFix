@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VoxFix 弧形入口 · 取色方案效果图 v2</title>
+<style>
+  :root{
+    /* Android 是 #AARRGGBB，CSS 是 #RRGGBBAA —— 这里全部换成 rgba() 以保证渲染正确 */
+    --idle-light: rgba(107,107,107,.42);
+    --active-light: rgba(107,107,107,.82);
+    --idle-mid: rgb(151,151,151);           /* Android #ff979797 —— 待机（沉） */
+    --active-mid: rgba(199,199,199,.70);    /* Android #b3c7c7c7 —— 激活（亮） */
+    --idle-dark: rgba(255,255,255,.55);
+    --active-dark: rgba(255,255,255,.82);   /* Android #ccffffff */
+    --old-idle: rgba(127,127,127,.25);      /* Android #407f7f7f */
+    --old-active: rgba(80,86,96,.70);       /* Android #b3505660 */
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;padding:32px 28px 56px;
+    background:#f6f7f9;color:#1c1f24;
+    font:14px/1.6 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:21px;font-weight:650;letter-spacing:-.01em;margin:0 0 6px}
+  .sub{color:#6b7280;font-size:13px;margin:0 0 26px}
+  h2{font-size:14px;font-weight:650;margin:34px 0 14px;letter-spacing:.01em}
+  h2 span{font-weight:400;color:#8b93a1;margin-left:8px;font-size:12.5px}
+  .card{background:#fff;border:1px solid #e6e8ec;border-radius:12px;padding:18px}
+
+  .row{display:flex;gap:16px;flex-wrap:wrap}
+  .spec{flex:1 1 150px;min-width:150px;border:1px solid #e6e8ec;border-radius:12px;overflow:hidden;background:#fff}
+  .spec .stage{position:relative;height:236px;display:flex;align-items:center;justify-content:center}
+  .spec .meta{padding:9px 12px 11px;border-top:1px solid #eef0f3}
+  .spec .meta b{display:block;font-size:12.5px;font-weight:600}
+  .spec .meta code{font:11.5px/1.5 ui-monospace,"Cascadia Mono",Consolas,monospace;color:#6b7280}
+
+  .bg-light{background:linear-gradient(160deg,#f4f1ea 0%,#e7e2d6 55%,#d9d2c2 100%)}
+  .bg-mid{background:linear-gradient(160deg,#7fa8a6 0%,#5a8c8d 50%,#3f6b6d 100%)}
+  .bg-dark{background:linear-gradient(160deg,#2b2f36 0%,#1a1d22 60%,#0e1013 100%)}
+
+  .phone{
+    position:relative;width:168px;height:373px;border-radius:18px;overflow:hidden;
+    box-shadow:0 1px 2px rgba(16,24,40,.10),0 10px 28px -14px rgba(16,24,40,.30);
+  }
+  .phone::after{content:"";position:absolute;inset:0;border-radius:18px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.06)}
+  .phone .dot{position:absolute;left:50%;top:6px;width:30px;height:6px;margin-left:-15px;border-radius:3px;background:rgba(0,0,0,.35);z-index:2}
+
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;font-size:12.5px;color:#6b7280}
+  .legend i{display:inline-block;width:22px;height:3px;border-radius:2px;vertical-align:middle;margin-right:6px}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #eef0f3;vertical-align:middle}
+  th{font-weight:600;color:#4b5563;font-size:12px;background:#fafbfc}
+  td code{font:12px/1.4 ui-monospace,"Cascadia Mono",Consolas,monospace}
+  .sw{display:inline-block;width:26px;height:14px;border-radius:4px;border:1px solid rgba(0,0,0,.10);vertical-align:-2px;margin-right:7px}
+  .tag{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;background:#eef2ff;color:#4152c4;border:1px solid #dfe5ff}
+  .tag.warn{background:#fff4ed;color:#b45309;border-color:#ffe2c9}
+  .tag.ok{background:#eefaf2;color:#0f7a45;border-color:#cfeddb}
+  .note{margin-top:14px;padding:12px 14px;border-radius:10px;background:#fbfcfe;border:1px solid #e6e8ec;font-size:12.5px;color:#4b5563}
+  .note b{color:#1c1f24}
+  .geo{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap}
+  .dims{list-style:none;margin:0;padding:0;display:grid;gap:7px;font-size:12.5px;min-width:260px}
+  .dims li{display:grid;grid-template-columns:78px 1fr 96px;align-items:baseline;gap:10px;padding-bottom:6px;border-bottom:1px dashed #eef0f3}
+  .dims b{font-weight:600;color:#4b5563}
+  .dims span{font:12px/1.4 ui-monospace,Consolas,monospace;color:#1c1f24}
+  .dims em{font-style:normal;font-size:11.5px;color:#9aa2ae;text-align:right}
+  .dims li.hl b,.dims li.hl span,.dims li.hl em{color:#4152c4}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>VoxFix 弧形入口 · 取色方案效果图 <span style="font-size:13px;font-weight:500;color:#0f7a45;background:#eefaf2;border:1px solid #cfeddb;border-radius:99px;padding:2px 10px;vertical-align:3px">v2 · 状态已对调</span></h1>
+  <p class="sub">几何全部沿用现状（24×64dp 窗口、二次贝塞尔弧、2dp / 2.5dp 线宽、离屏边 9dp、垂直 40%），只替换状态色。取色基准：系统侧边栏 <code>sidebar_line_color_*</code> 三档中性灰。</p>
+
+  <h2>1 · 现在 vs 改后<span>同一块彩色壁纸上正面对比</span></h2>
+  <div class="row" id="cmp"></div>
+  <div class="legend">
+    <span><i style="background:var(--old-idle)"></i>现状待机 #407f7f7f（25% 灰，几乎糊掉）</span>
+    <span><i style="background:var(--old-active)"></i>现状激活 #b3505660（70% 蓝灰，发脏）</span>
+    <span><i style="background:var(--idle-mid)"></i>新待机 #ff979797</span>
+    <span><i style="background:var(--active-mid)"></i>新激活 #b3c7c7c7</span>
+  </div>
+
+  <h2>2 · 三档背景自适应<span>亮 / 中 / 暗各一档；每档内部「待机沉、激活亮」</span></h2>
+  <div class="row" id="tiers"></div>
+
+  <h2>3 · 在整屏上的位置与占比<span>缩略 1:6.4；实际弧线宽 5.25px、长 73px</span></h2>
+  <div class="row" id="phones"></div>
+
+  <h2>4 · 色值对照<span>左列为 Android 原始值，括注 CSS 等价写法</span></h2>
+  <div class="card" style="padding:0;overflow:hidden">
+    <table>
+      <thead><tr><th style="width:118px">背景</th><th>待机 idle</th><th>激活 active</th><th style="width:248px">说明</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>亮（浅壁纸 / 白底 App）</td>
+          <td><span class="sw" style="background:var(--idle-light)"></span><code>rgba(107,107,107,.42)</code></td>
+          <td><span class="sw" style="background:var(--active-light)"></span><code>rgba(107,107,107,.82)</code></td>
+          <td>同一深灰，激活时更实</td>
+        </tr>
+        <tr>
+          <td>中（彩色 / 灰壁纸）</td>
+          <td><span class="sw" style="background:var(--idle-mid)"></span><code>#ff979797</code></td>
+          <td><span class="sw" style="background:var(--active-mid)"></span><code>#b3c7c7c7</code></td>
+          <td>原生「拖动 / 常态」值，按观感对调 <span class="tag ok">v2</span></td>
+        </tr>
+        <tr>
+          <td>暗（深壁纸 / 深色 App）</td>
+          <td><span class="sw" style="background:var(--idle-dark);border-color:#ddd"></span><code>rgba(255,255,255,.55)</code></td>
+          <td><span class="sw" style="background:var(--active-dark);border-color:#ddd"></span><code>#ccffffff</code></td>
+          <td>原生 dark 值，激活时更亮</td>
+        </tr>
+        <tr>
+          <td>现状 · 待机</td>
+          <td colspan="2"><span class="sw" style="background:var(--old-idle)"></span><code>#407f7f7f</code> <span class="tag warn">25% 不透明度</span></td>
+          <td>细线只有 2dp，25% 在亮底上等于没有</td>
+        </tr>
+        <tr>
+          <td>现状 · 激活</td>
+          <td colspan="2"><span class="sw" style="background:var(--old-active)"></span><code>#b3505660</code> <span class="tag warn">B 比 R 高 16</span></td>
+          <td>带蓝调的冷灰，在暖色壁纸上发脏</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <b>v2 对调说明：</b>原先把原生的「常态 <code>#b3c7c7c7</code>」当作待机、「拖动 <code>#ff979797</code>」当作激活，
+    但在中亮度的彩色壁纸上，<code>#b3c7c7c7</code>（199）比背景亮、更跳眼，<code>#ff979797</code>（151）比背景暗、更沉。
+    对调后待机取沉的、激活取跳的，才符合直觉。同时这让三档方案统一成同一规律：<b>激活一律比待机更亮或更实</b>，
+    不再出现中档反向。
+    <br><br>
+    <b>为什么用中性灰：</b>系统侧边栏三档色全部是 <code>R=G=B</code>（<code>#979797</code> / <code>#c7c7c7</code> / <code>#ffffff</code>），
+    只靠不透明度区分状态，所以放在任何壁纸上都不串色。现状激活色 <code>#505660</code> 蓝通道比红高 16，属于冷调灰，
+    叠在暖色或绿色壁纸上会被读成「脏」。状态差异改由 <b>明度 + 线宽</b> 表达（待机 2dp → 激活 2.5dp）。
+    <br><br>
+    <b>注意：</b>Android 的 <code>#AARRGGBB</code> 与 CSS 的 <code>#RRGGBBAA</code> 字节序相反，本页色值已换算成 <code>rgba()</code> 渲染；写回 Kotlin 时用左列 Android 原值。
+  </div>
+
+  <h2>5 · 几何没动<span>标注为改动前后的实测值</span></h2>
+  <div class="card">
+    <div class="geo">
+      <svg width="96" height="256" viewBox="0 0 24 64" aria-hidden="true" style="flex:0 0 auto">
+        <rect x="0.5" y="0.5" width="23" height="63" fill="none" stroke="#c7cdd6" stroke-dasharray="3 3"/>
+        <path d="M 9 18 Q 3 32 9 46" fill="none" stroke="#979797" stroke-width="2" stroke-linecap="round"/>
+        <line x1="6" y1="18" x2="6" y2="46" stroke="#c7cdd6" stroke-width=".5"/>
+      </svg>
+      <ul class="dims">
+        <li><b>窗口</b><span>24 × 64 dp</span><em>未变</em></li>
+        <li><b>弧长</b><span>28 dp</span><em>未变</em></li>
+        <li><b>弧深</b><span>3 dp</span><em>未变</em></li>
+        <li><b>线宽</b><span>2 / 2.5 dp</span><em>未变</em></li>
+        <li><b>离屏边</b><span>9 dp</span><em>未变</em></li>
+        <li><b>垂直位置</b><span>40%</span><em>未变</em></li>
+        <li><b>展开/收回</b><span>220 / 180 ms</span><em>未变</em></li>
+        <li class="hl"><b>状态色</b><span>三档中性灰</span><em>本次唯一改动</em></li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/** 真实几何：viewBox 24×64dp，弧 moveTo(9,18) quadTo(3,32,9,46) */
+function arc(color, width){
+  return `<svg width="84" height="224" viewBox="0 0 24 64" aria-hidden="true">
+    <path d="M 9 18 Q 3 32 9 46" fill="none" stroke="${color}" stroke-width="${width}" stroke-linecap="round"/>
+  </svg>`;
+}
+
+const OLD_IDLE='rgba(127,127,127,.25)', OLD_ACTIVE='rgba(80,86,96,.70)';
+const LIGHT_IDLE='rgba(107,107,107,.42)', LIGHT_ACTIVE='rgba(107,107,107,.82)';
+const MID_IDLE='rgb(151,151,151)',        MID_ACTIVE='rgba(199,199,199,.70)';
+const DARK_IDLE='rgba(255,255,255,.55)',  DARK_ACTIVE='rgba(255,255,255,.82)';
+
+/** 整屏缩略：弧贴右侧、垂直 40%；线宽设 1.5px 下限只为缩略可辨，真实值 5.25px */
+function phoneWithArc(bg, color, width){
+  const k = 168 / 1080;
+  const winW = 24 * 2.625 * k, winH = 64 * 2.625 * k;
+  const left = 168 - winW;
+  const top = 0.40 * (373 - winH);
+  const w = Math.max(1.5, width * 2.625 * k);
+  return `<div class="phone ${bg}">
+    <div class="dot"></div>
+    <svg style="position:absolute;left:${left}px;top:${top}px" width="${winW}" height="${winH}" viewBox="0 0 24 64" aria-hidden="true">
+      <path d="M 9 18 Q 3 32 9 46" fill="none" stroke="${color}" stroke-width="${w}" stroke-linecap="round"/>
+    </svg>
+  </div>`;
+}
+
+function spec(bgClass, label, code, color, width){
+  return `<div class="spec">
+    <div class="stage ${bgClass}">${arc(color, width)}</div>
+    <div class="meta"><b>${label}</b><code>${code}</code></div>
+  </div>`;
+}
+
+document.getElementById('cmp').innerHTML = [
+  spec('bg-mid','现状 · 待机','#407f7f7f · 2dp',OLD_IDLE,2),
+  spec('bg-mid','现状 · 激活','#b3505660 · 2.5dp',OLD_ACTIVE,2.5),
+  spec('bg-mid','改后 · 待机','#ff979797 · 2dp',MID_IDLE,2),
+  spec('bg-mid','改后 · 激活','#b3c7c7c7 · 2.5dp',MID_ACTIVE,2.5),
+].join('');
+
+document.getElementById('tiers').innerHTML = [
+  spec('bg-light','亮底 · 待机','rgba(107,107,107,.42)',LIGHT_IDLE,2),
+  spec('bg-light','亮底 · 激活','rgba(107,107,107,.82)',LIGHT_ACTIVE,2.5),
+  spec('bg-mid','中间底 · 待机','#ff979797',MID_IDLE,2),
+  spec('bg-mid','中间底 · 激活','#b3c7c7c7',MID_ACTIVE,2.5),
+  spec('bg-dark','暗底 · 待机','rgba(255,255,255,.55)',DARK_IDLE,2),
+  spec('bg-dark','暗底 · 激活','#ccffffff',DARK_ACTIVE,2.5),
+].join('');
+
+document.getElementById('phones').innerHTML = [
+  `<div class="spec" style="flex:0 0 auto"><div class="stage bg-light" style="height:auto;padding:20px">${phoneWithArc('bg-light',LIGHT_ACTIVE,2.5)}</div><div class="meta"><b>亮底 · 激活</b><code>右侧 · 垂直 40%</code></div></div>`,
+  `<div class="spec" style="flex:0 0 auto"><div class="stage bg-mid" style="height:auto;padding:20px">${phoneWithArc('bg-mid',MID_ACTIVE,2.5)}</div><div class="meta"><b>中间底 · 激活</b><code>2.5dp</code></div></div>`,
+  `<div class="spec" style="flex:0 0 auto"><div class="stage bg-dark" style="height:auto;padding:20px">${phoneWithArc('bg-dark',DARK_ACTIVE,2.5)}</div><div class="meta"><b>暗底 · 激活</b><code>2.5dp</code></div></div>`,
+].join('');
+</script>
+</body>
+</html>

@@ -4,8 +4,10 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Region
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -31,12 +33,27 @@ internal class ScreenTextRegionView(
     private var moved = false
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
     var onRegionMoved: ((Rect) -> Unit)? = null
+    /** Add/subtract: the drag always builds a new box and reports it instead of recognizing. */
+    var onRegionOperation: ((Rect) -> Unit)? = null
+    var opMode = false
+    private var parts: List<Rect> = emptyList()
     private var pendingSelection: Rect? = null
     fun selectRegion(region: Rect) {
+        parts = emptyList()
         if (width == 0 || height == 0) { pendingSelection = Rect(region); return }
         rect.set(region.left * width.toFloat() / imageWidth,region.top * height.toFloat() / imageHeight,
             region.right * width.toFloat() / imageWidth,region.bottom * height.toFloat() / imageHeight)
         invalidate(); onRegionMoved?.invoke(Rect(region))
+    }
+    /** Show a multi-part region without re-firing the selection callback. */
+    fun showParts(regions: List<Rect>) {
+        parts = regions.map { Rect(it) }
+        if (parts.isNotEmpty()) {
+            val box = Rect().also { r -> parts.forEach { r.union(it) } }
+            if (width > 0 && height > 0) rect.set(box.left * width.toFloat() / imageWidth,box.top * height.toFloat() / imageHeight,
+                box.right * width.toFloat() / imageWidth,box.bottom * height.toFloat() / imageHeight)
+        }
+        invalidate()
     }
     private fun region(): Rect {
         var left = (rect.left * imageWidth / width).toInt()
@@ -61,14 +78,25 @@ internal class ScreenTextRegionView(
     }
     override fun onDraw(canvas: Canvas) {
         paint.style = Paint.Style.FILL; paint.color = 0x80000000.toInt()
-        canvas.drawRect(0f, 0f, width.toFloat(), rect.top, paint)
-        canvas.drawRect(0f, rect.bottom, width.toFloat(), height.toFloat(), paint)
-        canvas.drawRect(0f, rect.top, rect.left, rect.bottom, paint)
-        canvas.drawRect(rect.right, rect.top, width.toFloat(), rect.bottom, paint)
+        if (parts.size > 1) {
+            val shape = Path()
+            for (part in parts) shape.addRect(part.left * width.toFloat() / imageWidth,part.top * height.toFloat() / imageHeight,
+                part.right * width.toFloat() / imageWidth,part.bottom * height.toFloat() / imageHeight,Path.Direction.CW)
+            canvas.save(); canvas.clipPath(shape,Region.Op.DIFFERENCE)
+            canvas.drawRect(0f,0f,width.toFloat(),height.toFloat(),paint); canvas.restore()
+        } else {
+            canvas.drawRect(0f, 0f, width.toFloat(), rect.top, paint)
+            canvas.drawRect(0f, rect.bottom, width.toFloat(), height.toFloat(), paint)
+            canvas.drawRect(0f, rect.top, rect.left, rect.bottom, paint)
+            canvas.drawRect(rect.right, rect.top, width.toFloat(), rect.bottom, paint)
+        }
         if (rect.isEmpty) return
         val blue = 0xff4096ff.toInt()
         paint.style = Paint.Style.STROKE; paint.strokeWidth = 2 * density; paint.color = blue
-        canvas.drawRect(rect, paint)
+        if (parts.size > 1) for (part in parts) canvas.drawRect(
+            part.left * width.toFloat() / imageWidth,part.top * height.toFloat() / imageHeight,
+            part.right * width.toFloat() / imageWidth,part.bottom * height.toFloat() / imageHeight,paint)
+        else canvas.drawRect(rect, paint)
         val points = mutableListOf<Pair<Float,Float>>()
         val side = minOf(rect.width(),rect.height())
         if (side > 32 * density) for (x in listOf(rect.left,rect.right)) for (y in listOf(rect.top,rect.bottom)) points.add(x to y)
@@ -84,6 +112,7 @@ internal class ScreenTextRegionView(
                 active = true; moved = false
                 downX = event.x.coerceIn(0f, width.toFloat()); downY = event.y.coerceIn(0f, height.toFloat())
                 before.set(rect); edges = 0
+                if (opMode) { rect.set(downX, downY, downX, downY); invalidate(); return true }
                 val hit = RectF(rect).apply { inset(-20 * density, -20 * density) }
                 if (!rect.isEmpty && hit.contains(downX, downY)) {
                     if (abs(downX - rect.left) <= 20 * density && abs(downX - rect.left) <= abs(downX - rect.right)) edges = edges or 1
@@ -119,9 +148,11 @@ internal class ScreenTextRegionView(
                     val picked = region()
                     if (!moved || picked.width() < 2 || picked.height() < 2) {
                         rect.set(before); invalidate()
+                        if (opMode) return true
                         // A plain tap must not drop an existing text result.
                         Toast.makeText(context, "请拖动选择文字区域", Toast.LENGTH_SHORT).show()
-                    } else recognize(picked)
+                    } else if (opMode) onRegionOperation?.invoke(picked)
+                    else recognize(picked)
                 }
             }
         }

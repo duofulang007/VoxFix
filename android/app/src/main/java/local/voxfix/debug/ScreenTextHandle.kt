@@ -48,6 +48,7 @@ internal class ScreenTextHandle(private val context: Context, private val captur
     private val close = Icon("收起截图工具", 1).apply { setOnClickListener { collapse() } }
     private val full = Icon("截图", 3).apply { setOnClickListener { capture(false) } }
     private val gesture = ScreenTextHandleGesture(ViewConfiguration.get(context).scaledTouchSlop.toFloat(), dp(16).toFloat())
+    private val tone get() = HandleToneResolver.peek(context)
     private var downX = 0f; private var downY = 0f
     private var initialX = 0; private var initialY = 0
     private var initialProgress = 0f
@@ -122,6 +123,7 @@ internal class ScreenTextHandle(private val context: Context, private val captur
         render(0f)
     }
     fun show() {
+        HandleToneResolver.refresh(context) { handle.postInvalidate() }
         val bounds = windows.currentWindowMetrics.bounds
         params.y = (prefs.getFloat("y", .4f) * (bounds.height() - dp(64))).toInt()
         snap()
@@ -211,7 +213,7 @@ internal class ScreenTextHandle(private val context: Context, private val captur
                     val x = if (this@ScreenTextHandle.right) 9f else -9f
                     moveTo(x, -14f); quadTo(if (this@ScreenTextHandle.right) 3f else -3f, 0f, x, 14f)
                 }
-                paint.color = if (isPressed) 0xb3505660.toInt() else 0x407f7f7f
+                paint.color = tone.colorFor(isPressed)
                 paint.strokeWidth = if (isPressed) 2.5f else 2f
                 canvas.drawPath(path, paint)
             } else {

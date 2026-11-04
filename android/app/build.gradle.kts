@@ -16,8 +16,10 @@ android {
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("modelAssets"))
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("keyboardAssets"))
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("pinyinAssets"))
+    sourceSets["main"].assets.srcDir("../../.android/screen-ocr/assets")
     sourceSets["main"].java.srcDir("src/voice/java")
     sourceSets["main"].jniLibs.srcDir("../../.android/pinyin-rime/jni")
+    sourceSets["main"].jniLibs.srcDir("../../.android/translate/jni")
     androidResources { noCompress += listOf("onnx", "wav") }
     // sherpa's AAR also ships an x86 emulator onnxruntime; this build is arm64-only and the
     // pinned rescue AAR supplies its own arm64 runtime, so other ABIs must not collide.
@@ -42,6 +44,8 @@ val stageKeyboard by tasks.registering(Sync::class) {
     from("src/main/licenses/sherpa") { include("LICENSE", "UPSTREAM.md"); into("licenses/sherpa") }
     from("src/main/licenses/punctuation") { include("LICENSE", "UPSTREAM.md"); into("licenses/punctuation") }
     from("src/main/licenses/meme") { include("UPSTREAM.md"); into("licenses/meme") }
+    from("src/main/licenses/llama") { include("LICENSE", "UPSTREAM.md"); into("licenses/llama") }
+    from("src/main/licenses/hy-mt2") { include("LICENSE", "UPSTREAM.md"); into("licenses/hy-mt2") }
     into(layout.buildDirectory.dir("keyboardAssets/keyboard"))
 }
 val buildPinyinNative by tasks.registering(Exec::class) {
@@ -49,6 +53,13 @@ val buildPinyinNative by tasks.registering(Exec::class) {
     commandLine(file("../../.venv/Scripts/python.exe"), "tools/build_pinyin_rime.py")
     inputs.files("src/main/cpp/rime_jni.cpp", "src/main/cpp/rime/rime_api.h", "src/main/cpp/rime/rime_levers_api.h", "../../tools/build_pinyin_rime.py", "../../tools/pinyin-rime-dependencies.json")
     outputs.files("../../.android/pinyin-rime/jni/arm64-v8a/libvoxfix_rime.so", "../../.android/pinyin-rime/jni/arm64-v8a/libfeelime_rime.so", "../../.android/pinyin-rime/jni/arm64-v8a/libc++_shared.so")
+}
+val buildTranslateNative by tasks.registering(Exec::class) {
+    workingDir("../..")
+    commandLine(file("../../.venv/Scripts/python.exe"), "tools/build_translate_native.py")
+    inputs.files("src/main/cpp/translate/translate_jni.cpp", "src/main/cpp/translate/CMakeLists.txt",
+        "../../tools/build_translate_native.py", "../../tools/translate-dependencies.json")
+    outputs.files("../../.android/translate/jni/arm64-v8a/libvoxfix_translate.so")
 }
 val stagePinyin by tasks.registering(Sync::class) {
     from("../../.android/pinyin-rime/data") { include("luna_pinyin.*.bin", "opencc/**"); into("pinyin") }
@@ -58,14 +69,19 @@ val stagePinyin by tasks.registering(Sync::class) {
     from("src/main/licenses/pinyin") { into("licenses/pinyin") }
     into(layout.buildDirectory.dir("pinyinAssets"))
 }
-tasks.named("preBuild") { dependsOn(stageModels, stageKeyboard, buildPinyinNative, stagePinyin) }
+val prepareScreenOcr by tasks.registering(Exec::class) {
+    workingDir("../..")
+    commandLine(file("../../.venv/Scripts/python.exe"), "tools/prepare_screen_ocr.py")
+}
+tasks.named("preBuild") { dependsOn(stageModels, stageKeyboard, buildPinyinNative, buildTranslateNative, stagePinyin, prepareScreenOcr) }
 dependencies {
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
     // 1.13.8 brings the silence-hallucination fixes from 1.13.7/1.13.8; its Kotlin API is
     // identical to 1.13.6 for everything this app calls (Vad, OnlineRecognizer, SenseVoice).
     implementation(files("../../.android/app-tools/sherpa-onnx-static-link-onnxruntime-1.13.8.aar"))
     // Decode-time hotword rescue needs per-frame logits, which the sherpa API does not
     // expose; this is the pinned onnxruntime build the desktop prototype used.
-    implementation(files("../../.android/app-tools/onnxruntime-android-1.17.3.aar"))
+    implementation(files("../../.android/app-tools/onnxruntime-android-1.20.0.aar"))
     testImplementation("junit:junit:4.13.2")
 }

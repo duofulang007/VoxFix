@@ -62,6 +62,8 @@ class ScreenTextOverlay(
     private var presented = false
     private var lastRegion: Rect? = null
     private var recognizing = false
+    private var alternateResult: ResultState? = null
+    private var translationResult = false
     private val curve = PathInterpolator(.32f, .72f, 0f, 1f)
     var imeVisible = false
         private set
@@ -112,6 +114,11 @@ class ScreenTextOverlay(
             FrameLayout.LayoutParams(dp(36), dp(4), Gravity.CENTER))
     }
     private val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(24), 0, dp(12), dp(4)) }
+    private val switchResult = button("译文") {
+        val next = alternateResult ?: return@button
+        val current = retainedResult()?.copy(alternate = null)
+        restoreResult(next.copy(alternate = current))
+    }.apply { visibility = View.GONE }
     private val toolbar = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), dp(10), dp(16), dp(10)); setBackgroundColor(Color.WHITE); elevation = dp(8).toFloat() }
     private var cropView: View? = null
     private val sheet = LinearLayout(context).apply {
@@ -125,7 +132,8 @@ class ScreenTextOverlay(
         root.addView(scrim, FrameLayout.LayoutParams(-1, -1))
         sheet.addView(grip, LinearLayout.LayoutParams(-1, dp(48)))
         header.addView(TextView(context).apply { this.text = "识别结果"; textSize = 18f; gravity = Gravity.CENTER_VERTICAL; setTextColor(0xff20232d.toInt()); setTypeface(null, android.graphics.Typeface.BOLD) },
-            LinearLayout.LayoutParams(-1, dp(40)))
+            LinearLayout.LayoutParams(0, dp(40), 1f))
+        header.addView(switchResult, LinearLayout.LayoutParams(dp(80), dp(48)))
         sheet.addView(header); sheet.addView(status)
         sheet.addView(text, LinearLayout.LayoutParams(-1, 0, 1f))
         listOf(region, all, copy).forEach { toolbar.addView(it, LinearLayout.LayoutParams(0, dp(48), if (it === copy) 1.6f else 1f).apply { leftMargin = dp(4); rightMargin = dp(4) }) }
@@ -321,14 +329,20 @@ class ScreenTextOverlay(
         status.visibility = if (error == null && !keepPrevious) View.GONE else View.VISIBLE
         all.isEnabled = !text.text.isNullOrBlank(); copy.isEnabled = all.isEnabled; region.isEnabled = image != null
     }
-    data class ResultState(val value: String, val start: Int, val end: Int, val fullScreen: Boolean)
-    fun retainedResult(): ResultState? = text.text?.toString()?.takeIf { it.isNotBlank() }?.let {
-        ResultState(it, text.selectionStart, text.selectionEnd, fullScreen)
+    data class ResultState(val value: String, val start: Int, val end: Int, val fullScreen: Boolean,
+                           val translation: Boolean = false, val alternate: ResultState? = null)
+    fun retainedResult(): ResultState? = text.text?.toString()?.takeIf { it.isNotBlank() || alternateResult != null }?.let {
+        ResultState(it, text.selectionStart, text.selectionEnd, fullScreen, translationResult, alternateResult)
     }
     fun restoreResult(state: ResultState) {
         result(state.value, null)
+        text.setText(state.value)
         text.setSelection(state.start.coerceIn(0, state.value.length), state.end.coerceIn(0, state.value.length))
         fullScreen = state.fullScreen
+        translationResult = state.translation
+        alternateResult = state.alternate
+        switchResult.text = if (translationResult) "原文" else "译文"
+        switchResult.visibility = if (alternateResult == null) View.GONE else View.VISIBLE
         if (image == null) {
             status.text = "文字已保留；重新取字请返回原页面"
             status.visibility = View.VISIBLE

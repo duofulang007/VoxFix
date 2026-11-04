@@ -533,7 +533,7 @@ function clipHeader() {
   }
   const clipTab = `<button type="button" class="${state.clipTab === 'clipboard' ? 'selected' : ''}${state.clipLocked ? ' clip-locked' : ''}" data-action="clip-tab" data-value="clipboard" aria-label="文本，${state.clipLocked ? '已锁定，双击解锁' : '双击锁定'}" aria-pressed="${state.clipLocked}">文本${state.clipLocked ? icon('lock', 'clip-lock') : ''}</button>`;
   const tabs = `<div class="tabs-pill">${clipTab}${button('图片','clip-tab','images',state.clipTab==='images'?'selected':'')}${button('常用', 'clip-tab', 'phrases', state.clipTab === 'phrases' ? 'selected' : '')}</div>`;
-  if(state.clipTab==='images')return `<div class="panel-title clip-header image-header"><div class="clip-header-leading">${ctl('return','返回键盘','hide')}</div>${tabs}<div class="clip-header-actions">${ctl('image-refresh','刷新图片','refresh')}</div></div>`;
+  if(state.clipTab==='images')return imageHeader(tabs);
   const add=state.clipTab==='phrases'?button('添加常用语','snippet-add','','ctl',icon('add')):'';
   const more=button(state.clipTab==='phrases'?'清空当前分组的常用语':'更多管理操作','clip-manage-menu','','ctl'+(clipMenu?.index===-1?' clip-more-open':''),icon(state.clipTab==='phrases'?'trash':'more'),`aria-haspopup="menu" aria-expanded="${clipMenu?.index===-1}" aria-controls="clip-management-menu"`);
   return `<div class="panel-title clip-header"><div class="clip-header-leading">${ctl('return', '返回键盘', 'hide')}${add?more:''}</div>${tabs}<div class="clip-header-actions">${button('展开搜索','clip-search-toggle','','ctl clip-search-toggle',icon('search','clip-search-glass')+icon('close','clip-search-close'),'aria-expanded="false"')}${add||more}</div><div class="clip-search-surface"><span class="clip-search-input-slot"></span></div></div>`;
@@ -979,9 +979,10 @@ function clipboard() {
   const managing = state.clipManage && state.clipTab==='clipboard';
   return `${clipHeader()}${state.clipTab==='phrases'?phraseGroupPills():''}<div class="clip-list" aria-label="长按内容或空白处管理">${list.length?list.map((text,i)=>clipRow(text,i,managing)).join(''):`<div class="empty-state">${state.clipTab==='clipboard'?'还没有复制内容':'这个分组还是空的'}</div>`}</div>${footer()}${clipMenu?clipContextMenu():''}${state.clipGroupMenu?groupMenuPanel():''}${state.clipConfirm?clipConfirmPanel():''}`;
 }
-let screenshotRows=[],screenshotPreview=null,screenshotCrop=null,screenshotDelete=false,screenshotError='';
+let screenshotRows=[],screenshotPreview=null,screenshotCrop=null,screenshotDelete=null,screenshotError='';
+let screenshotManage=false,screenshotSelected=[],screenshotRemove=null,imageHold=null;
 function screenshotCall(method,...args){
-  if(!nativeIme?.[method])return {items:[]};
+  if(!nativeIme?.[method])throw Error('请在手机 VoxFix 输入法中操作图片');
   const result=JSON.parse(nativeIme[method](...args));
   if(result.error)throw Error(result.error);
   return result;
@@ -990,34 +991,80 @@ function refreshScreenshots(){
   try{screenshotRows=screenshotCall('screenshotList').items||[];screenshotError='';}
   catch(error){screenshotError=error.message;}
 }
-function screenshotUrl(id,kind){return `https://voxfix.local/screenshots/${id}/${kind}`;}
+let screenshotEpoch=0;
+function screenshotUrl(id,kind){return `https://voxfix.local/screenshots/${id}/${kind}?v=${screenshotEpoch}`;}
 function imageClipboard(){
   const row=screenshotRows.find(item=>item.id===screenshotPreview);
   let body;
   if(row){
     const crop=screenshotCrop;
-    body=`<div class="clip-image-preview"><svg class="clip-image-canvas" viewBox="0 0 ${row.width} ${row.height}" aria-label="图片预览${crop?'，拖动选择裁剪范围':''}"><image href="${screenshotUrl(row.id,'image')}" width="${row.width}" height="${row.height}"/>${crop?`<rect x="${crop[0]}" y="${crop[1]}" width="${crop[2]-crop[0]}" height="${crop[3]-crop[1]}" fill="#4096ff22" stroke="#4096ff" stroke-width="2" vector-effect="non-scaling-stroke"/>`:''}</svg><div class="clip-image-actions">${screenshotDelete?`${button('取消','image-cancel','','text-action')}${button('确定删除','image-delete-confirm','','text-action danger')}`:crop?`${button('取消裁剪','image-cancel','','text-action')}${button('另存裁剪','image-crop-save','','text-action')}`:`${button('返回列表','image-back','','text-action')}${button('复制','image-copy','','text-action')}${button('裁剪','image-crop','','text-action')}${button('删除','image-delete','','text-action danger')}`}</div>${screenshotDelete?'<div class="clip-image-hint">删除这张图片？</div>':crop?'<div class="clip-image-hint">拖动选择范围，另存后保留原图</div>':''}</div>`;
-  }else body=`<div class="clip-list clip-image-grid" aria-label="图片剪贴板">${screenshotError?`<div class="empty-state">${esc(screenshotError)}</div>`:screenshotRows.length?screenshotRows.map(item=>button(`查看图片 ${item.width}×${item.height}`,'image-open',item.id,'clip-image-card',`<img src="${screenshotUrl(item.id,'thumb')}" loading="lazy" alt="截图缩略图"><span>${item.width} × ${item.height}</span>`)).join(''):'<div class="empty-state">还没有图片<br>圆弧截图保存后会出现在这里</div>'}</div>`;
-  return clipHeader()+body+(row&&!screenshotCrop&&!screenshotDelete?button('插入聊天','image-send','','clip-image-send text-action'):'')+footer();
+    const actions=crop
+      ?button('取消裁剪','image-cancel','','text-action')+button('另存裁剪','image-crop-save','','text-action image-primary')
+      :button('编辑图片','image-edit','','text-action','<span>编辑</span>')+button('复制图片','image-copy','','text-action',icon('copy')+'<span>复制</span>')+button('裁剪图片','image-crop','','text-action',icon('select-text')+'<span>裁剪</span>')+button('插入聊天','image-send','','text-action image-primary',icon('send')+'<span>插入聊天</span>');
+    body=`<div class="clip-image-preview"><svg class="clip-image-canvas" viewBox="0 0 ${row.width} ${row.height}" aria-label="图片预览${crop?'，拖动选择裁剪范围':''}"><image href="${screenshotUrl(row.id,'image')}" width="${row.width}" height="${row.height}"/>${crop?`<rect x="${crop[0]}" y="${crop[1]}" width="${crop[2]-crop[0]}" height="${crop[3]-crop[1]}" fill="#4096ff22" stroke="#4096ff" stroke-width="2" vector-effect="non-scaling-stroke"/>`:''}</svg>${crop?'<div class="clip-image-hint">拖动选择范围，另存后保留原图</div>':''}<div class="clip-image-actions">${actions}</div></div>`;
+  }else body=`<div class="clip-list clip-image-grid" aria-label="图片剪贴板">${screenshotError?`<div class="empty-state">${esc(screenshotError)}</div>`:screenshotRows.length?screenshotRows.map(imageCard).join(''):'<div class="empty-state">还没有图片<br>圆弧截图保存后会出现在这里</div>'}</div>`;
+  return clipHeader()+body+footer()+(screenshotDelete?imageDeleteConfirmation():'');
 }
-globalThis.voxfixOpenImages=()=>{if(localInput||state.voice)return;state.clipTab='images';screenshotPreview=null;screenshotCrop=null;screenshotDelete=false;refreshScreenshots();showPage('clipboard');};
+globalThis.voxfixOpenImages=()=>{if(localInput||state.voice)return;state.clipTab='images';resetImageSelection();screenshotPreview=null;screenshotCrop=null;refreshScreenshots();showPage('clipboard');};
 globalThis.voxfixImageInserted=(message)=>toast(message);
+// The native editor reports back here: the record may have new content, so drop every cached URL.
+globalThis.voxfixImageSaved=(saved)=>{screenshotEpoch++;try{refreshScreenshots();}catch(error){screenshotError=error.message;}if(saved)toast('已保存图片修改');if(state.page==='clipboard')render();};
 function imageAction(action,value){
-  if(action==='image-send'&&screenshotPreview){nativeIme?.screenshotInsert?.(screenshotPreview);return;}
   try{
     const row=screenshotRows.find(item=>item.id===screenshotPreview);
-    if(action==='image-refresh')refreshScreenshots();
-    if(action==='image-open'){screenshotPreview=value;screenshotCrop=null;screenshotDelete=false;}
-    if(action==='image-back'){screenshotPreview=null;screenshotCrop=null;screenshotDelete=false;}
+    if(action==='image-edit'&&row){const result=screenshotCall('screenshotEdit',row.id);if(!result.ok)throw Error('无法打开图片编辑');toast('正在打开图片编辑');return;}
+    if(action==='image-send'&&row){if(!nativeIme?.screenshotInsert)throw Error('请在手机 VoxFix 输入法中插入图片');nativeIme.screenshotInsert(row.id);return;}
+    if(action==='image-open'&&screenshotRows.some(item=>item.id===value)){screenshotPreview=value;screenshotCrop=null;screenshotRemove=null;}
+    if(action==='image-back'){screenshotPreview=null;screenshotCrop=null;resetImageSelection();}
     if(action==='image-copy'&&row){const result=screenshotCall('screenshotCopy',row.id);if(!result.ok)throw Error('复制失败，请重试');toast('已复制图片，可在原应用粘贴');}
-    if(action==='image-delete')screenshotDelete=true;
-    if(action==='image-cancel'){screenshotDelete=false;screenshotCrop=null;}
-    if(action==='image-delete-confirm'&&row){screenshotRows=screenshotCall('screenshotDelete',row.id).items;screenshotPreview=null;screenshotDelete=false;}
+    if(action==='image-manage'){screenshotManage=!screenshotManage;screenshotSelected=[];screenshotRemove=null;screenshotDelete=null;}
+    if(action==='image-toggle'&&screenshotRows.some(item=>item.id===value))screenshotSelected=screenshotSelected.includes(value)?screenshotSelected.filter(id=>id!==value):[...screenshotSelected,value];
+    if(action==='image-select-all')screenshotSelected=screenshotSelected.length===screenshotRows.length?[]:screenshotRows.map(item=>item.id);
+    if(action==='image-delete'&&value===screenshotRemove)screenshotDelete=[value];
+    if(action==='image-delete-selected'&&screenshotSelected.length)screenshotDelete=[...screenshotSelected];
+    if(action==='image-cancel'){screenshotDelete=null;screenshotCrop=null;}
+    if(action==='image-delete-confirm'&&screenshotDelete){
+      const ids=[...screenshotDelete];screenshotDelete=null;
+      try{for(const id of ids){screenshotRows=screenshotCall('screenshotDelete',id).items;screenshotSelected=screenshotSelected.filter(selected=>selected!==id);if(screenshotRemove===id)screenshotRemove=null;}}
+      finally{refreshScreenshots();screenshotSelected=screenshotSelected.filter(id=>screenshotRows.some(item=>item.id===id));}
+      toast(`已删除 ${ids.length} 张图片`);
+    }
     if(action==='image-crop'&&row)screenshotCrop=[0,0,row.width,row.height];
     if(action==='image-crop-save'&&row){screenshotRows=screenshotCall('screenshotCrop',row.id,...screenshotCrop).items;screenshotCrop=null;screenshotPreview=null;toast('已另存裁剪，原图已保留');}
   }catch(error){toast(error.message||'图片操作失败，请重试');}
   render();
+  if(screenshotDelete)keyboard.querySelector('.image-confirm [data-action="image-cancel"]')?.focus({preventScroll:true});
 }
+function resetImageSelection(){screenshotManage=false;screenshotSelected=[];screenshotRemove=null;screenshotDelete=null;clearImageHold();}
+function imageHeader(tabs){
+  if(screenshotManage)return `<div class="panel-title clip-header image-header image-managing"><div class="clip-header-leading">${ctl('image-manage','退出图片选择','close')}</div><span class="title-note" aria-live="polite">已选 ${screenshotSelected.length} 张</span><div class="clip-header-actions">${button(screenshotSelected.length===screenshotRows.length?'取消全选':'全选','image-select-all','','text-action','',screenshotRows.length?'':' disabled')}${button('删除所选图片','image-delete-selected','','ctl danger',icon('trash'),screenshotSelected.length?'':' disabled')}</div></div>`;
+  if(screenshotPreview){const row=screenshotRows.find(item=>item.id===screenshotPreview);return `<div class="panel-title clip-header image-header"><div class="clip-header-leading">${ctl('image-back','返回图片列表','back')}</div><div class="image-preview-title">${screenshotCrop?'裁剪图片':'图片预览'}<span>${row?`${row.width} × ${row.height}`:''}</span></div><div class="clip-header-actions">${ctl('return','返回键盘','hide')}</div></div>`;}
+  return `<div class="panel-title clip-header image-header"><div class="clip-header-leading">${ctl('return','返回键盘','hide')}</div>${tabs}<div class="clip-header-actions">${button('批量选择图片','image-manage','','ctl',icon('select-text'),screenshotRows.length&&!screenshotError?'':' disabled')}</div></div>`;
+}
+function imageCard(item){
+  const selected=screenshotSelected.includes(item.id),remove=screenshotRemove===item.id;
+  return `<div class="clip-image-tile${selected?' picked':''}">${button(`${screenshotManage?'选择':'查看'}图片 ${item.width}×${item.height}`,screenshotManage?'image-toggle':'image-open',item.id,'clip-image-card',`<img src="${screenshotUrl(item.id,'thumb')}" loading="lazy" draggable="false" alt="截图缩略图"><span class="image-dimensions">${item.width} × ${item.height}</span>${screenshotManage?`<span class="image-pick" aria-hidden="true">${selected?icon('check'):''}</span>`:''}`,screenshotManage?`aria-pressed="${selected}"`:'')}${remove&&!screenshotManage?button('删除这张图片','image-delete',item.id,'image-remove',icon('close')):''}</div>`;
+}
+function imageDeleteConfirmation(){return `<div class="clip-menu-backdrop image-confirm-backdrop" data-action="image-cancel"><div class="image-confirm" role="dialog" aria-modal="true" aria-label="确认删除图片"><strong>删除这 ${screenshotDelete.length} 张图片？</strong><p>删除后无法恢复</p><div>${button('取消','image-cancel','','text-action')}${button('确定删除','image-delete-confirm','','text-action danger')}</div></div></div>`;}
+function clearImageHold(){clearTimeout(imageHold?.timer);imageHold=null;}
+keyboard.addEventListener('pointerdown',event=>{
+  if(imageHold){clearImageHold();return;}
+  const target=event.target.closest('[data-action="image-open"]');
+  if(!target||event.button!==0||screenshotManage)return;
+  const hold={id:event.pointerId,x:event.clientX,y:event.clientY,value:target.dataset.value};imageHold=hold;
+  hold.timer=setTimeout(()=>{if(imageHold!==hold||state.page!=='clipboard'||state.clipTab!=='images')return;hold.fired=true;screenshotRemove=hold.value;consumedClick={id:hold.id,until:Date.now()+700};render();},500);
+});
+document.addEventListener('pointermove',event=>{if(imageHold&&event.pointerId===imageHold.id&&Math.hypot(event.clientX-imageHold.x,event.clientY-imageHold.y)>10)clearImageHold();});
+for(const type of ['pointerup','pointercancel'])document.addEventListener(type,()=>{if(imageHold?.fired)consumedClick={id:imageHold.id,until:Date.now()+500};clearImageHold();});
+window.addEventListener('blur',clearImageHold);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)clearImageHold();});
+keyboard.addEventListener('contextmenu',event=>{const target=event.target.closest('[data-action="image-open"]');if(!target)return;event.preventDefault();screenshotRemove=target.dataset.value;render();});
+keyboard.addEventListener('keydown',event=>{
+  if(!screenshotDelete)return;
+  if(event.key==='Escape'){event.preventDefault();imageAction('image-cancel');}
+  if(event.key==='Tab'){event.preventDefault();const buttons=[...keyboard.querySelectorAll('.image-confirm button')];buttons[(buttons.indexOf(document.activeElement)+(event.shiftKey?-1:1)+buttons.length)%buttons.length]?.focus();}
+});
+
 keyboard.addEventListener('pointerdown',event=>{
   const svg=event.target.closest('.clip-image-canvas');if(!svg||!screenshotCrop)return;
   const row=screenshotRows.find(item=>item.id===screenshotPreview);if(!row)return;
@@ -1116,7 +1163,7 @@ globalThis.voxfixMemeInsertion=(message,accepted)=>{if(accepted){state.page='let
 // 功能菜单里符号/数字/编辑/设置没有专属图标，用方形字标代替，避免四个一模一样的方块。
 const menuGlyphs={symbols:'符',numbers:'123',edit:'编',lexicon:'典',custom:'设','screen-text':'截'};
 globalThis.voxfixScreenTextChanged=()=>{if(state.page==='menu')render();};
-function menuPanel() { return `<div class="panel-title"><span>${nativeIme?'功能菜单':'功能菜单 · 未展开页面的补充入口'}</span>${button('返回键盘','return','','',icon('back'))}</div><div class="menu-grid">${[...toolbarItems.filter(([id])=>!['menu','hide'].includes(id)),['symbols','符号'],['numbers','数字'],['edit','编辑文字'],['lexicon','词典'],['custom','键盘设置'],['screen-text',nativeIme?.screenTextEnabled?.()?'关闭截图工具':'开启截图工具']].map(([id,label])=>button(label,id,'','',`<span class="menu-glyph">${menuGlyphs[id]||icon(id)}</span><span>${label}</span>`)).join('')}</div>${footer()}`; }
+function menuPanel() { return `<div class="panel-title"><span>${nativeIme?'功能菜单':'功能菜单 · 未展开页面的补充入口'}</span>${button('返回键盘','return','','',icon('back'))}</div><div class="menu-grid">${[...toolbarItems.filter(([id])=>!['menu','hide'].includes(id)),['symbols','符号'],['numbers','数字'],['edit','编辑文字'],['lexicon','词典'],['custom','键盘设置'],['screenshot-settings','截图工具栏设置'],['screen-text',nativeIme?.screenTextEnabled?.()?'关闭截图工具':'开启截图工具']].map(([id,label])=>button(label,id,'','',`<span class="menu-glyph">${menuGlyphs[id]||icon(id)}</span><span>${label}</span>`)).join('')}</div>${footer()}`; }
 function editPanel() { return `<div class="panel-title"><span>${nativeIme?'编辑文字':'编辑文字 · 补充试用'}</span>${button('返回键盘','return','','',icon('back'))}</div><div class="menu-grid">${[['select-all','全选'],['copy-text','复制'],['cut-text','剪切'],['paste-last','粘贴'],['cursor-left','左移'],['cursor-right','右移'],['delete','删除'],['enter',localInput?'换行':enterLabel]].map(([id,label])=>button(label,id,'',id==='delete'?'key':'',icon(id==='delete'?'delete':'copy')+`<span>${label}</span>`)).join('')}</div>${footer()}`; }
 const VOICE_PHASES=['loading','listening','paused','cancel','recognizing'];
 const VOICE_TITLES={loading:'正在开启麦克风',listening:'倾听中',paused:'已暂停',cancel:'松手取消',recognizing:'识别中'};
@@ -1617,7 +1664,7 @@ function activate(action,value='',prefix=englishPrefix) {
       }
       if(!['clipboard','images','phrases'].includes(value))return;
       state.clipTab=value;clipMenu=null;state.clipConfirm=null;state.clipGroupMenu=null;state.clipManage=false;state.clipSelected=[];
-      if(value==='images'){screenshotPreview=null;screenshotCrop=null;screenshotDelete=false;refreshScreenshots();}break;
+      if(value==='images'){screenshotPreview=null;screenshotCrop=null;resetImageSelection();refreshScreenshots();}break;
     }
     case 'paste': insert(value); clipMenu=null; if(!state.clipManage&&!(state.clipTab==='clipboard'&&state.clipLocked))state.page=state.returnPage; break;
     case 'clip-candidate-insert': state.clipCandidate='';insert(value);break;
@@ -1669,6 +1716,7 @@ function activate(action,value='',prefix=englishPrefix) {
     // 词典入口：手机上打开与电脑版同构的词语/错法编辑器；试用页没有该窗口时回到设置里的词库区。
     case 'lexicon': if(nativeIme?.openDictionary){nativeIme.openDictionary();return;} showTab('custom'); state.popup=null; $('lexicon-actions').hidden=false; feedback('试用页没有词典窗口，个人词库在这里导入导出。'); break;
     case 'screen-text': if(nativeIme?.toggleScreenText){nativeIme.toggleScreenText();return;} toast('屏幕取字需在安卓输入法中开启。');return;
+    case 'screenshot-settings': if(nativeIme?.openScreenTextSettings){nativeIme.openScreenTextSettings();return;} toast('截图工具栏设置需在安卓输入法中打开。');return;
     case 'cancel-recognition': if(state.voice?.tap||state.voice?.phase==='recognizing') { cancelVoice(); } return;
     case 'select-all': editor.setSelectionRange(0,editor.value.length);localSelection=null;selectedCount=characterCount(editor.value); state.comp=null; break;
     case 'copy-text': case 'cut-text': { const text=editor.value.slice(editor.selectionStart,editor.selectionEnd); if(selectedCount===0||!text)break; {try{clips=addSnippet(clips,text);snippetUndo=null;saveSnippets();}catch(error){toast(error.message);return;} if(settings.clipboardCandidate)state.clipCandidate=text; if(action==='cut-text') { if(editor.selectionStart===editor.selectionEnd) applyText({text:'',cursor:0}); else insert(''); } if(nativeIme)nativeIme.copy(text);else navigator.clipboard?.writeText(text).catch(()=>toast('已存入本页剪贴板，系统复制未获授权。')); } break; }

@@ -17,9 +17,6 @@ import android.view.KeyEvent
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.widget.Toast
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 
 /** Screenshot-only extraction also sees text inside images beside ordinary UI labels. */
 private const val DEBUG_CAPTURE = "local.voxfix.debug.DEBUG_CAPTURE"
@@ -35,12 +32,21 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     private var session: ScreenshotSession? = null
     private val frame: Bitmap? get() = session?.image
     private var busy = false
-    private var generation = 0
+    @Volatile private var generation = 0
     private var connected = false
     private var ocrInFlight = false
+    /** Set while the editor was opened from the image clipboard, so save can report back. */
+    private var editorDone: ((Boolean) -> Unit)? = null
+    private val editorHost = object : ScreenshotEditorHost.Handler {
+        override fun open(id: String, done: (Boolean) -> Unit): Boolean {
+            if (!connected || busy || overlay != null || screenshot != null) return false
+            openSavedProject(id, done)
+            return true
+        }
+    }
     private val screenState = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == Intent.ACTION_SCREEN_OFF) { closeSession(); removeHandle() } else showHandle()
+            if (intent?.action == Intent.ACTION_SCREEN_OFF) { ScreenshotPins.closeAll(); closeSession(); removeHandle(); TranslateRuntime.releaseNow() } else showHandle()
         }
     }
     private val debuggable get() = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -50,11 +56,15 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             if (intent?.action == DEBUG_CAPTURE) { android.util.Log.i("VoxFix","DEBUG_CAPTURE"); capture() }
         }
     }
-    private val expire = Runnable { if (screenshot?.isEditing == true) keepSession() else retainText() }
+    private val expire = Runnable {
+        if (screenshot?.isEditing == true || screenshot?.isProjectEditor == true) keepSession() else retainText()
+    }
     private val captureTimeout = Runnable { fail("截图超时，请重试") }
 
     override fun onServiceConnected() {
         connected = true
+        TranslateRuntime.init(this)
+        ScreenshotEditorHost.register(editorHost)
         preferences.registerOnSharedPreferenceChangeListener(this)
         val filter = IntentFilter().apply { addAction(Intent.ACTION_SCREEN_OFF); addAction(Intent.ACTION_USER_PRESENT) }
         if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(screenState, filter, RECEIVER_NOT_EXPORTED)
@@ -75,8 +85,13 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         } else showHandle()
     }
     override fun onInterrupt() { closeSession() }
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        TranslateRuntime.trim(level)
+    }
     override fun onConfigurationChanged(config: Configuration) {
         super.onConfigurationChanged(config)
+        ScreenshotPins.relayout()
         retainText(); removeHandle(); showHandle()
     }
     override fun onKeyEvent(event: KeyEvent): Boolean {
@@ -94,7 +109,11 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         return false
     }
     override fun onDestroy() {
+        ScreenshotPins.closeAll()
         connected = false
+        ScreenshotEditorHost.register(null)
+        editorDone = null
+        TranslateRuntime.cancel(); TranslateRuntime.releaseNow()
         preferences.unregisterOnSharedPreferenceChangeListener(this)
         runCatching { unregisterReceiver(screenState) }
         if (debuggable) runCatching { unregisterReceiver(debugCapture) }
@@ -114,7 +133,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     private fun capture() {
         if (busy || overlay != null || screenshot != null) return
         if (ocrInFlight) { Toast.makeText(this, "上次识别正在结束，请稍后重试", Toast.LENGTH_SHORT).show(); return }
-        busy = true; removeHandle()
+        busy = true; removeHandle(); ScreenshotPins.visible(false)
         val token = ++generation
         main.postDelayed(captureTimeout, 4000)
         main.postDelayed({
@@ -129,7 +148,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
                             val hardware = Bitmap.wrapHardwareBuffer(buffer, result.colorSpace) ?: error("No screenshot bitmap")
                             val image = try { hardware.copy(Bitmap.Config.ARGB_8888, false) } finally { hardware.recycle() }
                             session = ScreenshotSession(image ?: error("Screenshot copy failed"))
-                            screenshot = ScreenshotCaptureOverlay(this@ScreenTextService,frame!!,::saveScreenshot,::recognizeScreenshot,::updateText,::closeSession,::keepSession)
+                            screenshot = ScreenshotCaptureOverlay(this@ScreenTextService,frame!!,::saveScreenshot,::recognizeScreenshot,::updateText,::closeSession,::keepSession,TranslateRuntime,ScreenshotToolMemory(this@ScreenTextService))
                             screenshot!!.show(windows)
                             busy = false
                             keepSession()
@@ -143,35 +162,46 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             } catch (error: Exception) { fail("截图不可用，请检查无障碍服务", error) }
         }, 120)
     }
-    private fun recognize(region: Rect) {
-        if (busy) return
+    private fun recognize(region: Rect) = recognizeImage(region, false)
+
+    private fun recognizeImage(region: Rect, screenshotResult: Boolean) {
+        if (busy || ocrInFlight) return
         val image = frame ?: return
         val safe = Rect(region)
-        if (!safe.intersect(0, 0, image.width, image.height) || safe.width() < 2 || safe.height() < 2) return
+        if (!safe.intersect(0,0,image.width,image.height) || safe.width()<2 || safe.height()<2) return
         val token = generation
-        busy = true; overlay?.loading()
+        busy = true; ocrInFlight = true
+        if (!screenshotResult) overlay?.loading()
         keepSession()
         try {
-            val crop = Bitmap.createBitmap(image, safe.left, safe.top, safe.width(), safe.height())
-            val input = if (crop === image) image.copy(Bitmap.Config.ARGB_8888, false)!! else crop
-            val recognizer = try { TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build()) }
-                catch (error: Exception) { input.recycle(); throw error }
+            val crop = Bitmap.createBitmap(image,safe.left,safe.top,safe.width(),safe.height())
+            val input = if (crop === image) image.copy(Bitmap.Config.ARGB_8888,false)!! else crop
             try {
-                ocrInFlight = true
-                recognizer.process(InputImage.fromBitmap(input, 0))
-                    .addOnCompleteListener(mainExecutor) { task ->
-                        try {
+                screenshotWorker.execute {
+                    try {
+                        val blocks = ScreenOcr.recognize(this,input) { token == generation }
+                            .map { it.copy(left=it.left+safe.left,top=it.top+safe.top,right=it.right+safe.left,bottom=it.bottom+safe.top) }
+                        main.post {
                             if (token == generation) {
                                 busy = false
-                                overlay?.result(if (task.isSuccessful) task.result.text else "", if (task.isSuccessful) null else "识别失败，请框选重试")
-                                task.exception?.let { android.util.Log.w("VoxFix", "SCREEN_TEXT_OCR_FAILED", it) }
+                                if (screenshotResult) screenshot?.textResult(blocks)
+                                else overlay?.result(blocks.joinToString("\n") { it.text },null)
                             }
-                        } finally { ocrInFlight = false; recognizer.close(); input.recycle() }
-                    }
-            } catch (error: Exception) { ocrInFlight = false; recognizer.close(); input.recycle(); throw error }
+                        }
+                    } catch (error: Exception) {
+                        android.util.Log.w("VoxFix","SCREEN_OCR_FAILED",error)
+                        main.post { if (token == generation) {
+                            busy = false
+                            if (screenshotResult) screenshot?.failure("识别失败，请重新框选")
+                            else overlay?.result("","识别失败，请重新框选")
+                        } }
+                    } finally { input.recycle(); main.post { ocrInFlight = false } }
+                }
+            } catch (error: Exception) { input.recycle(); throw error }
         } catch (error: Exception) {
-            busy = false; overlay?.result("", "识别失败，请框选重试")
-            android.util.Log.w("VoxFix", "SCREEN_TEXT_OCR_FAILED", error)
+            busy = false; ocrInFlight = false
+            if (screenshotResult) screenshot?.failure("识别失败，请重试") else overlay?.result("","识别失败，请重试")
+            android.util.Log.w("VoxFix","SCREEN_OCR_FAILED",error)
         }
     }
     private fun keepSession() {
@@ -179,10 +209,12 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         if (frame != null) main.postDelayed(expire, 90_000)
     }
     private fun retainText() {
-        val state = overlay?.retainedResult()
+        val state = screenshot?.retainedResult() ?: overlay?.retainedResult()
         if (state == null) { closeSession(); return }
         ++generation; busy = false
         main.removeCallbacks(captureTimeout); main.removeCallbacks(expire)
+        TranslateRuntime.cancel(); TranslateRuntime.releaseNow()
+        screenshot?.dismiss(windows); screenshot = null
         overlay?.dismiss(windows); overlay = null
         session?.close(); session = null
         val next = ScreenTextOverlay(this, null, ::recognize, ::closeSession, ::keepSession)
@@ -194,89 +226,101 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show(); closeSession()
     }
     private fun closeSession() {
+        ScreenshotPins.visible(true)
         ++generation; busy = false
+        TranslateRuntime.cancel(); TranslateRuntime.idle()
         main.removeCallbacks(captureTimeout); main.removeCallbacks(expire)
         overlay?.dismiss(windows); overlay = null
         screenshot?.dismiss(windows); screenshot = null
         session?.close(); session = null
+        editorDone?.let { done -> editorDone = null; done(false) }
         if (!ScreenTextSettingsActivity.enabled(this)) removeHandle() else showHandle()
+    }
+    /** Opens a saved record in the editor that normally belongs to a fresh capture. */
+    private fun openSavedProject(id: String, done: (Boolean) -> Unit) {
+        busy = true; removeHandle(); ScreenshotPins.visible(false)
+        val token = ++generation
+        editorDone = done
+        screenshotWorker.execute {
+            try {
+                val store = ScreenshotStore(this)
+                val entry = store.entry(id) ?: error("图片已删除，请刷新")
+                // A plain image has no project yet: its pixels become the canvas and its first save
+                // creates a separate record, leaving the original untouched.
+                val document = store.document(id)
+                check(entry.kind!=ScreenshotStore.Kind.PROJECT || document!=null) { "截图工程无法读取，原文件已保留" }
+                val source = store.sourceBitmap(id) ?: error("图片底图无法读取，原文件已保留")
+                if(document!=null && (source.width!=document.canvasWidth || source.height!=document.canvasHeight)) {
+                    source.recycle(); error("截图底图与工程不匹配，原文件已保留")
+                }
+                val project = if (document != null) ScreenshotProject(document.copy(), id, entry.revision, null)
+                    else ScreenshotProject(ScreenshotDocument.full(source.width, source.height), null, null, id)
+                main.post {
+                    if (token != generation || !connected) { source.recycle(); busy = false; editorDone = null; done(false); return@post }
+                    try {
+                        session = ScreenshotSession(source)
+                        val view = ScreenshotCaptureOverlay(this, source, ::saveScreenshot, ::recognizeScreenshot, ::updateText,
+                            { closeSession() }, ::keepSession, TranslateRuntime,
+                            ScreenshotToolMemory(this), project)
+                        view.show(windows)
+                        screenshot = view
+                        busy = false
+                        keepSession()
+                    } catch (error: Exception) { fail("无法打开图片编辑", error) }
+                }
+            } catch (error: Exception) {
+                android.util.Log.w("VoxFix", "SCREENSHOT_EDIT_OPEN_FAILED", error)
+                main.post {
+                    if (token == generation) {
+                        val finish = editorDone
+                        busy = false; editorDone = null
+                        Toast.makeText(this, error.message ?: "无法打开图片编辑", Toast.LENGTH_SHORT).show()
+                        closeSession()
+                        // The keyboard still shows the preview, but it must clear its opening state.
+                        finish?.invoke(false)
+                    }
+                }
+            }
+        }
     }
     private fun updateText(value: String) {
         android.util.Log.i("VoxFix","SCREENSHOT_TEXT len=${value.length}")
         runCatching { session?.updateText(value) }
         keepSession()
     }
-    private fun recognizeScreenshot(region: Rect) {
+    private fun recognizeScreenshot(region: Rect) = recognizeImage(region, true)
+    private fun saveScreenshot(request: ScreenshotSaveRequest) {
         if (busy) return
         val image = frame ?: return
-        val safe = Rect(region)
-        if (!safe.intersect(0,0,image.width,image.height) || safe.width() < 2 || safe.height() < 2) return
-        val token = generation
-        busy = true
-        keepSession()
-        try {
-            val crop = Bitmap.createBitmap(image,safe.left,safe.top,safe.width(),safe.height())
-            val input = if (crop === image) image.copy(Bitmap.Config.ARGB_8888,false)!! else crop
-            val recognizer = try { TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build()) }
-                catch (error: Exception) { input.recycle(); throw error }
-            try {
-                ocrInFlight = true
-                recognizer.process(InputImage.fromBitmap(input,0))
-                    .addOnCompleteListener(mainExecutor) { task ->
-                        try {
-                            if (token == generation) {
-                                busy = false
-                                if (task.isSuccessful) {
-                                    // Bounding boxes stay in the frozen image, so edits land on their own line.
-                                    val blocks = task.result.textBlocks.asSequence()
-                                        .flatMap { it.lines.asSequence() }
-                                        .mapNotNull { line ->
-                                            val box = line.boundingBox
-                                            if (box == null || box.width() < 2 || box.height() < 2) null
-                                            else ScreenshotTextBlock(box.left+safe.left,box.top+safe.top,box.right+safe.left,box.bottom+safe.top,line.text)
-                                        }
-                                        .take(400)
-                                        .toList()
-                                    android.util.Log.i("VoxFix","SCREENSHOT_OCR_OK blocks=${blocks.size}")
-                                    screenshot?.textResult(blocks)
-                                } else screenshot?.failure("识别失败，请重试")
-                                task.exception?.let { android.util.Log.w("VoxFix","SCREENSHOT_OCR_FAILED",it) }
-                            }
-                        } finally { ocrInFlight = false; recognizer.close(); input.recycle() }
-                    }
-            } catch (error: Exception) { ocrInFlight = false; recognizer.close(); input.recycle(); throw error }
-        } catch (error: Exception) {
-            busy = false; screenshot?.failure("识别失败，请重试")
-            android.util.Log.w("VoxFix","SCREENSHOT_OCR_FAILED",error)
-        }
-    }
-    private fun saveScreenshot(region: Rect, result: Bitmap?) {
-        if (busy) return
-        val image = frame ?: return
-        val safe = Rect(region)
-        if (!safe.intersect(0,0,image.width,image.height) || safe.width() < 2 || safe.height() < 2) { result?.recycle(); return }
+        val region = Rect(request.region)
+        if (!region.intersect(0,0,image.width,image.height) || region.width() < 2 || region.height() < 2) { request.composite?.recycle(); return }
         val token = generation
         busy = true
         try {
-            val input = result ?: requireNotNull(session).crop(safe)
+            val composite = request.composite ?: requireNotNull(session).crop(region)
+            // Only a fresh capture hands its frozen screenshot over as the project's base image.
+            val source = image.takeIf { request.replaceId == null && request.copySourceFromId == null }
             try {
                 screenshotWorker.execute {
                     try {
                         val store = ScreenshotStore(this)
-                        store.save(input)
+                        store.saveProject(request.document,composite,source,request.replaceId,request.expectedRevision,request.copySourceFromId)
                         main.post {
                             if (connected && token == generation) {
+                                val done = editorDone
+                                editorDone = null
                                 closeSession()
-                                Toast.makeText(this,"已保存到截图剪贴板",Toast.LENGTH_SHORT).show()
+                                done?.invoke(true)
+                                Toast.makeText(this,"已保存到图片剪贴板",Toast.LENGTH_SHORT).show()
                             }
                         }
                     } catch (error: Exception) {
                         android.util.Log.w("VoxFix","SCREENSHOT_SAVE_FAILED",error)
                         val message = if (error is IllegalStateException || error is IllegalArgumentException) error.message ?: "截图保存失败，请重试" else "截图保存失败，请检查可用空间后重试"
                         main.post { if (connected && token == generation) { busy = false; screenshot?.failure(message) } }
-                    } finally { input.recycle() }
+                    } finally { if (composite !== image) composite.recycle() }
                 }
-            } catch (error: Exception) { input.recycle(); throw error }
+            } catch (error: Exception) { if (composite !== image) composite.recycle(); throw error }
         } catch (error: Exception) { busy = false; screenshot?.failure(error.message ?: "截图保存失败，请重试") }
     }
 }

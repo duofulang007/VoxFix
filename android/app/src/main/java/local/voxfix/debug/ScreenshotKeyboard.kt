@@ -13,7 +13,8 @@ import org.json.JSONObject
 internal class ScreenshotKeyboard(context: Context) {
     val store = ScreenshotStore(context)
     fun list(): JSONObject = JSONObject().put("items", JSONArray().apply {
-        store.entries().forEach { put(JSONObject().put("id",it.id).put("width",it.width).put("height",it.height).put("createdAt",it.createdAt)) }
+        store.entries().forEach { put(JSONObject().put("id",it.id).put("width",it.width).put("height",it.height)
+            .put("createdAt",it.createdAt).put("kind",it.kind.name.lowercase()).put("editable",true)) }
     })
     fun route(uri: Uri): WebResourceResponse? {
         if (uri.scheme != "https" || uri.host != "voxfix.local" || !uri.path.orEmpty().startsWith("/screenshots/")) return null
@@ -33,8 +34,14 @@ internal class ScreenshotKeyboard(context: Context) {
         require(left >= 0 && top >= 0 && right <= entry.width && bottom <= entry.height && region.width() >= 2 && region.height() >= 2) { "请拖动选择裁剪范围" }
         val source = BitmapFactory.decodeFile(store.file(id).path) ?: error("截图无法读取")
         try {
-            val cropped = Bitmap.createBitmap(source,left,top,region.width(),region.height())
-            try { store.save(cropped) } finally { if (cropped !== source) cropped.recycle() }
+            // A project crops its own viewport; the canvas and its objects stay addressable, and the
+            // result is a new record so the original keeps editing as it was.
+            if (entry.kind == ScreenshotStore.Kind.PROJECT)
+                store.cropProject(id,left,top,right,bottom,source)
+            else {
+                val cropped = Bitmap.createBitmap(source,left,top,region.width(),region.height())
+                try { store.save(cropped) } finally { if (cropped !== source) cropped.recycle() }
+            }
         } finally { source.recycle() }
         return list()
     }

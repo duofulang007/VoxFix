@@ -1,0 +1,60 @@
+{
+  "llama": {
+    "repository": "https://github.com/ggml-org/llama.cpp",
+    "commit": "de7fa0a3c6a2e1b4cd9f22eb8d6bf5b12dbdb63b",
+    "archive": {
+      "url": "https://codeload.github.com/ggml-org/llama.cpp/zip/de7fa0a3c6a2e1b4cd9f22eb8d6bf5b12dbdb63b",
+      "file": "llama-de7fa0a.zip",
+      "bytes": 40101445,
+      "sha256": "04f88e3cdc7857ee0285cd6091a8f581670b3c8f411a35b95e4d8c0ac891d0d6"
+    },
+    "patchDirectory": "tools/patches/llama.cpp-de7fa0a",
+    "patches": [
+      {
+        "name": "0001-Add-support-for-STQ_0-ternary-quantization.patch",
+        "sha256": "6295150669f8b5ccb9e70479e63d2dc3274e7afbe749909ee4c19313d4d4a789"
+      },
+      {
+        "name": "0002-rename-STQ_0-to-STQ1_0-according-to-reviewer-suggest.patch",
+        "sha256": "529ef2cba899c4cbe2fe76d1d26a70e102f9063272c448bd5697f513033b7384"
+      },
+      {
+        "name": "0003-ggml-cpu-fix-STQ1_0-CI-failures.patch",
+        "sha256": "db0356dff615100836a1732228a61d10bbe3d645fe0186203f59ea7341fe7c8c"
+      },
+      {
+        "name": "0004-ggml-cpu-STQ1_0-2x2-dotprod-tile-kernel-for-faster-p.patch",
+        "sha256": "cab91744c97e33566327dbfaf1db6368a2bf39e29c71a3bfe72849305a441348"
+      },
+      {
+        "name": "0005-llama-context-set-threadpool-on-every-CPU-backend-fi.patch",
+        "sha256": "938b88bafd9d2aca072182e8ca39720c4a8b0f8b8bd7fcbe9fc3b6c7dc09ec69"
+      }
+    ]
+  },
+  "model": {
+    "name": "Hy-MT2-1.8B-1.25bit",
+    "file": "Hy-MT2-1.8B-1.25Bit.gguf",
+    "bytes": 461860800,
+    "sha256": "cc497fe8f033b52b3b8b00a7669e9661435432f9d4cd43f7ed24400c01507a93",
+    "relabelSha256": "f1e0adf9183536e42589650348305176c570be9e588fe6955bcdef82d7f66a01",
+    "targetDirectory": "models/hy-mt2",
+    "relabelTensorType": {
+      "from": 42,
+      "to": 43,
+      "offsets": "android/app/src/main/assets/translate/stq-type-offsets.bin"
+    },
+    "sources": [
+      {
+        "id": "hf-mirror",
+        "url": "https://hf-mirror.com/tencent/Hy-MT2-1.8B-1.25Bit-GGUF/resolve/main/Hy-MT2-1.8B-1.25Bit.gguf",
+        "range": true
+      },
+      {
+        "id": "modelscope",
+        "url": "https://modelscope.cn/models/AngelSlim/Hy-MT2-1.8B-1.25Bit-GGUF/resolve/master/Hy-MT2-1.8B-1.25Bit.gguf",
+        "range": true
+      }
+    ]
+  }
+}

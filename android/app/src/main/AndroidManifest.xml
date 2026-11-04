@@ -12,6 +12,7 @@
             <meta-data android:name="android.accessibilityservice" android:resource="@xml/screen_text_service" />
         </service>
         <activity android:name=".ScreenTextSettingsActivity" android:exported="false" />
+        <activity android:name=".ScreenshotToolbarSettingsActivity" android:exported="false" />
         <activity android:name=".LexiconActivity" android:exported="false" />
         <activity android:name=".DictionaryActivity" android:exported="false" />
         <provider android:name=".MemeContentProvider" android:authorities="${applicationId}.memes" android:exported="false" android:grantUriPermissions="true" />

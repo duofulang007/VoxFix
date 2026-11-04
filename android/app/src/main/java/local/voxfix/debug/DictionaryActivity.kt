@@ -346,10 +346,6 @@ class DictionaryActivity : Activity() {
         status.text = "已撤回删除，记得保存"
     }
 
-    private fun render() {
-        if (detail != null && current >= 0) showDetail(current) else showList()
-    }
-
     private fun save(): Boolean {
         dictionary.conflicts()?.let { status.text = it; return false }
         if (loadFailed) { status.text = "保存失败：原词典读取失败，已阻止覆盖"; return false }

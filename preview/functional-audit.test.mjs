@@ -17,6 +17,7 @@ async function check(name,run){
     window.calls=[];
     window.VoxFixIme=Object.fromEntries(['compose','commit','completeEnglish','copy','delete','enter','hide','switcher','startVoice','startLocalVoice','stopVoice','cancelVoice','moveCursor','cursorPosition','gestureStart','gestureMove','gestureEnd','haptic','edit','ready','resize','refreshClipboard','importClipboard','clipHint'].map(name=>[name,(...args)=>calls.push([name,...args])]));
     VoxFixIme.voiceReady=()=>true;
+    VoxFixIme.openScreenTextSettings=()=>calls.push(['screenshot-settings']);
     VoxFixIme.pinyinReady=()=>true;VoxFixIme.pinyinCandidates=()=>JSON.stringify({words:['你好','你','好']});
     VoxFixIme.pinyinChoose=()=>JSON.stringify({committed:true,remaining:''});VoxFixIme.commitAccepted=()=>JSON.stringify({committed:true});
     const original=Storage.prototype.setItem;
@@ -85,6 +86,10 @@ try{
     await key('clipboard').dispatchEvent('pointerdown',{pointerId:411,pointerType:'touch',button:0,clientX:100,clientY:220});
     await page.waitForTimeout(100);await page.evaluate(()=>window.dispatchEvent(new Event('blur')));await page.waitForTimeout(400);
     const count=await page.locator('.toolbar-drag').count();console.log('TOOLBAR_BLUR_EVIDENCE '+count);assert.equal(count,0,'A pending hold starts dragging after focus was lost');
+  });
+  await check('screenshot toolbar settings opens from the input method menu',async({page,click})=>{
+    await click('menu');await click('screenshot-settings');
+    assert.equal(await page.evaluate(()=>calls.filter(row=>row[0]==='screenshot-settings').length),1);
   });
   await check('image search reclaims the removed emoji header space',async({page,click})=>{
     await click('emoji');assert.equal(await page.locator('.emoji-top').count(),0);

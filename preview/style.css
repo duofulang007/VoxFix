@@ -182,16 +182,38 @@
 .clip-list .empty-state{padding-top:0;margin:auto;font-size:13px;color:var(--muted)}
 .clip-header.image-header{grid-template-columns:42px minmax(0,1fr) 42px}
 .clip-image-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-content:start}
-.clip-image-grid>.clip-image-card{padding:5px;min-width:0;text-align:center;overflow:hidden}
+.clip-image-tile{position:relative;min-width:0;border-radius:8px;background:var(--key-bg);border:1.5px solid transparent}
+.clip-image-tile.picked{border-color:var(--accent);background:var(--accent-soft)}
+.clip-image-card{display:block;width:100%;padding:5px;min-width:0;text-align:center;border-radius:6px;user-select:none;-webkit-touch-callout:none;touch-action:pan-y}
 .clip-image-card img{display:block;width:100%;height:88px;object-fit:contain;border-radius:5px}
-.clip-image-card span{font-size:11px;color:var(--muted)}
+.clip-image-card .image-dimensions{font-size:11px;color:var(--muted)}
+.image-pick{position:absolute;right:7px;top:7px;width:21px;height:21px;border:1.5px solid var(--muted);border-radius:50%;background:var(--key-bg);color:white;display:grid;place-items:center}
+.picked .image-pick{background:var(--accent);border-color:var(--accent)}
+.keyboard .image-pick svg{width:16px;height:16px}
+.image-remove{position:absolute;right:0;top:0;width:44px;height:44px;display:grid;place-items:center;isolation:isolate;color:#fff}
+.image-remove::before{content:"";position:absolute;width:25px;height:25px;border-radius:50%;background:var(--danger);z-index:-1;box-shadow:0 1px 4px #0002}
+.keyboard .image-remove svg{width:18px;height:18px;pointer-events:none}
+.clip-header.image-managing{grid-template-columns:42px minmax(0,1fr) auto}
+.image-managing .clip-header-actions{gap:6px}
+.image-managing .text-action{font-size:14px;min-width:58px;min-height:44px;padding:0 6px}
+.image-managing .ctl{width:44px;height:44px}
+.image-preview-title{text-align:center;line-height:1.3;font-size:15px}
+.image-preview-title span{display:block;font-size:11px;color:var(--muted);margin-top:2px}
 .clip-image-grid>.empty-state{grid-column:1/-1;text-align:center;padding:30px 10px;line-height:1.8}
 .clip-image-preview{display:flex;flex:1;min-height:0;flex-direction:column;margin:2px 8px 4px;border-radius:8px;background:var(--key-bg);overflow:hidden}
 .keyboard .clip-image-canvas{width:100%;height:auto;flex:1;min-height:0;touch-action:none;user-select:none;pointer-events:auto}
-.clip-image-actions{display:flex;justify-content:space-around;flex:none;border-top:1px solid var(--line)}
-.clip-image-actions button{min-height:44px;flex:1;padding:4px;font-size:13px}
+.clip-image-actions{display:flex;gap:8px;flex:none;padding:6px 8px;border-top:1px solid var(--line)}
+.clip-image-actions button{display:flex;align-items:center;justify-content:center;gap:6px;min-width:0;min-height:44px;flex:1;padding:4px 6px;font-size:13px;border-radius:6px;white-space:nowrap}
+.keyboard .clip-image-actions svg{width:18px;height:18px}
+.clip-image-actions .image-primary{background:var(--accent-soft);color:var(--accent)}
 .clip-image-hint{text-align:center;font-size:11px;color:var(--muted);padding:0 4px 5px}
-.clip-image-send{flex:none;min-height:44px;margin:0 8px 4px;border-radius:8px;background:var(--accent-soft);color:var(--accent)}
+.image-confirm-backdrop{align-items:center;justify-content:center;padding:12px}
+.image-confirm{width:min(300px,100%);padding:20px 16px 12px;border-radius:12px;background:var(--key-bg);box-shadow:0 6px 24px #0002;text-align:center}
+.image-confirm strong{font-size:16px;font-weight:600}
+.image-confirm p{font-size:13px;color:var(--muted);margin:8px 0 16px}
+.image-confirm>div{display:flex;gap:10px}
+.image-confirm button{flex:1;min-height:44px;border-radius:6px;font-size:15px;background:var(--func-bg)}
+.image-confirm button.danger{background:var(--danger);color:white}
 .clip-list .clip-pick{display:flex;align-items:center;gap:10px;padding-left:12px}
 .clip-list .pick-box{flex:0 0 auto;width:18px;height:18px;border:1.5px solid var(--line);border-radius:50%;background:transparent;color:#fff;font-size:11px;line-height:15px;text-align:center}
 .clip-list .clip-pick.picked .pick-box{background:var(--accent);border-color:var(--accent)}

@@ -14,8 +14,13 @@ import android.view.WindowInsets
 
 class ScreenTextSettingsActivity : Activity() {
     private lateinit var status: TextView
+    private lateinit var translateStatus: TextView
+    private lateinit var translateDownload: Button
+    private lateinit var translateDelete: Button
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
+        window.decorView.setBackgroundColor(0xFFFFFFFF.toInt())
+        TranslateRuntime.init(this)
         val pad = (24 * resources.displayMetrics.density).toInt()
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -31,9 +36,39 @@ class ScreenTextSettingsActivity : Activity() {
             isChecked = enabled(this@ScreenTextSettingsActivity)
             setOnCheckedChangeListener { _, checked -> preferences(this@ScreenTextSettingsActivity).edit().putBoolean("enabled", checked).apply() }
         })
+        layout.addView(Button(this).apply {
+            text = "截图工具栏布局"
+            setOnClickListener { startActivity(Intent(this@ScreenTextSettingsActivity,ScreenshotToolbarSettingsActivity::class.java)) }
+        })
         layout.addView(TextView(this).apply {
-            text = "从屏幕边缘的小弧线向内滑，打开截图；长按弧线后可拖动换边和调整高度。\n\n截图后先画框，可拖动框内移动、拖四边或角点调整。位置确认后点保存或复制，不会松手就处理。\n\n保存的截图在输入法剪贴板的「图片」页管理，支持预览、插入聊天、复制、裁剪另存和逐张删除。不自动写入系统相册。直接插入需要聊天应用支持接收图片。\n\n只在主动截图时获取画面，未保存的画面退出或闲置90秒后释放；锁屏或旋转结束当前截图。安全页面无法截图。\n\n首次使用需手动启用「VoxFix 截图工具」无障碍服务，它独立于键盘运行。"
+            text = "从屏幕边缘的小弧线向内滑，打开截图；长按弧线后可拖动换边和调整高度。\n\n截图后先画框，可拖动框内移动、拖四边或角点调整。可直接保存图片、识别文字或翻译，识别后可复制文字；不会松手就处理。\n\n保存的截图在输入法剪贴板的「图片」页管理，支持预览、插入聊天、复制、裁剪另存和批量删除。不自动写入系统相册。直接插入需要聊天应用支持接收图片。\n\n只在主动截图时获取画面，未保存的画面退出或闲置90秒后释放；闲置或旋转时保留已识别文字和完成的译文，锁屏或主动退出时清理。安全页面无法截图。\n\n首次使用需手动启用「VoxFix 截图工具」无障碍服务，它独立于键盘运行。"
             textSize = 16f; setPadding(0, pad, 0, pad)
+        })
+        layout.addView(TextView(this).apply { text = "离线翻译"; textSize = 20f; setPadding(0, pad, 0, 0) })
+        translateStatus = TextView(this).apply { textSize = 16f; setPadding(0, dp(6), 0, dp(6)) }
+        layout.addView(translateStatus)
+        translateDownload = Button(this).apply {
+            text = "下载翻译模型（约 462MB）"
+            setOnClickListener { TranslateDownloader.start(this@ScreenTextSettingsActivity) { renderTranslate(it) } }
+        }
+        layout.addView(translateDownload)
+        translateDelete = Button(this).apply {
+            text = "删除翻译模型"
+            setOnClickListener {
+                if (TranslateRuntime.isBusy()) {
+                    android.widget.Toast.makeText(this@ScreenTextSettingsActivity, "翻译进行中，结束后可删除", android.widget.Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                TranslateDownloader.cancel()
+                TranslateRuntime.releaseNow()
+                TranslateModelStore(this@ScreenTextSettingsActivity).delete()
+                renderTranslate(TranslateDownloader.State.Idle)
+            }
+        }
+        layout.addView(translateDelete)
+        layout.addView(TextView(this).apply {
+            text = "腾讯 Hy-MT2-1.8B（1.25bit 量化，Apache-2.0）。权重只保存在本机应用目录，不随安装包分发；下载需要联网，下载完成后翻译完全离线。框选后可直接点「翻译」，内部先识别再翻译。语言切换是单行的「自动检测 ⇄ 简体中文」：点任一侧原地展开语言选项，中间箭头可交换方向。保存导出当前显示的原图、识别结果或完整译文。"
+            textSize = 14f; setPadding(0, 0, 0, pad)
         })
         status = TextView(this).apply { textSize = 16f }; layout.addView(status)
         layout.addView(Button(this).apply {
@@ -47,7 +82,49 @@ class ScreenTextSettingsActivity : Activity() {
     }
     override fun onResume() {
         super.onResume()
+        TranslateRuntime.init(this)
+        TranslateDownloader.observe { renderTranslate(it) }
         status.text = if (connected(this)) "无障碍服务已启用" else "尚未启用无障碍服务"
+    }
+    override fun onPause() {
+        TranslateDownloader.observe(null)
+        super.onPause()
+    }
+    private fun renderTranslate(state: TranslateDownloader.State) {
+        runOnUiThread {
+            val ready = TranslateModelStore(this).ready()
+            when (state) {
+                is TranslateDownloader.State.Running -> {
+                    val percent = if (state.total > 0) state.downloaded * 100 / state.total else 0
+                    translateStatus.text = if (state.verifying) "正在校验模型文件…"
+                    else "下载中 $percent%（${state.downloaded / (1024 * 1024)}/${state.total / (1024 * 1024)}MB）"
+                    translateDownload.visibility = android.view.View.GONE
+                    translateDelete.visibility = android.view.View.GONE
+                }
+                is TranslateDownloader.State.Failed -> {
+                    translateStatus.text = state.message
+                    translateDownload.visibility = android.view.View.VISIBLE
+                    translateDownload.text = "重试下载"
+                    translateDelete.visibility = if (ready) android.view.View.VISIBLE else android.view.View.GONE
+                }
+                TranslateDownloader.State.Ready -> {
+                    translateStatus.text = "已就绪（461.9MB），可离线翻译"
+                    translateDownload.visibility = android.view.View.GONE
+                    translateDelete.visibility = android.view.View.VISIBLE
+                }
+                TranslateDownloader.State.Idle -> {
+                    translateStatus.text = if (ready) "已就绪（461.9MB），可离线翻译" else "未下载（约 462MB）"
+                    translateDownload.visibility = if (ready) android.view.View.GONE else android.view.View.VISIBLE
+                    translateDownload.text = "下载翻译模型（约 462MB）"
+                    translateDelete.visibility = if (ready) android.view.View.VISIBLE else android.view.View.GONE
+                }
+            }
+        }
+    }
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+    override fun onDestroy() {
+        TranslateDownloader.observe(null)
+        super.onDestroy()
     }
     companion object {
         fun preferences(context: Context) = context.getSharedPreferences("screen-text", Context.MODE_PRIVATE)

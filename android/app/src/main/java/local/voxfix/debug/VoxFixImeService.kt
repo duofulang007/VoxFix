@@ -72,10 +72,12 @@ open class VoxFixImeService : InputMethodService() {
     }
     private val releaseVoice = Runnable {
         worker.execute {
+          synchronized(this) {
             if (!busy && !destroyed && engine != null) {
                 engine?.close(); engine = null
                 Log.i("VoxFix", "IME_MODELS_RELEASED")
             }
+          }
         }
     }
 
@@ -99,8 +101,10 @@ open class VoxFixImeService : InputMethodService() {
     }
 
     private fun prewarmEngine() {
-        if (destroyed || busy) return
-        voiceWarmup.execute { runCatching { warmEngine() }.onFailure { Log.w("VoxFix", "IME_ENGINE_WARM_FAILED", it) } }
+        if (destroyed || busy || TranslateRuntime.occupiesMemory()) return
+        voiceWarmup.execute { synchronized(this) {
+            if (!TranslateRuntime.occupiesMemory()) runCatching { warmEngine() }.onFailure { Log.w("VoxFix", "IME_ENGINE_WARM_FAILED", it) }
+        } }
     }
     private var ticket = 0L
     private var voiceGeneration = 0L
@@ -165,6 +169,7 @@ open class VoxFixImeService : InputMethodService() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         getSystemService(ClipboardManager::class.java).addPrimaryClipChangedListener(clipboardListener)
         pinyinLoader.execute {
             try {
@@ -215,6 +220,7 @@ open class VoxFixImeService : InputMethodService() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
+        TranslateRuntime.trim(level)
         if (level >= TRIM_MEMORY_BACKGROUND && !busy) {
             main.removeCallbacks(releaseVoice)
             releaseVoice.run()
@@ -380,7 +386,21 @@ open class VoxFixImeService : InputMethodService() {
         popup.update(view, 0, clipHintOffset(), ViewGroup.LayoutParams.WRAP_CONTENT, popup.height)
     }
 
-    private companion object {
+    companion object {
+        /** The screenshot translator runs in the accessibility service but shares this process,
+         *  so it asks the keyboard to drop its speech models before loading 462 MB of weights. */
+        @Volatile private var instance: VoxFixImeService? = null
+
+        fun releaseVoiceForTranslation(): Boolean {
+            val service = instance ?: return true
+            synchronized(service) {
+                if (service.busy) return false
+                service.engine?.close(); service.engine = null
+                DesktopSpeechEngine.releaseSharedRescue()
+                return true
+            }
+        }
+
         /**
          * K60 实测官方标签：可见 126.3×28.86 CSS。
          * 19.4 是从官方墨迹反推的：官方 ink 宽 94.57、高 17.14 CSS，我们 20sp 量到 97.43/17.71，
@@ -824,6 +844,7 @@ open class VoxFixImeService : InputMethodService() {
             try {
                 if (capturing.get() && session.accepts(current)) {
                     received = DesktopSpeechEngine.record({
+                        TranslateRuntime.releaseForVoice()
                         warmEngine()
                     }, { text ->
                         received = text
@@ -1021,6 +1042,10 @@ open class VoxFixImeService : InputMethodService() {
             ScreenTextSettingsActivity.toggle(this@VoxFixImeService)
             script("globalThis.voxfixScreenTextChanged?.()")
         }
+        @JavascriptInterface fun openScreenTextSettings() { main.post {
+            if (web === owner) startActivity(android.content.Intent(this@VoxFixImeService, ScreenshotToolbarSettingsActivity::class.java)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        } }
         @JavascriptInterface fun screenshotList(): String = screenshotReply { screenshotKeyboard.list() }
         @JavascriptInterface fun screenshotDelete(id: String): String = screenshotReply {
             screenshotKeyboard.store.delete(id); screenshotKeyboard.list()
@@ -1046,6 +1071,20 @@ open class VoxFixImeService : InputMethodService() {
                 if (!accepted) store.copy(id)
                 script("globalThis.voxfixImageInserted?.(${JSONObject.quote(if (accepted) "已交给聊天应用，请确认发送" else "当前应用不支持直接插入，已复制图片，可尝试粘贴")},$accepted)")
             } catch (error: Exception) { script("globalThis.voxfixImageInserted?.(${JSONObject.quote(error.message ?: "图片插入失败")},false)") }
+        }
+        @JavascriptInterface fun screenshotEdit(id: String): String = screenshotReply {
+            ScreenshotStore.validateId(id)
+            check(screenshotKeyboard.store.entries().any { it.id == id }) { "图片已删除，请刷新" }
+            check(ScreenshotEditorHost.available()) { "请在屏幕取字设置中启用服务后再编辑图片" }
+            // Windows may only be added from the main thread, and the accessibility service owns them.
+            main.post {
+                if (destroyed || web !== owner) return@post
+                val opened = ScreenshotEditorHost.open(id) { saved ->
+                    main.post { if (!destroyed && web === owner) script("globalThis.voxfixImageSaved?.($saved)") }
+                }
+                if (!opened) main.post { if (!destroyed && web === owner) script("globalThis.voxfixImageSaved?.(false)") }
+            }
+            JSONObject().put("ok", true)
         }
         private fun screenshotReply(action: () -> JSONObject): String = try {
             check(web === owner && !destroyed); action().toString()
@@ -1466,6 +1505,7 @@ open class VoxFixImeService : InputMethodService() {
     }
 
     override fun onDestroy() {
+        instance = null
         memeSearch.close()
         setSearchInputActive(false)
         destroyed = true
