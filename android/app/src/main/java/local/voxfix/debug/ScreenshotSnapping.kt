@@ -9,8 +9,8 @@ import kotlin.math.round
  * snapper works on.
  *
  * The object snapper itself (candidate collection, guide merging, weighted scoring) lives in
- * `snap/snap_candidates.rs`, `snap/snap_guides.rs` and `snap/snap_scoring.rs`, which have not
- * been taken yet — see `docs/SnowShot-T22-绑定与吸附-2026-11-05.md`.
+ * `ScreenshotObjectSnapping.kt`, ported from `snap/snap_candidates.rs`, `snap/snap_guides.rs`
+ * and `snap/snap_scoring.rs` — see `docs/SnowShot-T22-绑定与吸附-2026-11-05.md`.
  */
 
 internal object ScreenshotSnapping {
