@@ -70,4 +70,20 @@ internal object ScreenRecordingLibrary {
     } catch (_: Exception) {
         false
     }
+
+    /** Upstream "open recording folder": Android has no folder browser, so show the gallery list. */
+    fun openFolder(context: Context): Boolean = try {
+        context.startActivity(Intent(Intent.ACTION_VIEW)
+            .setDataAndType(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, "video/*")
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        true
+    } catch (_: Exception) {
+        try {
+            context.startActivity(Intent(Intent.ACTION_PICK, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
 }

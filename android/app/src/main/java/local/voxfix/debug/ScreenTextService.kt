@@ -277,6 +277,32 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
 
     private fun beginRecording(projection: android.media.projection.MediaProjection, stopProjection: () -> Unit,
                                region: Rect, screenWidth: Int, screenHeight: Int, options: ScreenRecordingOptions) {
+        closeSession()
+        busy = true
+        showRecordingControl(region, options)
+        val launch = {
+            if (recordingRotation >= 0 && windows.defaultDisplay?.rotation != recordingRotation) {
+                runCatching(stopProjection)
+                busy = false
+                recordingControl?.showFailure("屏幕已旋转，请重新选择录制区域")
+                showHandle()
+            } else launchRecorder(projection, stopProjection, region, screenWidth, screenHeight, options)
+        }
+        if (options.startDelaySeconds > 0) {
+            recordingControl?.startCountdown(options.startDelaySeconds, launch) {
+                runCatching(stopProjection)
+                busy = false
+                removeRecordingControl()
+                showHandle()
+            }
+        } else {
+            recordingControl?.start(options.microphone, true)
+            launch()
+        }
+    }
+
+    private fun launchRecorder(projection: android.media.projection.MediaProjection, stopProjection: () -> Unit,
+                               region: Rect, screenWidth: Int, screenHeight: Int, options: ScreenRecordingOptions) {
         val (width, height) = ScreenRecordingGeometry.outputSize(region.width(), region.height(), options.clarity)
         val config = ScreenRecorder.Config(
             crop = region, screenWidth = screenWidth, screenHeight = screenHeight,
@@ -290,8 +316,6 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             main.post { finishRecording(file, duration, message, stopProjection) }
         }
         recorder = active
-        closeSession()
-        busy = true
         screenshotWorker.execute {
             val error = active.start()
             main.post {
@@ -300,8 +324,9 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
                     busy = false
                     runCatching(stopProjection)
                     Toast.makeText(this, error, Toast.LENGTH_LONG).show()
+                    removeRecordingControl()
                     showHandle()
-                } else showRecordingControl(region, options)
+                }
             }
         }
     }
@@ -335,13 +360,14 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         control.onStop = { recorder?.stop() }
         control.onCancel = { recorder?.cancel() }
         control.onTogglePause = { paused -> if (paused) recorder?.pause() else recorder?.resume() }
-        control.onToggleMicrophone = {
-            val updated = recordingPreferences.load().let { it.copy(microphone = !it.microphone) }
+        control.setOptions(options)
+        control.onOptionsChanged = { updated ->
             recordingPreferences.save(updated)
-            control.setMicrophone(updated.microphone, true)
-            Toast.makeText(this,
-                if (updated.microphone) "下次录屏使用麦克风" else "下次录屏使用系统声音",
-                Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "已记住，下次录屏生效", Toast.LENGTH_SHORT).show()
+        }
+        control.onOpenFolder = {
+            if (!ScreenRecordingLibrary.openFolder(this))
+                Toast.makeText(this, "没有可打开相册的应用", Toast.LENGTH_SHORT).show()
         }
         control.onOpenSaved = {
             val saved = recordingSaved
@@ -356,6 +382,9 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             android.graphics.PixelFormat.TRANSLUCENT
         )
         params.gravity = android.view.Gravity.TOP or android.view.Gravity.START
+        control.onLayoutChanged = {
+            if (recordingControl === control) placeRecordingControl(control, params, region)
+        }
         val added = runCatching { windows.addView(control, params) }.isSuccess
         if (!added) {
             recorder?.cancel()
@@ -363,7 +392,6 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             return
         }
         recordingControl = control
-        control.start(options.microphone, true)
         control.post { placeRecordingControl(control, params, region) }
         watchRecordingRotation()
     }
@@ -386,7 +414,10 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     }
 
     private fun removeRecordingControl() {
-        recordingControl?.let { runCatching { windows.removeView(it) } }
+        recordingControl?.let {
+            it.stopCountdown()
+            runCatching { windows.removeView(it) }
+        }
         recordingControl = null
         recordingSaved = null
         stopWatchingRecordingRotation()

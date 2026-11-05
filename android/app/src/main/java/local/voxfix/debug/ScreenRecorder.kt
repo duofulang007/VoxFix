@@ -176,6 +176,11 @@ internal class ScreenRecorder(
     private fun finish(cancel: Boolean) {
         if (stopping) return
         stopping = true
+        if (!::handler.isInitialized) {
+            finalized = true
+            outputFile?.delete()
+            return
+        }
         handler.post { finalizeRecording(cancel) }
     }
 

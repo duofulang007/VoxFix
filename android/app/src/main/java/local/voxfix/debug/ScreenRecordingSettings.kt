@@ -20,12 +20,13 @@ internal data class ScreenRecordingOptions(
     val systemAudio: Boolean = true,
     val startDelaySeconds: Int = 0
 ) {
-    enum class Format(val extension: String, val hasAudio: Boolean) {
-        MP4("mp4", true), GIF("gif", false), APNG("apng", false), WEBP("webp", false)
+    enum class Format(val extension: String, val hasAudio: Boolean, val label: String) {
+        MP4("mp4", true, "MP4"), GIF("gif", false, "GIF"), APNG("apng", false, "APNG"), WEBP("webp", false, "WebP")
     }
 
-    enum class Clarity(val maxWidth: Int, val maxHeight: Int) {
-        UHD_4K(3840, 2160), QHD_2K(2560, 1440), FULL_HD(1920, 1080), HD_720(1280, 720), SD_480(854, 480)
+    enum class Clarity(val maxWidth: Int, val maxHeight: Int, val label: String) {
+        UHD_4K(3840, 2160, "4K"), QHD_2K(2560, 1440, "2K"), FULL_HD(1920, 1080, "1080P"),
+        HD_720(1280, 720, "720P"), SD_480(854, 480, "480P")
     }
 
     val audioEnabled: Boolean get() = format.hasAudio && (microphone || systemAudio)
