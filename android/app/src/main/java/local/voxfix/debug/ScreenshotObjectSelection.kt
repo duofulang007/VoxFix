@@ -160,7 +160,8 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
                 val dx=ScreenshotSelection.moveX(selected,canvas,point.x-down.x)
                 val dy=ScreenshotSelection.moveY(selected,canvas,point.y-down.y)
                 liveBox=RectF(box).apply { offset(dx,dy) }; previewRotation=frameRotation
-                original.mapValues { (_,stroke) -> stroke.transformed(0f,0f,dx,dy) }
+                val moved=original.mapValues { (_,stroke) -> stroke.transformed(0f,0f,dx,dy) }
+                moved+boundFollowers(moved)
             }
             Mode.ROTATE -> {
                 val delta=ScreenshotObjectTransform.rotationDelta(center(box),down,point,frameRotation,shift)
@@ -185,7 +186,12 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
                 } else {
                     val reference=world[if(handle==0) 1 else if(handle==world.lastIndex) world.lastIndex-1 else handle-1]
                     world[handle]=if(shift) ScreenshotObjectTransform.lockPoint(reference,target) else target
-                    renderer.withWorldPoints(stroke,world)
+                    // T22: an arrow tip may attach to the element under the pointer. The result
+                    // already carries the projected tip, so nothing else has to move it.
+                    val bound=ScreenshotBindingDrag.dragEndpoint(stroke,world,handle,point,bindables(stroke.id))
+                    if(bound==null) renderer.withWorldPoints(stroke,world)
+                    else renderer.withWorldPoints(
+                        stroke.copy(startBinding=bound.startBinding,endBinding=bound.endBinding),bound.points)
                 }
             }
             Mode.SEGMENT -> original.mapValues { (_,stroke) ->
@@ -218,6 +224,53 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
         if(mode==Mode.RESIZE && original.values.any { it.tool in setOf(ScreenshotDrawingTool.TEXT,ScreenshotDrawingTool.SERIAL,ScreenshotDrawingTool.ARROW,ScreenshotDrawingTool.LINE) }) {
             liveBox=this.box(preview); previewRotation=angle(preview)
         }
+    }
+    /** Bind targets for a dragged arrow: every other element, as rectangle proxies. */
+    private fun bindables(excludedId: Long): List<ScreenshotBindingGeometry.Bindable> {
+        val items=history.items
+        val boxes=HashMap<Long,RectF>(items.size)
+        for(stroke in items) boxes[stroke.id]=renderer.selectionWorldBounds(stroke)
+        return ScreenshotBindingDocument.bindables(
+            items.filter { it.id != excludedId },
+            { stroke -> boxes[stroke.id]?.let {
+                ScreenshotBindingGeometry.Bounds(it.left,it.top,it.right,it.bottom) } },
+            { stroke -> items.indexOfFirst { it.id == stroke.id } })
+    }
+    /**
+     * Arrows pinned to a moved element must follow it even though they are not selected.
+     * Endpoints are resolved in world space so a rotated arrow keeps its own frame.
+     */
+    private fun boundFollowers(changed: Map<Int,ScreenshotDrawingStroke>): Map<Int,ScreenshotDrawingStroke> {
+        if(changed.isEmpty()) return emptyMap()
+        val items=history.items
+        val changedIds=changed.keys.mapNotNull { items.getOrNull(it)?.id }.toSet()
+        if(changedIds.isEmpty()) return emptyMap()
+        val merged=items.mapIndexed { index,stroke -> changed[index] ?: stroke }
+        val boxes=HashMap<Long,RectF>(merged.size)
+        for(stroke in merged) boxes[stroke.id]=renderer.selectionWorldBounds(stroke)
+        val targets=ScreenshotBindingDocument.bindables(merged,
+            { stroke -> boxes[stroke.id]?.let {
+                ScreenshotBindingGeometry.Bounds(it.left,it.top,it.right,it.bottom) } },
+            { stroke -> merged.indexOfFirst { it.id == stroke.id } })
+        val byId=targets.associateBy { it.id }
+        val followers=HashMap<Int,ScreenshotDrawingStroke>()
+        items.forEachIndexed { index,stroke ->
+            if(index in changed || stroke.tool!=ScreenshotDrawingTool.ARROW) return@forEachIndexed
+            val start=stroke.startBinding
+            val end=stroke.endBinding
+            val touched=(start!=null && start.elementId in changedIds) || (end!=null && end.elementId in changedIds)
+            if(!touched) return@forEachIndexed
+            val world=renderer.worldPoints(stroke).toMutableList()
+            val arrow=ScreenshotBindingDocument.arrowOf(stroke).copy(points=world)
+            end?.let { binding -> byId[binding.elementId]?.let { element ->
+                ScreenshotBindingProjection.updateBoundPoint(arrow,ScreenshotEndpointEdge.END,binding,element,byId,false)
+                    ?.let { world[world.lastIndex]=ScreenshotDrawingPoint(it[0].toFloat(),it[1].toFloat()) } } }
+            start?.let { binding -> byId[binding.elementId]?.let { element ->
+                ScreenshotBindingProjection.updateBoundPoint(arrow,ScreenshotEndpointEdge.START,binding,element,byId,false)
+                    ?.let { world[0]=ScreenshotDrawingPoint(it[0].toFloat(),it[1].toFloat()) } } }
+            followers[index]=renderer.withWorldPoints(stroke,world)
+        }
+        return followers
     }
     private fun moveElbow(stroke: ScreenshotDrawingStroke,point: ScreenshotDrawingPoint): ScreenshotDrawingStroke {
         val oldCenter=center(renderer.localBounds(stroke))
