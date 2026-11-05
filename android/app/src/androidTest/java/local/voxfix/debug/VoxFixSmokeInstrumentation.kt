@@ -33,6 +33,12 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
             if (modelCompare == "screenshot-scroll") {
                 output.putString("result", ScreenshotScrollChecks.run(this)); finish(Activity.RESULT_OK,output); return
             }
+            if (modelCompare == "screenshot-recording") {
+                output.putString("result", ScreenshotRecordingChecks.run(this)); finish(Activity.RESULT_OK,output); return
+            }
+            if (modelCompare == "screenshot-recording-probe") {
+                output.putString("result", ScreenshotRecordingChecks.probe(this)); finish(Activity.RESULT_OK,output); return
+            }
             if (modelCompare == "screenshot-smart-tools") {
                 output.putString("result", ScreenshotSmartToolsChecks.run(this)); finish(Activity.RESULT_OK,output); return
             }
@@ -212,6 +218,8 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
                 modelCompare == "screenshot-filter" -> "SCREENSHOT_FILTER_STABILITY_FAIL"
                 modelCompare == "screenshot-smart-tools" -> "SCREENSHOT_SMART_TOOLS_FAIL"
                 modelCompare == "screenshot-scroll" -> "SCREENSHOT_SCROLL_FAIL"
+                modelCompare == "screenshot-recording" -> "SCREENSHOT_RECORDING_FAIL"
+                modelCompare == "screenshot-recording-probe" -> "SCREENSHOT_RECORDING_PROBE_FAIL"
                 modelCompare.startsWith("screenshot-memory") -> "SCREENSHOT_TOOL_MEMORY_FAIL"
                 modelCompare.startsWith("screen-text") -> "SCREEN_TEXT_SMOKE_FAIL"
                 pinyin -> "ARM64_PINYIN_SMOKE_FAIL"

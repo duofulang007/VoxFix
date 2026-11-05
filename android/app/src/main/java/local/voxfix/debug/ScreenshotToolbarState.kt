@@ -80,7 +80,7 @@ data class ScreenshotToolbarState(
         ScreenshotAction.PIN -> "贴图到屏幕"
         ScreenshotAction.SHARE -> "分享图片"
         ScreenshotAction.SCROLL -> "长截屏"
-        ScreenshotAction.RECORD -> "录屏，暂未支持"
+        ScreenshotAction.RECORD -> "录制选区"
         ScreenshotAction.FULL_SCREEN -> "选择整屏"
         ScreenshotAction.RECOGNIZE -> "识别文字"
         ScreenshotAction.SAVE -> "保存截图"

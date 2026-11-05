@@ -95,6 +95,8 @@ class ScreenshotCaptureOverlay(
     internal val isRecapturing get() = recapturing
     internal var onRecaptureRequested: (() -> Unit)? = null
     internal var onScrollRequested: ((Rect, Int, Boolean) -> Unit)? = null
+    /** Starts a region recording for the current rectangular selection. */
+    internal var onRecordRequested: ((Rect) -> Unit)? = null
     private val recaptureDrafts = linkedSetOf<String>()
     private var editing = false
     private var showingOriginal = false
@@ -310,7 +312,9 @@ class ScreenshotCaptureOverlay(
         tooltipText = "长截屏，轻点纵向，长按选择方向"
         setOnLongClickListener { chooseScrollAxis(true); true }
     }
-    private val recordAction = Action(ScreenshotAction.RECORD,R.drawable.snow_record) { showFeedback("录屏暂未支持，入口已保留") }
+    private val recordAction = Action(ScreenshotAction.RECORD,R.drawable.snow_record) { requestRecording() }.apply {
+        tooltipText = "录制选区，点按开始"
+    }
     /** Edit-selection mode: add/subtract parts of the capture area, as Snow Shot's move bar does. */
     private val moveAction = Action(ScreenshotAction.MOVE,R.drawable.snow_move) { toggleMoveMode() }
     private val actions = listOf(full,recognizeAction,saveAction,closeAction,copyAction,eyeAction,editAction,translateAction,undoAction,redoAction,barcodeAction,pinAction,shareAction,scrollAction,recordAction,moveAction)+drawingActions
@@ -470,6 +474,7 @@ class ScreenshotCaptureOverlay(
         undoAction.isEnabled=state.mainEnabled(ScreenshotAction.UNDO) && (if (editing) editedLayer()?.canUndo==true else drawing.history.canUndo)
         redoAction.isEnabled=state.mainEnabled(ScreenshotAction.REDO) && (if (editing) editedLayer()?.canRedo==true else drawing.history.canRedo)
         scrollAction.isEnabled = scrollAction.isEnabled && onScrollRequested != null
+        recordAction.isEnabled = recordAction.isEnabled && onRecordRequested != null
         if(annotationEditor!=null) actions.filter { it.action!=ScreenshotAction.CLOSE }.forEach { it.isEnabled=false }
         rebuildToolbar()
         val working = busy || translating
@@ -699,6 +704,17 @@ class ScreenshotCaptureOverlay(
             }
             show()
         }
+    }
+
+    private fun requestRecording() {
+        val start = onRecordRequested ?: return
+        val crop = picked ?: return
+        if (busy || editing || translating || annotationEditor != null) return
+        if (captureRegion?.let { it.isCustom || it.rects.size != 1 } == true) {
+            showFeedback("录屏需要矩形选区")
+            return
+        }
+        start(Rect(crop))
     }
 
     internal fun setScrollCaptureActive(active: Boolean, message: String? = null) {

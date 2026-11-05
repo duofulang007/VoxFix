@@ -50,7 +50,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     }
     private val screenState = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == Intent.ACTION_SCREEN_OFF) { ScreenshotPins.closeAll(); closeSession(); removeHandle(); TranslateRuntime.releaseNow() } else showHandle()
+            if (intent?.action == Intent.ACTION_SCREEN_OFF) { recorder?.stop(); ScreenshotPins.closeAll(); closeSession(); removeHandle(); TranslateRuntime.releaseNow() } else showHandle()
         }
     }
     private val debuggable get() = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -121,6 +121,9 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         return false
     }
     override fun onDestroy() {
+        recorder?.cancel()
+        recorder = null
+        removeRecordingControl()
         ScreenshotPins.closeAll()
         connected = false
         ScreenshotEditorHost.register(null)
@@ -185,6 +188,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
                                 val editor = ScreenshotCaptureOverlay(this@ScreenTextService,image,::saveScreenshot,::recognizeScreenshot,::updateText,::closeSession,::keepSession,TranslateRuntime,ScreenshotToolMemory(this@ScreenTextService))
                                 editor.onRecaptureRequested = { capture(editor) }
                                 editor.onScrollRequested = { region, top, horizontal -> startScroll(editor,region,top,horizontal) }
+                                editor.onRecordRequested = { region -> startRecording(editor, region) }
                                 screenshot = editor
                                 editor.enableSmartSelection(snapshot)
                                 editor.show(windows)
@@ -240,6 +244,184 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         scrolling = next
         listenToScrollEvents(targetWindow)
         next.start()
+    }
+
+    // ---- 录屏（T28）：选区录制、暂停恢复、成品进相册 ----
+
+    private val recordingPreferences by lazy { ScreenRecordingPreferences(this) }
+    private var recorder: ScreenRecorder? = null
+    private var recordingControl: ScreenRecordingControl? = null
+    private var recordingSaved: ScreenRecordingLibrary.Saved? = null
+    private var recordingRotation = -1
+    private var recordingBarWarned = false
+    private var recordingDisplay: android.hardware.display.DisplayManager.DisplayListener? = null
+
+    private fun startRecording(editor: ScreenshotCaptureOverlay, region: Rect) {
+        if (screenshot !== editor || busy || ocrInFlight || scrolling != null || recorder != null) return
+        val image = frame ?: return
+        if (region.width() < 16 || region.height() < 16) {
+            editor.setScrollCaptureActive(false, "录制区域太小")
+            return
+        }
+        val options = recordingPreferences.load()
+        busy = true
+        editor.setScrollCaptureActive(true)
+        ScreenshotProjection.request(this, "录屏", { projection, stop ->
+            beginRecording(projection, stop, Rect(region), image.width, image.height, options)
+        }, { message ->
+            busy = false
+            if (screenshot === editor) editor.setScrollCaptureActive(false, message)
+            else Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        }, microphone = options.microphone)
+    }
+
+    private fun beginRecording(projection: android.media.projection.MediaProjection, stopProjection: () -> Unit,
+                               region: Rect, screenWidth: Int, screenHeight: Int, options: ScreenRecordingOptions) {
+        val (width, height) = ScreenRecordingGeometry.outputSize(region.width(), region.height(), options.clarity)
+        val config = ScreenRecorder.Config(
+            crop = region, screenWidth = screenWidth, screenHeight = screenHeight,
+            outputWidth = width, outputHeight = height,
+            frameRate = options.frameRate,
+            bitrate = ScreenRecordingGeometry.bitrate(width, height, options.frameRate, options.quality),
+            microphone = options.microphone,
+            systemAudio = options.systemAudio && !options.microphone
+        )
+        val active = ScreenRecorder(this, projection, config) { file, duration, message ->
+            main.post { finishRecording(file, duration, message, stopProjection) }
+        }
+        recorder = active
+        closeSession()
+        busy = true
+        screenshotWorker.execute {
+            val error = active.start()
+            main.post {
+                if (error != null) {
+                    recorder = null
+                    busy = false
+                    runCatching(stopProjection)
+                    Toast.makeText(this, error, Toast.LENGTH_LONG).show()
+                    showHandle()
+                } else showRecordingControl(region, options)
+            }
+        }
+    }
+
+    private fun finishRecording(file: java.io.File?, duration: Long, message: String?, stopProjection: () -> Unit) {
+        recorder = null
+        busy = false
+        runCatching(stopProjection)
+        stopWatchingRecordingRotation()
+        if (file == null) {
+            recordingControl?.showFailure(message ?: "录屏已取消")
+            message?.let { Toast.makeText(this, it, Toast.LENGTH_SHORT).show() }
+        } else {
+            val saved = ScreenRecordingLibrary.save(this, file)
+            if (saved == null) {
+                recordingControl?.showFailure("录屏保存失败")
+                Toast.makeText(this, "录屏保存失败，请检查可用空间", Toast.LENGTH_SHORT).show()
+            } else {
+                recordingSaved = saved
+                recordingControl?.showSaved(saved.displayPath, saved.uri)
+                Toast.makeText(this, "已保存录屏 ${ScreenRecordingGeometry.formatDuration(duration)}", Toast.LENGTH_SHORT).show()
+            }
+        }
+        showHandle()
+    }
+
+    private fun showRecordingControl(region: Rect, options: ScreenRecordingOptions) {
+        if (recordingControl != null) return
+        recordingBarWarned = false
+        val control = ScreenRecordingControl(this)
+        control.onStop = { recorder?.stop() }
+        control.onCancel = { recorder?.cancel() }
+        control.onTogglePause = { paused -> if (paused) recorder?.pause() else recorder?.resume() }
+        control.onToggleMicrophone = {
+            val updated = recordingPreferences.load().let { it.copy(microphone = !it.microphone) }
+            recordingPreferences.save(updated)
+            control.setMicrophone(updated.microphone, true)
+            Toast.makeText(this,
+                if (updated.microphone) "下次录屏使用麦克风" else "下次录屏使用系统声音",
+                Toast.LENGTH_SHORT).show()
+        }
+        control.onOpenSaved = {
+            val saved = recordingSaved
+            if (saved == null || !ScreenRecordingLibrary.open(this, saved.uri, saved.displayPath))
+                Toast.makeText(this, "找不到录屏文件", Toast.LENGTH_SHORT).show()
+        }
+        control.onReleased = { removeRecordingControl() }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            android.graphics.PixelFormat.TRANSLUCENT
+        )
+        params.gravity = android.view.Gravity.TOP or android.view.Gravity.START
+        val added = runCatching { windows.addView(control, params) }.isSuccess
+        if (!added) {
+            recorder?.cancel()
+            Toast.makeText(this, "无法显示录屏控制条", Toast.LENGTH_SHORT).show()
+            return
+        }
+        recordingControl = control
+        control.start(options.microphone, true)
+        control.post { placeRecordingControl(control, params, region) }
+        watchRecordingRotation()
+    }
+
+    private fun placeRecordingControl(control: ScreenRecordingControl, params: WindowManager.LayoutParams, region: Rect) {
+        val metrics = resources.displayMetrics
+        val barWidth = control.width.takeIf { it > 0 } ?: control.measuredWidth
+        val barHeight = control.height.takeIf { it > 0 } ?: control.measuredHeight
+        val gap = (8 * metrics.density).toInt()
+        params.x = (region.centerX() - barWidth / 2).coerceIn(gap, maxOf(gap, metrics.widthPixels - barWidth - gap))
+        var y = region.bottom + gap
+        if (y + barHeight > metrics.heightPixels - gap) y = region.top - barHeight - gap
+        if (y < gap) y = (metrics.heightPixels - barHeight - gap).coerceAtLeast(gap)
+        params.y = y
+        runCatching { windows.updateViewLayout(control, params) }
+        if (!recordingBarWarned && Rect(params.x, params.y, params.x + barWidth, params.y + barHeight).intersect(Rect(region))) {
+            recordingBarWarned = true
+            Toast.makeText(this, "选区外没有空间，录屏控制条会进入画面", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun removeRecordingControl() {
+        recordingControl?.let { runCatching { windows.removeView(it) } }
+        recordingControl = null
+        recordingSaved = null
+        stopWatchingRecordingRotation()
+    }
+
+    private fun watchRecordingRotation() {
+        stopWatchingRecordingRotation()
+        val manager = getSystemService(android.hardware.display.DisplayManager::class.java) ?: return
+        @Suppress("DEPRECATION")
+        recordingRotation = windows.defaultDisplay?.rotation ?: -1
+        val listener = object : android.hardware.display.DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) {}
+            override fun onDisplayRemoved(displayId: Int) {}
+            override fun onDisplayChanged(displayId: Int) {
+                if (displayId != Display.DEFAULT_DISPLAY || recorder == null) return
+                @Suppress("DEPRECATION")
+                val rotation = windows.defaultDisplay?.rotation ?: return
+                if (rotation == recordingRotation) return
+                recordingRotation = rotation
+                Toast.makeText(this@ScreenTextService, "屏幕已旋转，录屏结束并保存", Toast.LENGTH_SHORT).show()
+                recorder?.stop()
+            }
+        }
+        recordingDisplay = listener
+        runCatching { manager.registerDisplayListener(listener, main) }
+    }
+
+    private fun stopWatchingRecordingRotation() {
+        recordingDisplay?.let { listener ->
+            runCatching {
+                getSystemService(android.hardware.display.DisplayManager::class.java)
+                    ?.unregisterDisplayListener(listener)
+            }
+        }
+        recordingDisplay = null
     }
 
     private fun listenToScrollEvents(windowId: Int?) {
