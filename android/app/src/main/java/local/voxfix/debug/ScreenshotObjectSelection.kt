@@ -5,7 +5,8 @@ import kotlin.math.*
 
 /** T22 selection transaction; coordinates are image pixels, never view pixels. */
 internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
-    private val renderer: ScreenshotDrawingRenderer,private val unit: ()->Float,private val slop: ()->Float) {
+    private val renderer: ScreenshotDrawingRenderer,private val unit: ()->Float,private val slop: ()->Float,
+    private val snap: ScreenshotSnapConfig? = null) {
     private var ids: Set<Long> = emptySet()
     val indices: Set<Int> get() {
         val byId=history.items.mapIndexed { index,stroke -> stroke.id to index }.toMap()
@@ -32,6 +33,9 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
     private var elbowRoute: ScreenshotElbowSegment.Route?=null
     private var moving=false
     private var additive=false
+    /** Snap guide lines from the latest move/resize preview (empty when snapping is off). */
+    var snapGuides: List<ScreenshotObjectSnapping.SnapGuide> = emptyList()
+        private set
     private enum class Mode { NONE, MARQUEE, MOVE, RESIZE, ROTATE, POINT, SEGMENT }
 
     fun select(index: Int?) {
@@ -157,10 +161,17 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
             Mode.MOVE -> {
                 val selected=SelBox.of(box)
                 val canvas=SelBox(0f,0f,imageWidth.toFloat(),imageHeight.toFloat())
-                val dx=ScreenshotSelection.moveX(selected,canvas,point.x-down.x)
-                val dy=ScreenshotSelection.moveY(selected,canvas,point.y-down.y)
-                liveBox=RectF(box).apply { offset(dx,dy) }; previewRotation=frameRotation
-                val moved=original.mapValues { (_,stroke) -> stroke.transformed(0f,0f,dx,dy) }
+                var dx=ScreenshotSelection.moveX(selected,canvas,point.x-down.x).toDouble()
+                var dy=ScreenshotSelection.moveY(selected,canvas,point.y-down.y).toDouble()
+                // T22: resolve_move_snap — grid snaps the translated min corner, object
+                // snapping aligns the translated selection rect to the other elements.
+                val applied=ScreenshotSnapApplication.moveSnap(
+                    snap,false,ScreenshotSnapping.DrawRect(box.left.toDouble(),box.top.toDouble(),
+                        box.right.toDouble(),box.bottom.toDouble()),dx,dy,snapReferences())
+                dx=applied.dx; dy=applied.dy; snapGuides=applied.guides
+                val fx=dx.toFloat(); val fy=dy.toFloat()
+                liveBox=RectF(box).apply { offset(fx,fy) }; previewRotation=frameRotation
+                val moved=original.mapValues { (_,stroke) -> stroke.transformed(0f,0f,fx,fy) }
                 moved+boundFollowers(moved)
             }
             Mode.ROTATE -> {
@@ -202,23 +213,7 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
                     if(inserted===points) stroke else renderer.withWorldPoints(stroke,inserted)
                 }
             }
-            Mode.RESIZE -> {
-                val h=resizeHandle!!
-                val p=local(point,box,frameRotation); val start=local(down,box,frameRotation)
-                val members=original.values.map { it to SelBox.of(renderer.selectionBounds(it)) }
-                val frame=SelBox.of(box)
-                val g=ScreenshotSelectionResize.geometry(frame,h,ScreenshotDrawingPoint(p.x-start.x,p.y-start.y),shift,alt,members,unit())
-                liveBox=ScreenshotSelectionResize.frame(frame,frameRotation,g).let { RectF(it.left,it.top,it.right,it.bottom) }
-                previewRotation=frameRotation
-                original.mapValues { (_,stroke) ->
-                    when {
-                        stroke.tool==ScreenshotDrawingTool.ARROW || stroke.tool==ScreenshotDrawingTool.LINE ->
-                            renderer.withWorldPoints(stroke,renderer.worldPoints(stroke).map { ScreenshotSelectionResize.worldPoint(it,frame,frameRotation,g) })
-                        original.size==1 && stroke.tool==ScreenshotDrawingTool.TEXT -> resizeText(stroke,h,g,alt)
-                        else -> ScreenshotSelectionResize.member(stroke,SelBox.of(renderer.selectionBounds(stroke)),frame,frameRotation,g)
-                    }
-                }
-            }
+            Mode.RESIZE -> resizeStrokes(point,shift,alt,true)
             else -> emptyMap()
         }
         // Resizing or rotating a shape moves the elements an arrow is pinned to, so those
@@ -227,6 +222,72 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
         if(mode==Mode.RESIZE && original.values.any { it.tool in setOf(ScreenshotDrawingTool.TEXT,ScreenshotDrawingTool.SERIAL,ScreenshotDrawingTool.ARROW,ScreenshotDrawingTool.LINE) }) {
             liveBox=this.box(preview); previewRotation=angle(preview)
         }
+    }
+    /**
+     * Resize preview with the upstream snap two-step: compute the unsnapped geometry, snap
+     * the resized frame, then re-drive the resize from the corrected pointer so only the
+     * dragged edges shift (`resolve_resize_snap` feeds the correction back into the handle).
+     */
+    private fun resizeStrokes(point: ScreenshotDrawingPoint,shift: Boolean,alt: Boolean,allowSnap: Boolean): Map<Int,ScreenshotDrawingStroke> {
+        val box=originalBox
+        val h=resizeHandle!!
+        val p=local(point,box,frameRotation); val start=local(down,box,frameRotation)
+        val members=original.values.map { it to SelBox.of(renderer.selectionBounds(it)) }
+        val frame=SelBox.of(box)
+        val g=ScreenshotSelectionResize.geometry(frame,h,ScreenshotDrawingPoint(p.x-start.x,p.y-start.y),shift,alt,members,unit())
+        val resized=ScreenshotSelectionResize.frame(frame,frameRotation,g)
+        liveBox=RectF(resized.left,resized.top,resized.right,resized.bottom)
+        previewRotation=frameRotation
+        val strokes=original.mapValues { (_,stroke) ->
+            when {
+                stroke.tool==ScreenshotDrawingTool.ARROW || stroke.tool==ScreenshotDrawingTool.LINE ->
+                    renderer.withWorldPoints(stroke,renderer.worldPoints(stroke).map { ScreenshotSelectionResize.worldPoint(it,frame,frameRotation,g) })
+                original.size==1 && stroke.tool==ScreenshotDrawingTool.TEXT -> resizeText(stroke,h,g,alt)
+                else -> ScreenshotSelectionResize.member(stroke,SelBox.of(renderer.selectionBounds(stroke)),frame,frameRotation,g)
+            }
+        }
+        if(!allowSnap || snap==null) return strokes
+        val unsnapped=ScreenshotSnapping.DrawRect(resized.left.toDouble(),resized.top.toDouble(),
+            resized.right.toDouble(),resized.bottom.toDouble())
+        // dragged_x_sign = handle.x_sign * scale_x (selection_edit.rs)
+        val signX=h.x.toDouble()*sign(g.sx.toDouble())
+        val signY=h.y.toDouble()*sign(g.sy.toDouble())
+        val applied=ScreenshotSnapApplication.resizeSnap(snap,false,shift,unsnapped,signX,signY,snapReferences())
+        snapGuides=applied.guides
+        return if(applied.dx==0.0 && applied.dy==0.0) strokes
+        else resizeStrokes(ScreenshotDrawingPoint(
+            point.x+if(signX!=0.0) applied.dx.toFloat() else 0f,
+            point.y+if(signY!=0.0) applied.dy.toFloat() else 0f),shift,alt,false)
+    }
+    /**
+     * Snap guide lines: solid for point snaps, dashed for gaps, in the default
+     * `SnapConfig` line colour #FF6B6B at line width 1. Marker rendering is not ported
+     * yet — the upstream marker style has not been evidenced (see T22 doc).
+     */
+    private fun drawSnapGuides(canvas: Canvas) {
+        if(snapGuides.isEmpty()) return
+        val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color=0xFFFF6B6B.toInt(); strokeWidth=unit(); style=Paint.Style.STROKE
+        }
+        for(guide in snapGuides) {
+            val dashed=guide.kind==ScreenshotObjectSnapping.GuideKind.GAP
+            paint.pathEffect=if(dashed) DashPathEffect(floatArrayOf(4f*unit(),4f*unit()),0f) else null
+            canvas.drawLine(guide.start.x.toFloat(),guide.start.y.toFloat(),
+                guide.end.x.toFloat(),guide.end.y.toFloat(),paint)
+        }
+        paint.pathEffect=null
+    }
+    /** `visible_reference_rects`: other elements, filter overlays excluded. */
+    private fun snapReferences(): List<ScreenshotSnapping.DrawRect> {
+        val selected=ids
+        val result=ArrayList<ScreenshotSnapping.DrawRect>(history.items.size)
+        for(stroke in history.items) {
+            if(stroke.id in selected || stroke.tool==ScreenshotDrawingTool.FILTER) continue
+            val bounds=renderer.selectionWorldBounds(stroke)
+            result+=ScreenshotSnapping.DrawRect(bounds.left.toDouble(),bounds.top.toDouble(),
+                bounds.right.toDouble(),bounds.bottom.toDouble())
+        }
+        return result
     }
     /** Bind targets for a dragged arrow: every other element, as rectangle proxies. */
     private fun bindables(excludedId: Long): List<ScreenshotBindingGeometry.Bindable> {
@@ -332,9 +393,10 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
         reset()
     }
     fun cancel() { if(mode==Mode.MARQUEE) ids=baseIds; reset() }
-    private fun reset() { preview=emptyMap(); original=emptyMap(); liveBox=null; mode=Mode.NONE; handle=-1; resizeHandle=null; segment=null; elbowRoute=null; moving=false }
+    private fun reset() { preview=emptyMap(); original=emptyMap(); liveBox=null; mode=Mode.NONE; handle=-1; resizeHandle=null; segment=null; elbowRoute=null; moving=false; snapGuides=emptyList() }
     fun draw(canvas: Canvas) {
         val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=0xFF4096FF.toInt(); strokeWidth=unit(); style=Paint.Style.STROKE }
+        drawSnapGuides(canvas)
         if(mode==Mode.MARQUEE && moving) {
             val rect=RectF(min(down.x,pointer.x),min(down.y,pointer.y),max(down.x,pointer.x),max(down.y,pointer.y))
             paint.style=Paint.Style.FILL; paint.color=0x334096FF; canvas.drawRect(rect,paint)

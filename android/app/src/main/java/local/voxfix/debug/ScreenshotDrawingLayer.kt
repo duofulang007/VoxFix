@@ -91,7 +91,9 @@ class ScreenshotDrawingLayer(context: Context,private val image: Bitmap,private 
     val fontUnit get()=savedFontUnit.takeIf { it>0 } ?: (resources.displayMetrics.scaledDensity*image.width/(width.takeIf { it>0 } ?: image.width))
     private val unit get()=resources.displayMetrics.density*image.width/(width.takeIf { it>0 } ?: image.width)
     private val renderer=ScreenshotDrawingRenderer(image) { fontUnit }
-    private val selection by lazy { ScreenshotObjectSelection(history,renderer,{ unit },{ slop }) }
+    private val snapConfig by lazy { ScreenshotSnapConfig.fromPreferences(
+        context.getSharedPreferences("screenshot-snap-config",android.content.Context.MODE_PRIVATE)) }
+    private val selection by lazy { ScreenshotObjectSelection(history,renderer,{ unit },{ slop },snapConfig) }
     private val penFeedback by lazy { ScreenshotPenFeedback(this,image.width,image.height) }
 
     init { contentDescription="截图绘图区域"; importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO }
