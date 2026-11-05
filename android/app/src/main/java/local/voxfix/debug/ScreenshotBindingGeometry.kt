@@ -46,7 +46,7 @@ internal object ScreenshotBindingGeometry {
      * `Option<bool>` tri-state: null means "engine default", which is enabled/opaque.
      */
     data class Bindable(
-        val id: Int,
+        val id: Long,
         val shape: Shape,
         val x: Float,
         val y: Float,

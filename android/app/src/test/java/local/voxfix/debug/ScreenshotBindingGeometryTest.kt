@@ -20,7 +20,7 @@ class ScreenshotBindingGeometryTest {
     private fun p(x: Double, y: Double) = doubleArrayOf(x, y)
 
     private fun rect(
-        id: Int = 1, x: Float = 0f, y: Float = 0f, w: Float = 100f, h: Float = 50f,
+        id: Long = 1L, x: Float = 0f, y: Float = 0f, w: Float = 100f, h: Float = 50f,
         angle: Float = 0f, strokeWidth: Float = 0f, zIndex: Double? = null,
         opaque: Boolean? = null, interior: Boolean? = null
     ) = Bindable(
@@ -124,11 +124,11 @@ class ScreenshotBindingGeometryTest {
         val a = rect(id = 1, zIndex = 5.0)
         val b = rect(id = 2, zIndex = 1.0)
         // explicit z wins over paint order: b (z=1) is below a (z=5)
-        assertEquals(listOf(2, 1), ScreenshotBindingGeometry.sortByZIndex(listOf(a, b)).map { it.id })
-        assertEquals(listOf(2, 1), ScreenshotBindingGeometry.sortByZIndex(listOf(b, a)).map { it.id })
+        assertEquals(listOf(2L, 1L), ScreenshotBindingGeometry.sortByZIndex(listOf(a, b)).map { it.id })
+        assertEquals(listOf(2L, 1L), ScreenshotBindingGeometry.sortByZIndex(listOf(b, a)).map { it.id })
 
         val plain = listOf(rect(id = 7), rect(id = 8))
-        assertEquals(listOf(7, 8), ScreenshotBindingGeometry.sortByZIndex(plain).map { it.id })
+        assertEquals(listOf(7L, 8L), ScreenshotBindingGeometry.sortByZIndex(plain).map { it.id })
     }
 
     @Test
@@ -155,7 +155,7 @@ class ScreenshotBindingGeometryTest {
         val big = rect(id = 1, w = 200f, h = 200f)
         val small = rect(id = 2, x = 10f, y = 10f, w = 20f, h = 20f)
         val hit = ScreenshotBindingGeometry.hoveredBindable(p(20.0, 20.0), listOf(big, small), 15.0)
-        assertEquals(2, hit?.id)
+        assertEquals(2L, hit?.id)
     }
 
     @Test
@@ -163,9 +163,9 @@ class ScreenshotBindingGeometryTest {
         val behind = rect(id = 1, w = 200f, h = 200f)
         val front = rect(id = 2, x = 10f, y = 10f, w = 20f, h = 20f, opaque = true)
         val hit = ScreenshotBindingGeometry.hoveredBindable(p(15.0, 15.0), listOf(behind, front), 15.0)
-        assertEquals(2, hit?.id)
+        assertEquals(2L, hit?.id)
         assertEquals(
-            listOf(1, 2),
+            listOf(1L, 2L),
             ScreenshotBindingGeometry.bindablesOverPoint(p(15.0, 15.0), listOf(behind, front), 15.0).map { it.id }
         )
     }

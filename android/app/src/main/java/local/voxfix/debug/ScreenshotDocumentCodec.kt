@@ -51,6 +51,10 @@ internal object ScreenshotDocumentCodec {
             if (stroke.fixedElbowSegments.isNotEmpty()) {
                 objectRow.put("fixedElbowSegments", JSONArray(stroke.fixedElbowSegments.sorted()))
             }
+            // Binding keys are omitted for free endpoints, so a pre-T22 project re-encodes byte for
+            // byte and an older reader simply sees no binding.
+            stroke.startBinding?.let { objectRow.put("startBinding", bindingRow(it)) }
+            stroke.endBinding?.let { objectRow.put("endBinding", bindingRow(it)) }
             objects.put(objectRow)
         }
         val root = JSONObject()
@@ -156,12 +160,22 @@ internal object ScreenshotDocumentCodec {
                 row.optDouble("textHeight", 0.0).toFloat(), id,
                 smooth = row.optBoolean("smooth", false), closedPath = row.optBoolean("closedPath", false),
                 boundTextId = row.optLong("boundTextId",0L), rotation=ScreenshotObjectTransform.normalize(rotation),
-                fixedElbowSegments = fixedSegments))
+                fixedElbowSegments = fixedSegments,
+                startBinding = readBinding(row, "startBinding"), endBinding = readBinding(row, "endBinding")))
         }
         val byId=objects.associateBy { it.id }
         if(objects.any { it.boundTextId<0 || (it.boundTextId!=0L &&
                 (it.tool!=ScreenshotDrawingTool.SERIAL || byId[it.boundTextId]?.tool!=ScreenshotDrawingTool.TEXT)) })
             throw FormatException("工程序号文字关联无效")
+        // Only arrows carry bindings, and they must point at another live, non-arrow object.
+        if (objects.any { stroke ->
+                val bindings = listOfNotNull(stroke.startBinding, stroke.endBinding)
+                bindings.isNotEmpty() && (stroke.tool != ScreenshotDrawingTool.ARROW || bindings.any { binding ->
+                    binding.elementId == stroke.id ||
+                        (byId[binding.elementId]?.tool ?: ScreenshotDrawingTool.ARROW) == ScreenshotDrawingTool.ARROW
+                })
+            }
+        ) throw FormatException("工程箭头绑定无效")
         ScreenshotIds.above(maxId)
         val text = root.optJSONObject("text")?.let { value ->
             val mode = runCatching { ScreenshotTextMode.valueOf(value.optString("mode", "ORIGINAL")) }
@@ -202,6 +216,21 @@ internal object ScreenshotDocumentCodec {
                 mark.optDouble("opacity", .16).toFloat(), template, mark.optLong("appliedAt", 0L)).normalized()
         }
         return ScreenshotDocument(width, height, ScreenshotDocRect(left, top, right, bottom), objects, text,regions,regionOperands,unit("drawingUnit"),unit("fontUnit"),watermark)
+    }
+
+    private fun bindingRow(binding: ScreenshotFixedPointBinding) = JSONArray()
+        .put(binding.elementId).put(binding.mode.name).put(binding.fixedX).put(binding.fixedY)
+
+    /** A malformed binding is a corrupt project, not something to silently drop. */
+    private fun readBinding(row: JSONObject, key: String): ScreenshotFixedPointBinding? {
+        if (!row.has(key)) return null
+        val values = row.optJSONArray(key) ?: throw FormatException("工程箭头绑定无效")
+        if (values.length() != 4) throw FormatException("工程箭头绑定无效")
+        val elementId = values.optLong(0, -1L)
+        val fixedX = values.optDouble(2, Double.NaN)
+        val fixedY = values.optDouble(3, Double.NaN)
+        return ScreenshotBindingDocument.parseBinding(elementId, values.optString(1, ""), fixedX, fixedY)
+            ?: throw FormatException("工程箭头绑定无效")
     }
 
     private fun readBlocks(rows: JSONArray?): List<ScreenshotTextBlock> {

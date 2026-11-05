@@ -64,7 +64,13 @@ data class ScreenshotDrawingStroke(
     /** Radians around the unrotated object's centre; absent in legacy projects. */
     val rotation: Float = 0f,
     /** Fixed elbow segments use the index of their end vertex. */
-    val fixedElbowSegments: Set<Int> = emptySet()
+    val fixedElbowSegments: Set<Int> = emptySet(),
+    /**
+     * T22 arrow binding: the element each endpoint is pinned to, with the ratio inside it.
+     * Null means a free endpoint, which is also what every project written before T22 has.
+     */
+    val startBinding: ScreenshotFixedPointBinding? = null,
+    val endBinding: ScreenshotFixedPointBinding? = null
 ) {
     // Identity is not appearance: two independently built strokes that draw the same are equal, so
     // existing comparisons keep working while the document still tracks each object separately.
@@ -75,7 +81,8 @@ data class ScreenshotDrawingStroke(
             style == other.style && text == other.text && number == other.number && textWidth == other.textWidth &&
             fontScale == other.fontScale && textHeight == other.textHeight &&
             smooth == other.smooth && closedPath == other.closedPath && boundTextId == other.boundTextId &&
-            rotation == other.rotation && fixedElbowSegments == other.fixedElbowSegments
+            rotation == other.rotation && fixedElbowSegments == other.fixedElbowSegments &&
+            startBinding == other.startBinding && endBinding == other.endBinding
     }
     override fun hashCode(): Int {
         var result = tool.hashCode()
@@ -92,7 +99,9 @@ data class ScreenshotDrawingStroke(
         result = 31 * result + closedPath.hashCode()
         result = 31 * result + boundTextId.hashCode()
         result = 31 * result + rotation.hashCode()
-        return 31 * result + fixedElbowSegments.hashCode()
+        result = 31 * result + fixedElbowSegments.hashCode()
+        result = 31 * result + (startBinding?.hashCode() ?: 0)
+        return 31 * result + (endBinding?.hashCode() ?: 0)
     }
 }
 
