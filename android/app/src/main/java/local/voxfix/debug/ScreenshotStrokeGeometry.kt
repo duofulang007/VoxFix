@@ -17,7 +17,6 @@ import kotlin.math.sqrt
  */
 internal object ScreenshotStrokeGeometry {
     const val MAX_PENDING = 128
-    private const val PENDING_OVERLAP = 4
 
     /** Round caps need a real segment for click-only dots; the original uses the same 1e-3 length. */
     const val DOT_SEGMENT = 1e-3

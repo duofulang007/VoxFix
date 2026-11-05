@@ -49,7 +49,6 @@ internal class ScreenshotColorPanel(context: Context, initial: Int, private val 
     private val hue = Plane(1)
     private val transparency = Plane(2)
     private val sampler = ImageView(context)
-    private var currentPattern = pattern
 
     private fun surface(): GradientDrawable = GradientDrawable().apply {
         setColor(FIELD); cornerRadius = dp(4).toFloat(); setStroke(dp(1).coerceAtLeast(1), FIELD_BORDER)

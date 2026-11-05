@@ -148,7 +148,6 @@ internal class VoiceDictionary(entries: List<Entry> = emptyList()) {
 internal object VoiceDictionaryStore {
     const val NAME = "voice-dictionary.json"
     const val ASSET = "dictionary/desktop-v1.json"
-    private const val SEED = "voice-dictionary-seeded"
 
     @Volatile private var cachedFile: File? = null
     @Volatile private var cachedStamp = -1L

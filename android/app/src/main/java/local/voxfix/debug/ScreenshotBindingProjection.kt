@@ -26,7 +26,6 @@ internal object ScreenshotBindingProjection {
     private const val OFFSET_DIAGONAL = OFFSET * 0.707
     private const val CORNER_RADIUS = 0.01
     private const val DIAMOND_SAMPLE_STEPS = 50.0
-    private val UNIT_HALF = doubleArrayOf(0.5, 0.5)
 
     // ---- side table (hit_test_side_midpoint.rs) ---------------------------------
 
