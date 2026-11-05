@@ -11,6 +11,7 @@ android/screenTextUiTest/build/
 键盘试用页.html
 preview/pinyin-data.json
 preview/pinyin-lite.json
+preview/pinyin-initials.json
 preview/phrase-packs.json
 *.png
 *.jpg
