@@ -3,12 +3,15 @@ package local.voxfix.debug
 import local.voxfix.debug.ScreenshotStyleProperty.*
 import android.content.Context
 import android.graphics.*
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.widget.GridLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.PopupWindow
 import android.widget.TextView
 import kotlin.math.roundToInt
 
@@ -17,8 +20,10 @@ import kotlin.math.roundToInt
  * set, plus the shared stroke colour/pattern/width editors
  * (`screenshottoolpalettestylecontrols.cpp` 1651–1717).
  *
- * The three background-filled outline heads are not offered yet: they need a document background
- * colour that a screenshot over an arbitrary photo does not have.
+ * Each end is one trigger carrying the current head's upstream icon; its options are the same 14
+ * files in a 4-column popover grid (`ScreenshotToolPaletteIconOptionEditor`, gridColumnCount 4).
+ * The three background-filled outline heads still punch through to the screenshot instead of a
+ * document background colour, which a screenshot does not have.
  */
 internal class ScreenshotArrowControls(context: Context,private val drawing: ScreenshotDrawingLayer) : LinearLayout(context) {
     private val style get()=drawing.inspectedStyle
@@ -26,6 +31,10 @@ internal class ScreenshotArrowControls(context: Context,private val drawing: Scr
     private fun mixed(vararg p: ScreenshotStyleProperty)=p.any { it in mixedProperties }
     private val density=resources.displayMetrics.density
     private fun dp(value: Int)=(value*density).toInt()
+    private var picker: PopupWindow?=null
+    /** The last built head grid, for the device suite: a popup needs a window token to show. */
+    internal var pickerPanel: View?=null
+        private set
     private fun change(vararg properties: ScreenshotStyleProperty,block:(ScreenshotDrawingStyle)->ScreenshotDrawingStyle)=drawing.applyStyle(block(style),*properties)
     private val labels=mapOf(
         ScreenshotArrowhead.NONE to "无",
@@ -70,17 +79,77 @@ internal class ScreenshotArrowControls(context: Context,private val drawing: Scr
         addView(HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled=false; addView(row) },LayoutParams(-1,dp(40)))
         return row
     }
+    /**
+     * `ScreenshotToolPaletteIconOptionEditor` for one end: the row shows the current head's icon and
+     * a tap opens the upstream 4×4 option grid. The original opens it on hover; a touch screen has
+     * no hover, so the trigger toggles it and the grid closes on pick or on outside touch.
+     */
     private fun heads(atStart: Boolean) {
         val row=group()
-        row.addView(TextView(context).apply { text=if(atStart) "起点" else "终点"; textSize=12f; setTextColor(0xFF9A9A9E.toInt()) },
+        val role=if(atStart) "起点" else "终点"
+        row.addView(TextView(context).apply { text=role; textSize=12f; setTextColor(0xFF9A9A9E.toInt()) },
             LayoutParams(dp(34),dp(32)))
-        val current=if(atStart) style.startHead else style.endHead
-        ScreenshotArrowhead.values().forEach { head ->
-            row.addView(chip((if(atStart) "起点" else "终点")+(labels[head] ?: head.name),!mixed(if(atStart) START_HEAD else END_HEAD) && current==head) {
-                change(if(atStart) START_HEAD else END_HEAD) { if(atStart) it.copy(startHead=head) else it.copy(endHead=head) }
-            },LayoutParams(dp(56),dp(32)).apply { marginStart=dp(4) })
+        val isMixed={ mixed(if(atStart) START_HEAD else END_HEAD) }
+        val trigger=object : View(context) {
+            private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
+            override fun onDraw(canvas: Canvas) {
+                canvas.save(); canvas.scale(density,density)
+                val head=if(atStart) style.startHead else style.endHead
+                ScreenshotArrowGlyphs.draw(canvas,ScreenshotArrowGlyphs.head(head),RectF(2f,5f,26f,19f),
+                    0xFFFFFFFF.toInt(),atStart,paint)
+                if(isMixed()) ScreenshotMixedStyleMark.draw(canvas,paint)
+                canvas.restore()
+            }
+        }.apply {
+            contentDescription="${role}箭头样式"
+            background=GradientDrawable().apply {
+                setColor(Color.TRANSPARENT); cornerRadius=dp(6).toFloat()
+                setStroke(dp(1).coerceAtLeast(1),0xFF424242.toInt())
+            }
+            isFocusable=true; isClickable=true
+            setOnClickListener { openHeadPicker(it,atStart) }
         }
+        addCell(row,trigger)
     }
+
+    /** The popup content: `gridColumnCount = 4`, 4px option spacing, active option outlined. */
+    private fun headGrid(atStart: Boolean,onPick:(ScreenshotArrowhead)->Unit): View {
+        val grid=GridLayout(context).apply { columnCount=4 }
+        val current=if(atStart) style.startHead else style.endHead
+        val selectionMixed=mixed(if(atStart) START_HEAD else END_HEAD)
+        ScreenshotArrowGlyphs.PANEL_HEADS.forEach { head ->
+            val view=cell((if(atStart) "起点" else "终点")+(labels[head] ?: head.name),
+                !selectionMixed && current==head,draw={ canvas,paint ->
+                    ScreenshotArrowGlyphs.draw(canvas,ScreenshotArrowGlyphs.head(head),RectF(2f,5f,26f,19f),
+                        0xFFFFFFFF.toInt(),atStart,paint)
+                }) { onPick(head) }
+            grid.addView(view,GridLayout.LayoutParams().apply {
+                width=dp(32); height=dp(32); setMargins(dp(2),dp(2),dp(2),dp(2))
+            })
+        }
+        return grid
+    }
+
+    /** Builds the panel before showing it, so a detached trigger cannot throw on a stale token. */
+    private fun openHeadPicker(anchor: View,atStart: Boolean) {
+        val panel=LinearLayout(context).apply {
+            orientation=VERTICAL
+            setPadding(dp(8),dp(8),dp(8),dp(8))
+            // Matches `ScreenshotColorPanel`s dark surface so both popovers read the same.
+            background=GradientDrawable().apply { setColor(0xFF1F1F1F.toInt()); cornerRadius=dp(8).toFloat() }
+            addView(headGrid(atStart) { head ->
+                change(if(atStart) START_HEAD else END_HEAD) { if(atStart) it.copy(startHead=head) else it.copy(endHead=head) }
+                picker?.dismiss()
+            })
+        }
+        pickerPanel=panel
+        val window=PopupWindow(panel,-2,-2,true).apply {
+            elevation=dp(8).toFloat(); setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT)); isOutsideTouchable=true
+        }
+        picker?.dismiss(); picker=window
+        if(anchor.isAttachedToWindow) window.showAtLocation(anchor.rootView,Gravity.CENTER,0,0) else pickerPanel=panel
+    }
+
     private fun swatch(color: Int):(Canvas,Paint)->Unit = { canvas,paint ->
         paint.color=color; paint.style=Paint.Style.FILL; canvas.drawCircle(14f,14f,6f,paint)
     }
@@ -97,6 +166,10 @@ internal class ScreenshotArrowControls(context: Context,private val drawing: Scr
         paint.pathEffect=ScreenshotPenRendering.effect(pattern,width.toFloat())
         canvas.drawLine(6f,14f,22f,14f,paint); paint.pathEffect=null
     }
+    /** One upstream icon scaled into a 28dp cell, already density-scaled by the caller. */
+    private fun glyph(value: ScreenshotArrowGlyphs.Glyph):(Canvas,Paint)->Unit = { canvas,paint ->
+        ScreenshotArrowGlyphs.draw(canvas,value,RectF(2f,4f,26f,20f),0xFFFFFFFF.toInt(),false,paint)
+    }
     private fun color(anchor: View) {
         var current=style; drawing.beginStylePreview()
         ScreenshotColorPicker.show(anchor,"描边色",current.color,false,
@@ -108,16 +181,20 @@ internal class ScreenshotArrowControls(context: Context,private val drawing: Scr
         orientation=VERTICAL; contentDescription="箭头样式"
         heads(true); heads(false)
         val shaft=group()
+        // `arrowTypeButtonGroup` and `shaftConfig` are icon editors upstream (`arrow-type-*.svg`,
+        // `arrow-shaft-*.svg`); the radio semantics stay, only the artwork replaces the label.
         listOf(ScreenshotArrowType.STRAIGHT to "直线",ScreenshotArrowType.CURVE to "曲线",
             ScreenshotArrowType.ELBOW to "折线").forEach { (type,label) ->
-            shaft.addView(chip("箭身$label",!mixed(ARROW_TYPE) && style.arrowType==type) { change(ARROW_TYPE) { it.copy(arrowType=type) } },
-                LayoutParams(dp(56),dp(32)).apply { marginStart=dp(4) })
+            addCell(shaft,cell("箭身$label",!mixed(ARROW_TYPE) && style.arrowType==type,draw=glyph(ScreenshotArrowGlyphs.type(type))) {
+                change(ARROW_TYPE) { it.copy(arrowType=type) }
+            })
         }
         // `handleArrowRatioWheel`: tenths in 10..30, click resets to the identity scale.
         // `shaftConfig`: Plain / Tapered radio; unsupported heads render plain without losing the choice.
         listOf(ScreenshotArrowShaftType.PLAIN to "普通",ScreenshotArrowShaftType.TAPERED to "锥形").forEach { (type,label) ->
-            shaft.addView(chip("截面$label",!mixed(ARROW_SHAFT_TYPE) && style.arrowShaftType==type) { change(ARROW_SHAFT_TYPE) { it.copy(arrowShaftType=type) } },
-                LayoutParams(dp(56),dp(32)).apply { marginStart=dp(4) })
+            addCell(shaft,cell("截面$label",!mixed(ARROW_SHAFT_TYPE) && style.arrowShaftType==type,draw=glyph(ScreenshotArrowGlyphs.shaft(type))) {
+                change(ARROW_SHAFT_TYPE) { it.copy(arrowShaftType=type) }
+            })
         }
         shaft.addView(wheel(chip("比例 ${if(mixed(ARROW_RATIO)) "-" else ratioText(style.arrowRatio)}",false) {
             change(ARROW_RATIO) { it.copy(arrowRatio=1f) }

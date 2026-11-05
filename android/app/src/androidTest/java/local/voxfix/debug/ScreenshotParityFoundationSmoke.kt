@@ -28,6 +28,14 @@ object ScreenshotParityFoundationSmoke {
         if(view is ViewGroup) for(i in 0 until view.childCount) find(view.getChildAt(i),label)?.let { return it }
         return null
     }
+    /** Option cells keep a "起点"/"终点" + label description; the trigger reads "…箭头样式". */
+    private fun options(view: View): Int {
+        var count=0
+        if(view is ViewGroup) for(i in 0 until view.childCount) count+=options(view.getChildAt(i))
+        val label=view.contentDescription?.toString()
+        if(label!=null && !label.endsWith("箭头样式") && (label.startsWith("起点") || label.startsWith("终点"))) count++
+        return count
+    }
     private fun layout(view: View,width: Int=1080,height: Int=2400) {
         view.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY))
         view.layout(0,0,width,height)
@@ -421,6 +429,16 @@ object ScreenshotParityFoundationSmoke {
             check(dot.getPixel(260,172)==Color.RED && bare.getPixel(260,172)==Color.WHITE) { "圆点头部尺寸不对" }
             endHead.recycle(); startHead.recycle(); dot.recycle()
 
+            // Two heads on one short segment: each is capped at half the segment (a quarter for the
+            // diamond family), so they meet at the midpoint at most (`short_arrow_endpoint_sizes...`).
+            val shortPoints=listOf(ScreenshotDrawingPoint(60f,160f),ScreenshotDrawingPoint(80f,160f))
+            for(head in ScreenshotArrowGlyphs.PANEL_HEADS.drop(1)) {
+                val startShoulder=ScreenshotArrowRendering.boundsPoints(shortPoints,head,true,4f,1f)
+                val endShoulder=ScreenshotArrowRendering.boundsPoints(shortPoints,head,false,4f,1f)
+                check(startShoulder.maxOf { it.x }<=70.01f) { "$head 起点头越过了半段" }
+                check(endShoulder.minOf { it.x }>=69.99f) { "$head 终点头越过了半段" }
+            }
+
             check(renderer.hit(arrow(ScreenshotArrowhead.NONE,ScreenshotArrowhead.DOT),ScreenshotDrawingPoint(260f,172f),1f)) { "圆点头部不能命中" }
             check(!renderer.hit(arrow(ScreenshotArrowhead.NONE,ScreenshotArrowhead.NONE),ScreenshotDrawingPoint(260f,172f),1f)) { "无箭头时仍命中头部" }
             bare.recycle()
@@ -460,14 +478,48 @@ object ScreenshotParityFoundationSmoke {
             controls.measure(View.MeasureSpec.makeMeasureSpec(840,View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(360,View.MeasureSpec.AT_MOST))
             controls.layout(0,0,840,controls.measuredHeight)
-            for(label in listOf("起点无","终点箭头","终点三角","终点菱形","起点多叉","终点双叉"))
+            for(label in listOf("起点箭头样式","终点箭头样式"))
                 check(find(controls,label)!=null) { "箭头样式缺少 $label" }
-            find(controls,"终点三角")!!.performClick()
+            check(find(controls,"终点三角")==null) { "箭头选项应只在弹层里，不该铺在参数行" }
+            // A detached row cannot show a popup, but the 14-option grid and its wiring must exist.
+            find(controls,"终点箭头样式")!!.performClick()
+            val heads=controls.pickerPanel ?: error("箭头选项面板没有生成")
+            for(label in listOf("终点无","终点箭头","终点三角","终点菱形","终点多叉","终点双叉","终点凹三角"))
+                check(find(heads,label)!=null) { "箭头样式缺少 $label" }
+            check(options(heads)==14) { "箭头选项数不是原版的 14 档：${options(heads)}" }
+            check(find(heads,"终点方块")==null) { "方块不在原版面板里" }
+            find(heads,"终点三角")!!.performClick()
             check(layer.style.endHead==ScreenshotArrowhead.TRIANGLE) { "终点箭头没有改到样式" }
-            find(controls,"起点菱形")!!.performClick()
+            find(controls,"起点箭头样式")!!.performClick()
+            val starts=controls.pickerPanel ?: error("起点箭头选项面板没有生成")
+            find(starts,"起点菱形")!!.performClick()
             check(layer.style.startHead==ScreenshotArrowhead.DIAMOND) { "起点箭头没有改到样式" }
-            find(controls,"终点无")!!.performClick()
-            check(layer.style.endHead==ScreenshotArrowhead.NONE) { "终点无箭头没有改到样式" }
+            find(starts,"起点无")!!.performClick()
+            check(layer.style.startHead==ScreenshotArrowhead.NONE) { "起点无箭头没有改到样式" }
+
+            // Evidence sheet: the parameter row on the left, the 4x4 head grid underneath.
+            run {
+                val width=840
+                fun sheet(view: View): Bitmap {
+                    view.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),
+                        View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED))
+                    view.layout(0,0,width,view.measuredHeight)
+                    return Bitmap.createBitmap(width,view.measuredHeight,Bitmap.Config.ARGB_8888).also {
+                        val canvas=Canvas(it); canvas.drawColor(0xFF1F1F1F.toInt()); view.draw(canvas)
+                    }
+                }
+                val row=sheet(ScreenshotArrowControls(context,layer))
+                val grid=sheet(starts)
+                try {
+                    val out=Bitmap.createBitmap(width,row.height+8+grid.height,Bitmap.Config.ARGB_8888)
+                    val canvas=Canvas(out); canvas.drawColor(0xFF1F1F1F.toInt())
+                    canvas.drawBitmap(row,0f,0f,null); canvas.drawBitmap(grid,0f,row.height+8f,null)
+                    java.io.File(context.cacheDir,"screenshot-parity-arrow-icons.png").outputStream().use {
+                        out.compress(Bitmap.CompressFormat.PNG,100,it)
+                    }
+                    out.recycle()
+                } finally { row.recycle(); grid.recycle() }
+            }
 
             // Shaft radio plus the ratio button (wheel in tenths, click back to 1.0).
             check(find(controls,"箭身曲线")!=null && find(controls,"箭身折线")!=null && find(controls,"箭身直线")!=null) { "箭头样式缺少箭身选项" }

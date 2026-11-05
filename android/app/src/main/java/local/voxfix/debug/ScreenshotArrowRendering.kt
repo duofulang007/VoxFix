@@ -24,6 +24,29 @@ internal object ScreenshotArrowRendering {
         else -> 15f
     } * 1.25f
 
+    /** Stroke growth: a thicker stroke gets a bigger head by sqrt(width/2), never below the base. */
+    fun strokeScale(strokeWidth: Float): Float = sqrt((strokeWidth/2f).coerceAtLeast(1f))
+
+    /**
+     * How far a head may reach back from its tip: half of the segment it sits on, a quarter for the
+     * diamond family (`get_arrowhead_points` `length_multiplier`). Because start and end heads are
+     * each confined to their own segment and to half of it, two heads on one segment can touch at
+     * the midpoint but never overlap (`tests/arrowhead_scaling.rs`, `short_arrow_endpoint_sizes...`).
+     */
+    fun headReach(head: ScreenshotArrowhead, segment: Float): Float =
+        segment * if(isDiamond(head)) .25f else .5f
+
+    /** Base head length before rotation, already capped by [headReach]. */
+    fun headLength(head: ScreenshotArrowhead, strokeWidth: Float, ratio: Float, segment: Float): Float =
+        min(baseSize(head) * strokeScale(strokeWidth) * ratio, headReach(head, segment))
+
+    /** Round heads answer with a diameter; the stroke adjustment survives the cap, as upstream does. */
+    fun headDiameter(head: ScreenshotArrowhead, strokeWidth: Float, ratio: Float, segment: Float): Float {
+        val adjustment = min(strokeWidth, 2f) - 2f
+        val base = baseSize(head) * strokeScale(strokeWidth)
+        return min((base + adjustment) * ratio, headReach(head, segment) + adjustment)
+    }
+
     private fun angle(head: ScreenshotArrowhead): Float = when(head) {
         ScreenshotArrowhead.BAR -> 90f
         ScreenshotArrowhead.ARROW -> 20f
@@ -71,16 +94,10 @@ internal object ScreenshotArrowRendering {
         val segment=hypot(dx,dy)
         if(segment<=1e-6f) return null
         val dirX=dx/segment; val dirY=dy/segment
-        val strokeScale=sqrt((strokeWidth/2f).coerceAtLeast(1f))
-        val base=baseSize(head)*strokeScale
-        val multiplier=if(isDiamond(head)) 0.25f else 0.5f
         val tipPoint=PointF(tip.x,tip.y)
-        if(isRound(head)) {
-            val adjustment=min(strokeWidth,2f)-2f
-            val diameter=((base+adjustment)*ratio).coerceAtMost(segment*multiplier+adjustment)
-            return Head(tipPoint,tipPoint,tipPoint,tipPoint,diameter/2f)
-        }
-        val minSize=min(base*ratio,segment*multiplier)
+        if(isRound(head)) return Head(tipPoint,tipPoint,tipPoint,tipPoint,
+            headDiameter(head,strokeWidth,ratio,segment)/2f)
+        val minSize=headLength(head,strokeWidth,ratio,segment)
         val back=PointF(tip.x-dirX*minSize,tip.y-dirY*minSize)
         val radians=Math.toRadians(angle(head).toDouble()).toFloat()
         return Head(tipPoint,rotate(back,tipPoint,-radians),rotate(back,tipPoint,radians),back,0f)

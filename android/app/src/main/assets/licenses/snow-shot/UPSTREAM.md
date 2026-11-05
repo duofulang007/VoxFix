@@ -57,3 +57,14 @@ and arrow geometry helpers. These modified Kotlin ports use the document crate's
 Selection layer order, alignment, distribution and duplication follow the editor
 crate's Apache-2.0 document_ops.rs. Selection actions follow the palette's
 createSelectionActionFamily and the 12 × 12 offset declared in snow_canvas_widget.h.
+
+T11 arrow palette icons: icons/arrowhead-*.svg (14 head options, each with a -start
+mirror), icons/arrow-type-{straight,curved,elbow}.svg, icons/arrow-shaft-{plain,tapered}.svg
+and icons/arrow-ratio.svg come from snow_shot/src/presentation/components/icons/resources/
+at the fixed commit. VectorDrawable has no stroke, and these files are stroke-first, so
+ScreenshotArrowGlyphs.kt keeps the upstream path data, view boxes, per-element stroke
+width, cap/join and the 0.3 group opacity, and draws them with Canvas instead of
+flattening them into filled outlines. The -start files differ from their base file only
+by the wrapper transform translate(40,0) scale(-1,1) (the crowfoot set and none are
+authored head-left, so only their end form flips). arrowhead-square.svg and
+arrowhead-inverted-triangle.svg do not exist upstream; the palette offers 14 heads.
