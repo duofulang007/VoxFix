@@ -409,7 +409,11 @@ class ScreenshotDrawingLayer(context: Context,private val image: Bitmap,private 
                                     ScreenshotArrowType.STRAIGHT -> if(points.size==1) points.add(point) else points[points.lastIndex]=point
                                 }
                             } else if(freehand || points.size==1) points.add(point) else points[points.lastIndex]=point
-                            history.add(ScreenshotDrawingStroke(active,points,pendingStyle.color,pendingStyle.width*pixelUnit,pendingStyle))
+                            // A dragged curve stores the sampled path; collapse it to the vertex set
+                            // the head geometry measures against (see `simplifyCurve`).
+                            val stored=if(active==ScreenshotDrawingTool.ARROW && pendingStyle.arrowType==ScreenshotArrowType.CURVE)
+                                ScreenshotArrowRendering.simplifyCurve(points,LINE_SAMPLE_SPACING) else points
+                            history.add(ScreenshotDrawingStroke(active,stored,pendingStyle.color,pendingStyle.width*pixelUnit,pendingStyle))
                         }
                     }
                 }

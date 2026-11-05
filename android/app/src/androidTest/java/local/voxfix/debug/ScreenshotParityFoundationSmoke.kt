@@ -568,7 +568,20 @@ object ScreenshotParityFoundationSmoke {
                 drag(ScreenshotArrowType.STRAIGHT,60f to 120f,160f to 120f,260f to 120f)
                 check(gestureLayer.history.items.last().points.size==2) { "直线箭身不该保留中间采样" }
                 drag(ScreenshotArrowType.CURVE,60f to 220f,120f to 180f,180f to 140f,260f to 60f)
-                check(gestureLayer.history.items.last().points.size>2) { "曲线箭身没有采样路径" }
+                val curve=gestureLayer.history.items.last()
+                check(curve.points.size>2) { "曲线箭身没有采样路径" }
+                // The drag samples per 1.5 unit; the stored vertices must collapse to the set the head
+                // sizes against, otherwise a curve arrow loses its head to the sampling step.
+                check(curve.points.size<12) { "曲线箭身没有折成顶点集：${curve.points.size}" }
+                val headCurve=curve.copy(style=curve.style.copy(startHead=ScreenshotArrowhead.NONE,endHead=ScreenshotArrowhead.ARROW))
+                val bareCurve=curve.copy(style=curve.style.copy(startHead=ScreenshotArrowhead.NONE,endHead=ScreenshotArrowhead.NONE))
+                val paintedHead=render(headCurve); val bareShaft=render(bareCurve)
+                try {
+                    val curveEndBox=Rect(228,44,268,96)
+                    check(coverage(paintedHead,curveEndBox)>coverage(bareShaft,curveEndBox)+40) {
+                        "曲线箭头没有画出头部：${coverage(bareShaft,curveEndBox)} -> ${coverage(paintedHead,curveEndBox)}"
+                    }
+                } finally { paintedHead.recycle(); bareShaft.recycle() }
             } finally { gestureLayer.close() }
 
             // The shaft choice and ratio survive a project round-trip; older projects stay on Curve 1.0.

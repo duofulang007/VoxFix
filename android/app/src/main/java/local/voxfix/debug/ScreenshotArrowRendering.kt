@@ -85,6 +85,46 @@ internal object ScreenshotArrowRendering {
         }
     }
 
+    /**
+     * Ramer-Douglas-Peucker for a dragged curved shaft, with the drag sampling step as tolerance.
+     * The original builds a curve arrow from the few clicked vertices (`creation_workflow.rs`), so
+     * `get_segment_length` — and therefore the head size cap — measures a real vertex gap. A phone
+     * drag samples the path per 1.5 unit, which would leave the head capped by the sampling step
+     * (2 px); simplifying to the sampling precision restores the upstream vertex set without moving
+     * the drawn path by more than that step.
+     */
+    fun simplifyCurve(points: List<ScreenshotDrawingPoint>,tolerance: Float): List<ScreenshotDrawingPoint> {
+        if(points.size<3 || tolerance<=0f) return points
+        val keep=BooleanArray(points.size)
+        keep[0]=true; keep[points.lastIndex]=true
+        val stack=ArrayDeque<IntArray>()
+        stack.addLast(intArrayOf(0,points.lastIndex))
+        val limit=(tolerance*tolerance).toDouble()
+        fun distanceSquared(point: ScreenshotDrawingPoint,from: Int,to: Int): Double {
+            val a=points[from]; val b=points[to]
+            val dx=(b.x-a.x).toDouble(); val dy=(b.y-a.y).toDouble()
+            val lengthSquared=dx*dx+dy*dy
+            val px=(point.x-a.x).toDouble(); val py=(point.y-a.y).toDouble()
+            if(lengthSquared<=1e-12) return px*px+py*py
+            val t=((px*dx+py*dy)/lengthSquared).coerceIn(0.0,1.0)
+            val ox=px-t*dx; val oy=py-t*dy
+            return ox*ox+oy*oy
+        }
+        while(stack.isNotEmpty()) {
+            val (from,to)=stack.removeLast()
+            var farthest=-1; var worst=limit
+            for(index in from+1 until to) {
+                val distance=distanceSquared(points[index],from,to)
+                if(distance>worst) { worst=distance; farthest=index }
+            }
+            if(farthest>=0) {
+                keep[farthest]=true
+                stack.addLast(intArrayOf(from,farthest)); stack.addLast(intArrayOf(farthest,to))
+            }
+        }
+        return points.filterIndexed { index,_ -> keep[index] }
+    }
+
     private fun geometry(points: List<ScreenshotDrawingPoint>, head: ScreenshotArrowhead, atStart: Boolean,
                          strokeWidth: Float, ratio: Float): Head? {
         if(head==ScreenshotArrowhead.NONE || points.size<2) return null
@@ -206,15 +246,24 @@ internal object ScreenshotArrowRendering {
         var centerline=centerlineOf(stroke)
         if(reverse) centerline=centerline.asReversed()
         if(centerline.size<2) return null
+        // `head_geometry` takes its tip from the flattened path but sizes the head from the stored
+        // vertices (`get_segment_length` on `arrow_points`), so a curve keeps a real vertex gap.
+        val vertices=if(reverse) stroke.points.asReversed() else stroke.points
         val primaryHead=if(reverse) style.startHead else style.endHead
         val oppositeHead=if(reverse) style.endHead else style.startHead
-        val primaryRender=geometry(centerline,primaryHead,false,stroke.width,style.arrowRatio) ?: return null
+        val primaryPoints=vertices.mapIndexed { index,point ->
+            if(index==vertices.lastIndex) ScreenshotDrawingPoint(centerline.last().x,centerline.last().y) else point
+        }
+        val primaryRender=geometry(primaryPoints,primaryHead,false,stroke.width,style.arrowRatio) ?: return null
         val primary=ScreenshotTaperedArrow.headGeometry(primaryHead,
             floatArrayOf(primaryRender.tip.x,primaryRender.tip.y),
             floatArrayOf(primaryRender.left.x,primaryRender.left.y),
             floatArrayOf(primaryRender.right.x,primaryRender.right.y))
         val secondary=oppositeHead.takeIf{it!=ScreenshotArrowhead.NONE}?.let {
-            val rendered=geometry(centerline,it,true,stroke.width,style.arrowRatio) ?: return null
+            val secondaryPoints=vertices.mapIndexed { index,point ->
+                if(index==0) ScreenshotDrawingPoint(centerline.first().x,centerline.first().y) else point
+            }
+            val rendered=geometry(secondaryPoints,it,true,stroke.width,style.arrowRatio) ?: return null
             ScreenshotTaperedArrow.headGeometry(it,
                 floatArrayOf(rendered.tip.x,rendered.tip.y),
                 floatArrayOf(rendered.left.x,rendered.left.y),
