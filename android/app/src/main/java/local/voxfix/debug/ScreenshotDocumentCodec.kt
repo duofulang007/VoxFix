@@ -167,15 +167,25 @@ internal object ScreenshotDocumentCodec {
         if(objects.any { it.boundTextId<0 || (it.boundTextId!=0L &&
                 (it.tool!=ScreenshotDrawingTool.SERIAL || byId[it.boundTextId]?.tool!=ScreenshotDrawingTool.TEXT)) })
             throw FormatException("工程序号文字关联无效")
-        // Only arrows carry bindings, and they must point at another live, non-arrow object.
-        if (objects.any { stroke ->
-                val bindings = listOfNotNull(stroke.startBinding, stroke.endBinding)
-                bindings.isNotEmpty() && (stroke.tool != ScreenshotDrawingTool.ARROW || bindings.any { binding ->
-                    binding.elementId == stroke.id ||
-                        (byId[binding.elementId]?.tool ?: ScreenshotDrawingTool.ARROW) == ScreenshotDrawingTool.ARROW
-                })
+        // A stale pin (target deleted or turned into an arrow) is dropped instead of failing the
+        // whole project: a screenshot with one broken binding must still open.
+        for (index in objects.indices) {
+            val stroke = objects[index]
+            if (stroke.startBinding == null && stroke.endBinding == null) continue
+            fun bound(binding: ScreenshotFixedPointBinding?): ScreenshotFixedPointBinding? {
+                val target = binding ?: return null
+                if (stroke.tool != ScreenshotDrawingTool.ARROW) return null
+                if (target.elementId == stroke.id) return null
+                val element = byId[target.elementId] ?: return null
+                if (element.tool == ScreenshotDrawingTool.ARROW) return null
+                return target
             }
-        ) throw FormatException("工程箭头绑定无效")
+            val start = bound(stroke.startBinding)
+            val end = bound(stroke.endBinding)
+            if (start != stroke.startBinding || end != stroke.endBinding) {
+                objects[index] = stroke.copy(startBinding = start, endBinding = end)
+            }
+        }
         ScreenshotIds.above(maxId)
         val text = root.optJSONObject("text")?.let { value ->
             val mode = runCatching { ScreenshotTextMode.valueOf(value.optString("mode", "ORIGINAL")) }

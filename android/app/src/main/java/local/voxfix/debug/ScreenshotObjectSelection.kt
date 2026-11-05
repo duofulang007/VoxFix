@@ -221,6 +221,9 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
             }
             else -> emptyMap()
         }
+        // Resizing or rotating a shape moves the elements an arrow is pinned to, so those
+        // arrows have to follow exactly like a plain move does.
+        if((mode==Mode.RESIZE || mode==Mode.ROTATE) && preview.isNotEmpty()) preview=preview+boundFollowers(preview)
         if(mode==Mode.RESIZE && original.values.any { it.tool in setOf(ScreenshotDrawingTool.TEXT,ScreenshotDrawingTool.SERIAL,ScreenshotDrawingTool.ARROW,ScreenshotDrawingTool.LINE) }) {
             liveBox=this.box(preview); previewRotation=angle(preview)
         }

@@ -200,7 +200,16 @@ class ScreenshotDrawing {
         if(indices.isEmpty()) return
         val removed=indices.mapNotNull { items.getOrNull(it)?.id }.toSet()
         commit(items.filterIndexed { index,_ -> index !in indices }.map {
-            if(it.boundTextId in removed) it.copy(boundTextId=0L) else it
+            var next=it
+            if(next.boundTextId in removed) next=next.copy(boundTextId=0L)
+            // An arrow must not keep pointing at an object that no longer exists.
+            val start=next.startBinding
+            val end=next.endBinding
+            if((start!=null && start.elementId in removed) || (end!=null && end.elementId in removed))
+                next=next.copy(
+                    startBinding=if(start!=null && start.elementId in removed) null else start,
+                    endBinding=if(end!=null && end.elementId in removed) null else end)
+            next
         }, watermark)
     }
     /** One selection gesture is one transaction, including every selected object. */
