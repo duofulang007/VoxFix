@@ -171,7 +171,12 @@ object ScreenshotSelectedToolsSmoke {
                 return panel.getChildAt(0) as ViewGroup
             }
             val disabled = actions()
-            check((0 until disabled.childCount).none { disabled.getChildAt(it).isClickable && disabled.getChildAt(it).isEnabled })
+            // `updateSelectionActionAvailability`: everything but Reset (and the draw template) is
+            // disabled while nothing is selected.
+            check((0 until disabled.childCount).none {
+                val child=disabled.getChildAt(it)
+                child.isClickable && child.isEnabled && child.contentDescription!="重置画布"
+            })
             drag(320f,570f,320f,570f)
             val topId = layer.history.items.last().id
             check(layer.selected?.id==topId)
@@ -184,7 +189,8 @@ object ScreenshotSelectedToolsSmoke {
             layer.redo(); check(layer.history.items.first().id==topId)
             drag(320f,570f,320f,570f)
             val original = layer.selected!!
-            val copy = actions().let { panel -> panel.getChildAt(panel.childCount - 1) }
+            val copy = actions().let { panel -> (0 until panel.childCount).map(panel::getChildAt)
+                .single { it.contentDescription == "复制选中对象" } }
             check(copy.contentDescription == "复制选中对象" && copy.performClick())
             check(layer.selected?.id != original.id && layer.selected?.points?.first() == ScreenshotDrawingPoint(332f,512f))
             layer.undo(); check(layer.history.items.size == 2)

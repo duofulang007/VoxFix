@@ -68,6 +68,19 @@ internal object ScreenshotSelectionResizeChecks {
                 check(enlarged.style.outlineWidth==2 && enlarged.style.cornerRadius==5)
                 val reopened=ScreenshotDocumentCodec.decode(ScreenshotDocumentCodec.encode(ScreenshotDocument.full(600,900).copy(objects=listOf(enlarged))))
                 check(reopened.objects.single()==enlarged) { "resize above manual font limit changed on reopen" }
+                // A corner follows the height ratio (`text_resize_font_size_from_height`), not the
+                // wider axis: a 1.5x wide, 2x tall drag keeps a 2x font.
+                val cornerText=text.copy(style=text.style.copy(fontSize=40f),text="角点",textWidth=200f)
+                history.load(listOf(cornerText)); selection.select(0)
+                val cornerBox=renderer.selectionBounds(cornerText)
+                selection.press(p(cornerBox.right+14,cornerBox.bottom+14),false,emptyList())
+                selection.release(p(cornerBox.right+14+cornerBox.width()*.5f,cornerBox.bottom+14+cornerBox.height()),
+                    false,600,900)
+                val cornered=history.items.single()
+                check(cornered.style.fontSize>70f && cornered.style.fontSize<90f) {
+                    "文字角点没有按高度比缩放：${cornered.style.fontSize}"
+                }
+                check(cornered.style.outlineWidth==2 && cornered.style.cornerRadius==5)
                 // The selection proxy excludes modern serial stroke expansion and arrowhead paint.
                 val serial=a.copy(tool=ScreenshotDrawingTool.SERIAL,points=listOf(p(300f,400f)),style=a.style.copy(fontSize=24f,serialGeometryVersion=1))
                 val serialBox=renderer.selectionBounds(serial); val paintBox=renderer.localBounds(serial)
@@ -84,6 +97,6 @@ internal object ScreenshotSelectionResizeChecks {
             finally { renderer.close(); image.recycle() }
         }
         failure?.let { throw it }
-        return "SCREENSHOT_SELECTION_RESIZE_PASS: edge,offset,flip,group,cancel,one-undo,identity,stroke,text-reflow,text-font,reopen,serial-min,proxy"
+        return "SCREENSHOT_SELECTION_RESIZE_PASS: edge,offset,flip,group,cancel,one-undo,identity,stroke,text-reflow,text-font,text-corner,reopen,serial-min,proxy"
     }
 }

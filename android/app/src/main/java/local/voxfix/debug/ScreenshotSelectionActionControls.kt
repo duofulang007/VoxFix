@@ -3,10 +3,14 @@ package local.voxfix.debug
 import android.content.Context
 import android.graphics.Color
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.LinearLayout
+import android.widget.SeekBar
+import android.widget.TextView
+import kotlin.math.roundToInt
 
 /** The action groups follow Snow Shot's createSelectionActionFamily. */
 internal class ScreenshotSelectionActionControls(context: Context, private val drawing: ScreenshotDrawingLayer) : HorizontalScrollView(context) {
@@ -38,8 +42,57 @@ internal class ScreenshotSelectionActionControls(context: Context, private val d
             button(icons[index], labels[index], selected >= mode.minimumCount) { drawing.alignSelected(mode) }
         }
         separator()
+        // `createSelectionActionFamily`: opacity, then copy/delete, then reset (reset stays enabled
+        // with nothing selected, like the original's `m_resetCanvasButton`).
+        opacity()
+        separator()
         button(R.drawable.snow_duplicate, "复制选中对象", selected > 0, drawing::duplicateSelected)
+        button(R.drawable.snow_delete, "删除选中对象", selected > 0, drawing::deleteSelected)
+        separator()
+        button(R.drawable.snow_reload, "重置画布", true, drawing::resetCanvas)
         ScreenshotTouchTargets.install(row)
+    }
+
+    /** Opacity of the whole selection, 0–100 with a ±5 wheel step and a Mixed readout. */
+    private fun opacity() {
+        val style = drawing.inspectedStyle
+        val mixed = ScreenshotStyleProperty.OPACITY in drawing.mixedStyleProperties
+        val percent = (style.opacity * 100).roundToInt().coerceIn(0, 100)
+        val line = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+        val readout = TextView(context).apply {
+            textSize = 12f
+            setTextColor(0xFFFFFFFF.toInt())
+            text = if (mixed) "透明度 -" else "透明度 $percent%"
+            contentDescription = if (mixed) "透明度 Mixed" else "透明度 $percent%"
+        }
+        line.addView(readout, LinearLayout.LayoutParams(dp(80), dp(32)))
+        var base = style
+        var tracking = false
+        val bar = SeekBar(context).apply {
+            max = 100
+            progress = percent
+            contentDescription = "选区透明度"
+            isEnabled = selected > 0
+            alpha = if (selected > 0) 1f else .25f
+            setOnGenericMotionListener { _, event ->
+                val delta = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+                if (event.actionMasked == MotionEvent.ACTION_SCROLL && delta != 0f) {
+                    progress = (progress + if (delta > 0) 5 else -5).coerceIn(0, 100); true
+                } else false
+            }
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onStartTrackingTouch(seek: SeekBar) { base = drawing.inspectedStyle; tracking = true; drawing.beginStylePreview() }
+                override fun onProgressChanged(seek: SeekBar, value: Int, fromUser: Boolean) {
+                    readout.text = "透明度 $value%"; readout.contentDescription = "透明度 $value%"
+                    seek.stateDescription = "$value%"
+                    if (tracking) drawing.previewStyle(base.copy(opacity = value / 100f), ScreenshotStyleProperty.OPACITY)
+                    else drawing.applyStyle(drawing.inspectedStyle.copy(opacity = value / 100f), ScreenshotStyleProperty.OPACITY)
+                }
+                override fun onStopTrackingTouch(seek: SeekBar) { if (tracking) drawing.finishStylePreview(true); tracking = false }
+            })
+        }
+        line.addView(bar, LinearLayout.LayoutParams(dp(120), dp(32)))
+        row.addView(line, LinearLayout.LayoutParams(dp(200), dp(32)))
     }
 
     private fun separator() {

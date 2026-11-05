@@ -98,6 +98,30 @@ internal object ScreenshotTextChecks {
             scroll(chip(serialControls,"字号 300"),1f); check(layer.style.fontSize==301f) { "序号字号滚轮未生效" }
             layer.tool=ScreenshotDrawingTool.TEXT
 
+            // Keyboard avoidance: `placeControls` shrinks the safe area to
+            // `height - max(bars.bottom, imeBottom) - 8dp`; the input and its 取消/保存 bar must stay
+            // inside it, and a displaced input switches to black so it stays readable.
+            val host=android.widget.FrameLayout(context)
+            host.layout(0,0,1080,900)
+            val input=ScreenshotAnnotationInput(host,layer,ScreenshotDrawingPoint(40f,760f),null,
+                { RectF(40f,760f,240f,800f) },{ RectF(600f,820f,776f,864f) }) {}
+            try {
+                input.place(24,560)
+                val fieldParams=input.field.layoutParams as android.widget.FrameLayout.LayoutParams
+                val actionParams=input.actions.layoutParams as android.widget.FrameLayout.LayoutParams
+                check(fieldParams.topMargin>=24) { "文字输入落到了安全区上方" }
+                check(fieldParams.topMargin+fieldParams.height<=560) { "文字输入落到了键盘下方" }
+                check(actionParams.topMargin+actionParams.height<=560) { "保存条落到了键盘下方" }
+                check(input.field.currentTextColor==android.graphics.Color.BLACK) { "位移后的文字输入没有改成黑色" }
+                // With the keyboard gone the same box may sit lower again: the IME is what pushed it.
+                input.place(24,900)
+                val relaxed=input.field.layoutParams as android.widget.FrameLayout.LayoutParams
+                check(relaxed.topMargin>fieldParams.topMargin) {
+                    "键盘收起后文字输入没有回落：${fieldParams.topMargin} -> ${relaxed.topMargin}"
+                }
+                check(relaxed.topMargin+relaxed.height<=900) { "文字输入超出安全区" }
+            } finally { input.close() }
+
             // Evidence for the record: three lines with the light-yellow fill and 6px corners.
             val evidence=render(text(style=defaults.copy(hasFill=true,fillColor=0xFFFFF1B8.toInt()),
                 value="文字默认\n逐行背景\n短"))

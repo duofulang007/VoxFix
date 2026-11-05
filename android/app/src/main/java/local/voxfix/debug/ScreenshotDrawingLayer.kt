@@ -422,6 +422,11 @@ class ScreenshotDrawingLayer(context: Context,private val image: Bitmap,private 
         }
         invalidate(); return true
     }
+    /** `resetCanvasRequested`: drop every mark and the watermark; undo brings them back. */
+    fun resetCanvas() {
+        pending=null; pen=null; continuation=null; penFeedback.clear(); selection.cancel(); selectedIndex=null
+        history.reset(); invalidate(); changed()
+    }
     fun undo() { pending=null; pen=null; continuation=null; penFeedback.clear(); selectedIndex=null; history.undo(); invalidate(); changed() }
     fun redo() { pending=null; pen=null; continuation=null; penFeedback.clear(); selectedIndex=null; history.redo(); invalidate(); changed() }
     fun close() { pending=null; pen=null; continuation=null; penFeedback.clear(); selection.cancel(); cancelTextPreview(); finishStylePreview(false); renderer.close() }

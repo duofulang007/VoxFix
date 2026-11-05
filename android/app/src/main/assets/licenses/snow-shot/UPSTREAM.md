@@ -68,3 +68,7 @@ flattening them into filled outlines. The -start files differ from their base fi
 by the wrapper transform translate(40,0) scale(-1,1) (the crowfoot set and none are
 authored head-left, so only their end form flips). arrowhead-square.svg and
 arrowhead-inverted-triangle.svg do not exist upstream; the palette offers 14 heads.
+
+delete.svg (selection action row) is ant_design_qt/packages/ant_design_icons_qt/resources/
+icons/outlined/delete.svg at the same fixed commit; snow_delete.xml keeps its path geometry
+and the Ant Design Icons MIT notice stays in ANT-THIRD-PARTY-NOTICES.md.

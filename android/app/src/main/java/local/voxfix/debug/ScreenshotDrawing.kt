@@ -167,8 +167,10 @@ class ScreenshotDrawing {
         val stable = objects.map(::stable)
         snapshots.clear(); snapshots.add(Snapshot(stable, watermark.normalized())); cursor = 0
     }
+    /** `resetCanvasRequested`: clear every annotation and the watermark as one undoable step. */
+    fun reset(watermark: ScreenshotWatermark = ScreenshotWatermark()) = commit(emptyList(), watermark)
     fun add(stroke: ScreenshotDrawingStroke) {
-        if (stroke.points.isNotEmpty()) commit(items+stable(stroke), watermark)
+        if (stroke.points.isNotEmpty() && !stroke.isDegenerate()) commit(items+stable(stroke), watermark)
     }
     /** Creating a badge with its label is one gesture and one undo step. */
     fun addSerialWithText(serial: ScreenshotDrawingStroke,text: ScreenshotDrawingStroke) {
@@ -272,6 +274,22 @@ class ScreenshotDrawing {
     }
     fun undo() { if (canUndo) cursor-- }
     fun redo() { if (canRedo) cursor++ }
+}
+
+/**
+ * `arrow_is_degenerate`: fewer than two vertices, or no segment longer than 1e-6, is an object the
+ * original refuses to create. A tap with the arrow or line tool therefore leaves nothing behind,
+ * while a one-pixel drag is still a real arrow.
+ */
+fun ScreenshotDrawingStroke.isDegenerate(): Boolean {
+    if (tool != ScreenshotDrawingTool.ARROW && tool != ScreenshotDrawingTool.LINE) return false
+    if (points.size < 2) return true
+    for (index in 1 until points.size) {
+        val previous = points[index - 1]
+        val current = points[index]
+        if (kotlin.math.hypot(current.x - previous.x, current.y - previous.y) > 1e-6f) return false
+    }
+    return true
 }
 
 fun ScreenshotDrawingStroke.transformed(fromLeft: Float, fromTop: Float, toLeft: Float, toTop: Float,

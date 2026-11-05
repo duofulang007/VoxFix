@@ -234,6 +234,23 @@ class ScreenshotDrawingTest {
             floatArrayOf(100f,0f),floatArrayOf(80f,-10f),floatArrayOf(80f,10f))
         assertEquals(82.5f,indented.neck[0],1e-4f)
     }
+    /** `arrow_is_degenerate`: a tap creates nothing, a one-pixel drag is still an arrow. */
+    @Test fun zeroLengthArrowsAndLinesAreNotCommitted() {
+        fun arrow(tool: ScreenshotDrawingTool,vararg points: ScreenshotDrawingPoint)=
+            ScreenshotDrawingStroke(tool,points.toList(),0xFFFF0000.toInt(),4f)
+        val tap=ScreenshotDrawingPoint(30f,30f)
+        val history=ScreenshotDrawing()
+        history.add(arrow(ScreenshotDrawingTool.ARROW,tap,tap))
+        history.add(arrow(ScreenshotDrawingTool.LINE,tap,tap))
+        history.add(arrow(ScreenshotDrawingTool.ARROW,tap))
+        assertTrue(history.items.isEmpty()); assertFalse(history.canUndo)
+        history.add(arrow(ScreenshotDrawingTool.ARROW,tap,ScreenshotDrawingPoint(31f,30f)))
+        assertEquals(1,history.items.size)
+        // The rule is the arrow's: a zero-size rectangle or a text anchor is still a real object.
+        history.add(arrow(ScreenshotDrawingTool.RECTANGLE,tap,tap))
+        history.add(arrow(ScreenshotDrawingTool.TEXT,tap))
+        assertEquals(3,history.items.size)
+    }
     @Test fun loadingAProjectStartsAFreshUndoStack() {
         val history = ScreenshotDrawing()
         history.add(stroke(ScreenshotDrawingTool.ARROW)); history.add(stroke(ScreenshotDrawingTool.PEN))

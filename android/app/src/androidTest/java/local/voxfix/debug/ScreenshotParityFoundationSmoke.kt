@@ -48,7 +48,7 @@ object ScreenshotParityFoundationSmoke {
             }
             val prefs=context.getSharedPreferences("screenshot-tool-memory",Context.MODE_PRIVATE)
             prefs.edit().clear().commit()
-            try { cancel(context); pen(context); geometry(context); shapes(context); lines(context); arrows(context); eraser(context); highlights(context); ScreenshotSpotlightChecks.run(context); ScreenshotHatchChecks.run(); ScreenshotSerialChecks.run(context); ScreenshotSerialLabelChecks.run(context); ScreenshotCornerChecks.run(context); ScreenshotTextChecks.run(context); ScreenshotWatermarkChecks.run(context); ScreenshotSelectionBarChecks.run(context); ScreenshotRegionChecks.run(context); ScreenshotObjectSelectionChecks.run(context); ScreenshotPenFeedbackChecks.run(context) } catch(error: Throwable) { failure=error }
+            try { cancel(context); pen(context); geometry(context); shapes(context); lines(context); arrows(context); eraser(context); highlights(context); ScreenshotSpotlightChecks.run(context); ScreenshotHatchChecks.run(); ScreenshotSerialChecks.run(context); ScreenshotSerialLabelChecks.run(context); ScreenshotCornerChecks.run(context); ScreenshotTextChecks.run(context); ScreenshotWatermarkChecks.run(context); ScreenshotSelectionBarChecks.run(context); ScreenshotSelectionActionsChecks.run(context); ScreenshotRegionChecks.run(context); ScreenshotObjectSelectionChecks.run(context); ScreenshotPenFeedbackChecks.run(context) } catch(error: Throwable) { failure=error }
             finally { prefs.edit().clear().commit() }
         }
         failure?.let { throw it }
@@ -582,6 +582,12 @@ object ScreenshotParityFoundationSmoke {
                         "曲线箭头没有画出头部：${coverage(bareShaft,curveEndBox)} -> ${coverage(paintedHead,curveEndBox)}"
                     }
                 } finally { paintedHead.recycle(); bareShaft.recycle() }
+                // `arrow_is_degenerate`: a tap leaves no object behind, a one-pixel drag still does.
+                val settled=gestureLayer.history.items.size
+                drag(ScreenshotArrowType.STRAIGHT,140f to 200f,140f to 200f)
+                check(gestureLayer.history.items.size==settled) { "空白点按留下了零长度箭头" }
+                drag(ScreenshotArrowType.STRAIGHT,140f to 200f,141f to 200f)
+                check(gestureLayer.history.items.size==settled+1) { "一像素拖动没有落下箭头" }
             } finally { gestureLayer.close() }
 
             // The shaft choice and ratio survive a project round-trip; older projects stay on Curve 1.0.

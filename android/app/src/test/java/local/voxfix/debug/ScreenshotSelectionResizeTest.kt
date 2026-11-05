@@ -88,10 +88,17 @@ class ScreenshotSelectionResizeTest {
         assertEquals(10f,next.points.last().y-next.points.first().y,.001f)
         assertEquals(s.style,next.style); assertEquals(s.width,next.width); assertEquals(s.rotation,next.rotation); assertEquals(s.id,next.id)
     }
-    @Test fun textCornerUsesLargestChangeAndTextAnchorsDifferFromGenericEdges() {
-        assertEquals(.5f,ScreenshotSelectionResize.textScale(ScreenshotResizeHandle.BOTTOM_RIGHT,
+    @Test fun textCornerScalesFontByHeightAndWidthOnlyKeepsIt() {
+        // `text_resize_font_size_from_height`: a corner follows the height ratio, not the wider axis.
+        assertEquals(1.2f,ScreenshotSelectionResize.textScale(ScreenshotResizeHandle.BOTTOM_RIGHT,
             ScreenshotSelectionResize.Geometry(p(0f,0f),.5f,1.2f),30f),0f)
         assertEquals(.2f,ScreenshotSelectionResize.textScale(ScreenshotResizeHandle.TOP,
+            ScreenshotSelectionResize.Geometry(p(0f,0f),1f,.01f),30f),0f)
+        // A horizontal side handle keeps the font: the text rewraps instead of scaling.
+        assertEquals(1f,ScreenshotSelectionResize.textScale(ScreenshotResizeHandle.RIGHT,
+            ScreenshotSelectionResize.Geometry(p(0f,0f),3f,1f),30f),0f)
+        // The 6 px floor wins over a collapsed height.
+        assertEquals(.2f,ScreenshotSelectionResize.textScale(ScreenshotResizeHandle.BOTTOM,
             ScreenshotSelectionResize.Geometry(p(0f,0f),1f,.01f),30f),0f)
         assertEquals(SelBox(0f,0f,200f,160f),ScreenshotSelectionResize.textFrame(box,ScreenshotResizeHandle.BOTTOM,0f,200f,160f,false))
         assertEquals(SelBox(-50f,-40f,150f,120f),ScreenshotSelectionResize.textFrame(box,ScreenshotResizeHandle.BOTTOM,0f,200f,160f,true))

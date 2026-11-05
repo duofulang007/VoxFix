@@ -99,10 +99,14 @@ internal object ScreenshotSelectionResize {
             textWidth=if(s.tool==ScreenshotDrawingTool.TEXT) own.width*sx else s.textWidth,
             textHeight=if(s.tool==ScreenshotDrawingTool.TEXT) own.height*sy else s.textHeight)
     }
+    /**
+     * `text_with_selection_rect`: a width-only handle keeps the font and only rewraps the text
+     * (`changes_width_only`), while any handle with a vertical component — a side or a corner —
+     * scales it by the height ratio (`text_resize_font_size_from_height`). The result never drops
+     * below the 6 px floor the inspector and the resize minimum already use.
+     */
     fun textScale(h: ScreenshotResizeHandle,g: Geometry,fontSize: Float): Float {
-        val scale=if(h.x!=0f && h.y!=0f) {
-            if(abs(g.sx-1)>=abs(g.sy-1)) g.sx else g.sy
-        } else if(h.y!=0f) g.sy else 1f
+        val scale=if(h.y!=0f) g.sy else 1f
         return max(scale,6f/fontSize)
     }
     fun textFrame(original: SelBox,h: ScreenshotResizeHandle,angle: Float,width: Float,height: Float,alt: Boolean): SelBox {
