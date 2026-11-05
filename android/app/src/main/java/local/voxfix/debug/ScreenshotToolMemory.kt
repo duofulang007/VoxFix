@@ -22,31 +22,50 @@ class ScreenshotToolMemory(context: Context) {
             val json=JSONObject(raw); val base=defaultScreenshotDrawingStyle(tool)
             fun int(name: String,default: Int,min: Int,max: Int)=json.optInt(name,default).coerceIn(min,max)
             val opacity=json.optDouble("opacity",base.opacity.toDouble()).takeIf { it.isFinite() }?.coerceIn(0.0,1.0)?.toFloat() ?: base.opacity
+            val fontSize=json.optDouble("fontSize",base.fontSize.toDouble()).toFloat()
             base.copy(color=json.optInt("color",base.color),width=int("width",base.width,1,64),opacity=opacity,
                 area=area ?: ScreenshotAreaMode.values().firstOrNull { it.name==json.optString("area") } ?: base.area,
                 filter=ScreenshotFilter.values().firstOrNull { it.name==json.optString("filter") } ?: base.filter,
-                strength=int("strength",base.strength,4,64),fontSize=int("fontSize",base.fontSize,8,96),
+                strength=int("strength",base.strength,4,64),fontSize=ScreenshotFontSize.clamp(tool,fontSize,base.fontSize),
                 bold=json.optBoolean("bold",base.bold),align=int("align",base.align,0,2),
                 serialShape=ScreenshotSerialShape.values().firstOrNull { it.name==json.optString("serialShape") } ?: base.serialShape,
-                fontFamily=json.optString("fontFamily").takeIf { it in setOf("sans-serif","serif","monospace") } ?: base.fontFamily,
+                fontFamily=ScreenshotFontFamilies.resolve(json.optString("fontFamily")) ?: base.fontFamily,
                 verticalAlign=int("verticalAlign",base.verticalAlign,0,2),outlineColor=json.optInt("outlineColor",base.outlineColor),
                 outlineWidth=int("outlineWidth",base.outlineWidth,0,12),fillColor=json.optInt("fillColor",base.fillColor),
-                hasFill=json.optBoolean("hasFill",base.hasFill),cornerRadius=int("cornerRadius",base.cornerRadius,0,32))
+                hasFill=json.optBoolean("hasFill",base.hasFill),cornerRadius=int("cornerRadius",base.cornerRadius,0,83),
+                strokePattern=ScreenshotStrokePattern.values().firstOrNull { it.name==json.optString("strokePattern") } ?: base.strokePattern,
+                fillPattern=ScreenshotFillPattern.values().firstOrNull { it.name==json.optString("fillPattern") } ?: base.fillPattern,
+                shape=ScreenshotRectangleShape.values().firstOrNull { it.name==json.optString("shape") } ?: base.shape,
+                curved=if(json.has("curved")) json.optBoolean("curved") else base.curved,
+                arrowType=ScreenshotArrowType.values().firstOrNull { it.name==json.optString("arrowType") } ?: base.arrowType,
+                arrowRatio=json.optDouble("arrowRatio",base.arrowRatio.toDouble()).toFloat().takeIf { it.isFinite() }?.coerceIn(1f,3f) ?: base.arrowRatio,
+                arrowShaftType=ScreenshotArrowShaftType.values().firstOrNull { it.name==json.optString("arrowShaftType") } ?: base.arrowShaftType,
+                startHead=ScreenshotArrowhead.values().firstOrNull { it.name==json.optString("startHead") } ?: base.startHead,
+                endHead=ScreenshotArrowhead.values().firstOrNull { it.name==json.optString("endHead") } ?: base.endHead,
+                serialGeometryVersion=int("serialGeometryVersion",0,0,1))
         }.getOrNull()
     }
     fun save(tool: ScreenshotDrawingTool,style: ScreenshotDrawingStyle) {
         if(tool in setOf(ScreenshotDrawingTool.SELECT,ScreenshotDrawingTool.ERASER)) return
         val json=JSONObject().put("color",style.color).put("width",style.width).put("opacity",style.opacity.toDouble())
             .put("area",style.area.name).put("filter",style.filter.name).put("strength",style.strength)
-            .put("fontSize",style.fontSize).put("bold",style.bold).put("align",style.align).put("serialShape",style.serialShape.name)
+            .put("fontSize",style.fontSize.toDouble()).put("bold",style.bold).put("align",style.align).put("serialShape",style.serialShape.name)
+            .put("serialGeometryVersion",style.serialGeometryVersion)
             .put("fontFamily",style.fontFamily).put("verticalAlign",style.verticalAlign).put("outlineColor",style.outlineColor)
-            .put("outlineWidth",style.outlineWidth).put("fillColor",style.fillColor).put("hasFill",style.hasFill).put("cornerRadius",style.cornerRadius).toString()
+            .put("outlineWidth",style.outlineWidth).put("fillColor",style.fillColor).put("hasFill",style.hasFill).put("cornerRadius",style.cornerRadius)
+            .put("strokePattern",style.strokePattern.name).put("fillPattern",style.fillPattern.name).put("shape",style.shape.name).put("curved",style.curved)
+            .put("arrowType",style.arrowType.name).put("arrowRatio",style.arrowRatio.toDouble()).put("arrowShaftType",style.arrowShaftType.name)
+            .put("startHead",style.startHead.name).put("endHead",style.endHead.name).toString()
         val edit=preferences.edit().putString(key(tool,null),json)
         if(tool in setOf(ScreenshotDrawingTool.FILTER,ScreenshotDrawingTool.HIGHLIGHT)) edit.putString(key(tool,style.area),json)
         edit.apply()
     }
-    var startNumber: Int
-        get()=(preferences.all["start-number"] as? Int ?: 1).coerceIn(1,9999)
-        set(value) { preferences.edit().putInt("start-number",value.coerceIn(1,9999)).apply() }
+    var startNumber: Long
+        get()=when(val value=preferences.all["start-number"]) {
+            is Long -> value.coerceAtLeast(0)
+            is Int -> value.toLong().coerceAtLeast(0)
+            else -> 1L
+        }
+        set(value) { preferences.edit().putLong("start-number",value.coerceAtLeast(0)).apply() }
     private fun key(tool: ScreenshotDrawingTool,area: ScreenshotAreaMode?)="style.${tool.name}.${area?.name ?: "last"}"
 }

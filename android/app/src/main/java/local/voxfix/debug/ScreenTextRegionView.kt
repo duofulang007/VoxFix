@@ -5,16 +5,24 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PointF
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Region
+import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.widget.Toast
 import kotlin.math.abs
 
-/** A reselected region can be resized or moved; an ordinary new drag still recognizes on release. */
+/**
+ * Rectangle selection keeps the original drag/move/resize flow. Polyline and curve selections add
+ * one vertex per tap and close on a double tap (the original's mouse semantics); freehand draws
+ * while pressed and closes on release. Construction semantics mirror
+ * `screenshotoverlayinputhandler.cpp`: preview carries the pointer point for tap shapes but not
+ * freehand, drafts fill OddEven, and a stroke with no filled area is rejected.
+ */
 internal class ScreenTextRegionView(
     context: Context,
     private val imageWidth: Int,
@@ -35,11 +43,38 @@ internal class ScreenTextRegionView(
     var onRegionMoved: ((Rect) -> Unit)? = null
     /** Add/subtract: the drag always builds a new box and reports it instead of recognizing. */
     var onRegionOperation: ((Rect) -> Unit)? = null
+    /** A finished custom shape (polyline/curve/freehand vertices in image coordinates). */
+    var onDraftCommit: ((List<PointF>, ScreenshotRegionShape) -> Unit)? = null
     var opMode = false
     private var parts: List<Rect> = emptyList()
     private var pendingSelection: Rect? = null
+    /** Confirmed region rendered lit during add/subtract construction; null otherwise. */
+    private var confirmedPath: Path? = null
+
+    private var shape = ScreenshotRegionShape.RECTANGLE
+    private var draft = mutableListOf<PointF>()
+    private var constructing = false
+    private var freehandPressed = false
+    private var freehandFilter: ScreenshotStrokeGeometry.Filter? = null
+    private var freehandRawStart = 0
+    private var lastUpAt = 0L
+    private var lastUpX = 0f
+    private var lastUpY = 0f
+    private var pressAt = 0L
+    private var removedLast = false
+
+    /** Region-type switching mirrors `setRegionType`: construction state drops, selection stays. */
+    var regionShape: ScreenshotRegionShape
+        get() = shape
+        set(value) {
+            if (shape == value) return
+            cancelConstruction()
+            shape = value
+        }
+
     fun selectRegion(region: Rect) {
         parts = emptyList()
+        confirmedPath = null
         if (width == 0 || height == 0) { pendingSelection = Rect(region); return }
         rect.set(region.left * width.toFloat() / imageWidth,region.top * height.toFloat() / imageHeight,
             region.right * width.toFloat() / imageWidth,region.bottom * height.toFloat() / imageHeight)
@@ -48,6 +83,7 @@ internal class ScreenTextRegionView(
     /** Show a multi-part region without re-firing the selection callback. */
     fun showParts(regions: List<Rect>) {
         parts = regions.map { Rect(it) }
+        confirmedPath = null
         if (parts.isNotEmpty()) {
             val box = Rect().also { r -> parts.forEach { r.union(it) } }
             if (width > 0 && height > 0) rect.set(box.left * width.toFloat() / imageWidth,box.top * height.toFloat() / imageHeight,
@@ -55,6 +91,98 @@ internal class ScreenTextRegionView(
         }
         invalidate()
     }
+    /** Show a custom (non-rect) confirmed region; the box still tracks its bounds. */
+    fun showRegion(path: Path?) {
+        parts = emptyList()
+        confirmedPath = path
+        if (width > 0 && height > 0 && path != null) {
+            val box = RectF()
+            path.computeBounds(box, true)
+            rect.set(box.left * width / imageWidth, box.top * height / imageHeight,
+                box.right * width / imageWidth, box.bottom * height / imageHeight)
+        }
+        invalidate()
+    }
+    /** Escape equivalent: construction state drops and the draft disappears. */
+    fun cancelConstruction() {
+        constructing = false
+        freehandPressed = false
+        draft.clear()
+        invalidate()
+    }
+
+    private fun toImage(x: Float, y: Float) =
+        PointF(x * imageWidth / width, y * imageHeight / height)
+
+    private fun draftPath(includePointer: PointF?): Path {
+        val vertices = mutableListOf<PointF>().apply { addAll(draft) }
+        if (includePointer != null && vertices.isNotEmpty() &&
+            ScreenshotStrokeGeometry.distance(geo(vertices.last()), geo(includePointer)) > 0.01)
+            vertices.add(includePointer)
+        if (shape == ScreenshotRegionShape.FREEHAND && vertices.size > 1 &&
+            vertices.last() == vertices.first()) vertices.removeAt(vertices.size - 1)
+        val out = Path()
+        when (shape) {
+            ScreenshotRegionShape.CURVE, ScreenshotRegionShape.FREEHAND ->
+                if (vertices.isNotEmpty()) ScreenshotStrokeGeometry.buildPath(
+                    vertices.map(::geo), vertices.size >= 3, out)
+            else -> if (vertices.isNotEmpty()) {
+                out.moveTo(vertices[0].x, vertices[0].y)
+                for (index in 1 until vertices.size) out.lineTo(vertices[index].x, vertices[index].y)
+                if (vertices.size >= 3) out.close()
+            }
+        }
+        out.fillType = Path.FillType.EVEN_ODD
+        return out
+    }
+
+    /** Test hook: what the construction draft currently holds. */
+    internal fun draftState() = draft.toList() to constructing
+
+    private fun geo(point: PointF) =
+        ScreenshotStrokeGeometry.GeoPoint(point.x.toDouble(), point.y.toDouble())
+
+    /** `finishRegionDraft`: three vertices and a real filled area or the draft is discarded. */
+    private fun attemptCommit() {
+        val vertices = draft.toList()
+        constructing = false
+        draft.clear()
+        if (vertices.size >= 3) {
+            // A line (including collinear taps) has no filled area, exactly like the original.
+            var area = 0.0
+            for (index in vertices.indices) {
+                val a = vertices[index]; val b = vertices[(index + 1) % vertices.size]
+                area += a.x.toDouble() * b.y - b.x.toDouble() * a.y
+            }
+            if (abs(area) > 0.5) onDraftCommit?.invoke(vertices, shape)
+        }
+        invalidate()
+    }
+
+    /** `removeRegionVertex`: the last tap is taken back while constructing (phone extension). */
+    private fun removeLastVertex() {
+        if (!constructing || freehandPressed || draft.isEmpty()) return
+        draft.removeAt(draft.size - 1)
+        removedLast = true
+        invalidate()
+    }
+
+    private fun ingestFreehand(points: List<PointF>) {
+        for (point in points) {
+            if (draft.size >= 65532) break
+            draft.add(point)
+            // Compact fixed windows so a delayed preview never simplifies an unbounded tail.
+            if (draft.size - freehandRawStart >= 128) {
+                val tail = ScreenshotStrokeGeometry.simplify(
+                    draft.subList(freehandRawStart, draft.size).map(::geo), 0.125)
+                    .map { PointF(it.x.toFloat(), it.y.toFloat()) }
+                draft.subList(freehandRawStart, draft.size).clear()
+                draft.addAll(tail)
+                freehandRawStart = draft.size - 1
+            }
+        }
+    }
+
     private fun region(): Rect {
         var left = (rect.left * imageWidth / width).toInt()
         var top = (rect.top * imageHeight / height).toInt()
@@ -77,8 +205,22 @@ internal class ScreenTextRegionView(
             previous.bottom * h.toFloat() / imageHeight)
     }
     override fun onDraw(canvas: Canvas) {
+        if (constructing) {
+            drawConstruction(canvas)
+            return
+        }
         paint.style = Paint.Style.FILL; paint.color = 0x80000000.toInt()
-        if (parts.size > 1) {
+        val confirmed = confirmedPath
+        if (confirmed != null) {
+            val scaled = Path()
+            confirmed.transform(android.graphics.Matrix().apply {
+                setScale(width.toFloat() / imageWidth, height.toFloat() / imageHeight)
+            }, scaled)
+            canvas.save(); canvas.clipPath(scaled, Region.Op.DIFFERENCE)
+            canvas.drawRect(0f,0f,width.toFloat(),height.toFloat(),paint); canvas.restore()
+            paint.style = Paint.Style.STROKE; paint.strokeWidth = 2 * density; paint.color = 0xff4096ff.toInt()
+            canvas.drawPath(scaled, paint)
+        } else if (parts.size > 1) {
             val shape = Path()
             for (part in parts) shape.addRect(part.left * width.toFloat() / imageWidth,part.top * height.toFloat() / imageHeight,
                 part.right * width.toFloat() / imageWidth,part.bottom * height.toFloat() / imageHeight,Path.Direction.CW)
@@ -96,19 +238,60 @@ internal class ScreenTextRegionView(
         if (parts.size > 1) for (part in parts) canvas.drawRect(
             part.left * width.toFloat() / imageWidth,part.top * height.toFloat() / imageHeight,
             part.right * width.toFloat() / imageWidth,part.bottom * height.toFloat() / imageHeight,paint)
-        else canvas.drawRect(rect, paint)
+        else if (confirmedPath == null) canvas.drawRect(rect, paint)
         val points = mutableListOf<Pair<Float,Float>>()
         val side = minOf(rect.width(),rect.height())
         if (side > 32 * density) for (x in listOf(rect.left,rect.right)) for (y in listOf(rect.top,rect.bottom)) points.add(x to y)
         if (side > 64 * density) points.addAll(listOf(rect.centerX() to rect.top,rect.right to rect.centerY(),rect.centerX() to rect.bottom,rect.left to rect.centerY()))
-        for ((x,y) in points) {
+        if (confirmedPath == null) for ((x,y) in points) {
             paint.style = Paint.Style.FILL; paint.color = blue; canvas.drawCircle(x,y,4*density,paint)
             paint.style = Paint.Style.STROKE; paint.color = Color.WHITE; paint.strokeWidth = 1.5f*density; canvas.drawCircle(x,y,4*density,paint)
         }
     }
+
+    /** Draft preview: dim everything outside confirmed∪draft, outline the draft, show vertices. */
+    private fun drawConstruction(canvas: Canvas) {
+        val draftView = Path()
+        val pointer = if (freehandPressed) null else lastPointer
+        draftPath(pointer).transform(android.graphics.Matrix().apply {
+            setScale(width.toFloat() / imageWidth, height.toFloat() / imageHeight)
+        }, draftView)
+        val lit = Path(draftView)
+        confirmedPath?.let { lit.op(it, Path.Op.UNION) }
+        paint.style = Paint.Style.FILL; paint.color = 0x80000000.toInt()
+        canvas.save(); canvas.clipPath(lit, Region.Op.DIFFERENCE)
+        canvas.drawRect(0f,0f,width.toFloat(),height.toFloat(),paint); canvas.restore()
+        if (!draftView.isEmpty) {
+            paint.style = Paint.Style.STROKE; paint.strokeWidth = 2 * density; paint.color = 0xff4096ff.toInt()
+            canvas.drawPath(draftView, paint)
+        }
+        if (shape != ScreenshotRegionShape.FREEHAND) for (point in draft) {
+            val x = point.x * width / imageWidth; val y = point.y * height / imageHeight
+            paint.style = Paint.Style.FILL; paint.color = 0xff4096ff.toInt(); canvas.drawCircle(x,y,4*density,paint)
+            paint.style = Paint.Style.STROKE; paint.color = Color.WHITE; paint.strokeWidth = 1.5f*density; canvas.drawCircle(x,y,4*density,paint)
+        }
+    }
+
+    private var lastPointer: PointF? = null
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                pressAt = event.downTime; removedLast = false
+                if (shape != ScreenshotRegionShape.RECTANGLE) {
+                    active = true; moved = false
+                    pressAt = event.eventTime
+                    val point = toImage(event.x.coerceIn(0f, width.toFloat()), event.y.coerceIn(0f, height.toFloat()))
+                    lastPointer = point
+                    if (!constructing) { constructing = true; draft.clear(); freehandRawStart = 0 }
+                    if (shape == ScreenshotRegionShape.FREEHAND) {
+                        draft.clear(); freehandRawStart = 0
+                        freehandPressed = true
+                        freehandFilter = ScreenshotStrokeGeometry.Filter(geo(point), 0.75, 6.0)
+                    }
+                    invalidate()
+                    return true
+                }
                 active = true; moved = false
                 downX = event.x.coerceIn(0f, width.toFloat()); downY = event.y.coerceIn(0f, height.toFloat())
                 before.set(rect); edges = 0
@@ -124,11 +307,68 @@ internal class ScreenTextRegionView(
                 invalidate()
             }
             MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> {
-                if (active) { active = false; rect.set(before); invalidate(); if (width > 0 && height > 0) onRegionMoved?.invoke(region()) }
+                if (!active) return true
+                if (freehandPressed) {
+                    finishFreehand(event)
+                    return true
+                }
+                if (constructing) { cancelConstruction(); return true }
+                active = false; rect.set(before); invalidate(); if (width > 0 && height > 0) onRegionMoved?.invoke(region())
             }
-            MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP -> {
+            MotionEvent.ACTION_MOVE -> {
                 if (!active) return true
                 val x = event.x.coerceIn(0f, width.toFloat()); val y = event.y.coerceIn(0f, height.toFloat())
+                if (shape != ScreenshotRegionShape.RECTANGLE) {
+                    val point = toImage(x, y)
+                    lastPointer = point
+                    if (freehandPressed) freehandFilter?.let { filter ->
+                        val out = mutableListOf<ScreenshotStrokeGeometry.GeoPoint>()
+                        filter.ingest(geo(point), out)
+                        ingestFreehand(out.map { PointF(it.x.toFloat(), it.y.toFloat()) })
+                    }
+                    invalidate()
+                    return true
+                }
+                val dx = x - downX; val dy = y - downY
+                if (abs(dx) > slop || abs(dy) > slop) moved = true
+                when (edges) {
+                    0 -> rect.set(minOf(downX, x), minOf(downY, y), maxOf(downX, x), maxOf(downY, y))
+                    16 -> { rect.set(before); rect.offset(dx.coerceIn(-before.left, width - before.right), dy.coerceIn(-before.top, height - before.bottom)) }
+                    else -> {
+                        if (edges and 1 != 0) rect.left = x.coerceAtMost(rect.right - 1)
+                        if (edges and 2 != 0) rect.right = x.coerceAtLeast(rect.left + 1)
+                        if (edges and 4 != 0) rect.top = y.coerceAtMost(rect.bottom - 1)
+                        if (edges and 8 != 0) rect.bottom = y.coerceAtLeast(rect.top + 1)
+                    }
+                }
+                invalidate()
+                if (moved) onRegionMoved?.invoke(region())
+            }
+            MotionEvent.ACTION_UP -> {
+                if (!active) return true
+                val x = event.x.coerceIn(0f, width.toFloat()); val y = event.y.coerceIn(0f, height.toFloat())
+                if (shape != ScreenshotRegionShape.RECTANGLE) {
+                    active = false
+                    val point = toImage(x, y)
+                    if (freehandPressed) { finishFreehand(event); return true }
+                    val held = event.eventTime - pressAt > ViewConfiguration.getLongPressTimeout()
+                    if (held) { removeLastVertex(); invalidate(); return true }
+                    // A tap fixes one vertex; the second tap of a double tap closes the region.
+                    val now = event.eventTime
+                    val doubleTap = now - lastUpAt < ViewConfiguration.getDoubleTapTimeout() &&
+                        ScreenshotStrokeGeometry.distance(geo(point), geo(PointF(lastUpX, lastUpY))) < 24 * density * imageWidth / width
+                    lastUpAt = now; lastUpX = point.x; lastUpY = point.y
+                    if (doubleTap) {
+                        if (draft.isNotEmpty()) draft[draft.size - 1] = point
+                        attemptCommit()
+                        return true
+                    }
+                    if (draft.isEmpty() || ScreenshotStrokeGeometry.distance(geo(draft.last()), geo(point)) > 0.01) {
+                        if (draft.size < 16384) draft.add(point)
+                    }
+                    invalidate()
+                    return true
+                }
                 val dx = x - downX; val dy = y - downY
                 if (abs(dx) > slop || abs(dy) > slop) moved = true
                 when (edges) {
@@ -157,5 +397,27 @@ internal class ScreenTextRegionView(
             }
         }
         return true
+    }
+
+    /** Freehand release: flush the filter tail, then close like the original's finishRegionDraft. */
+    private fun finishFreehand(event: MotionEvent) {
+        val x = event.x.coerceIn(0f, width.toFloat()); val y = event.y.coerceIn(0f, height.toFloat())
+        val point = toImage(x, y)
+        val filter = freehandFilter
+        freehandPressed = false
+        freehandFilter = null
+        if (filter != null) {
+            val out = mutableListOf<ScreenshotStrokeGeometry.GeoPoint>()
+            filter.ingest(geo(point), out)
+            ingestFreehand(out.map { PointF(it.x.toFloat(), it.y.toFloat()) })
+            filter.settleEndpoint()?.let { tail ->
+                if (draft.isEmpty() || ScreenshotStrokeGeometry.distance(geo(draft.last()), tail) > 1e-9)
+                    draft.add(PointF(tail.x.toFloat(), tail.y.toFloat()))
+            }
+        }
+        // The original simplifies the whole stroke once more before accepting it.
+        draft = ScreenshotStrokeGeometry.simplify(draft.map(::geo), 0.125)
+            .map { PointF(it.x.toFloat(), it.y.toFloat()) }.toMutableList()
+        attemptCommit()
     }
 }

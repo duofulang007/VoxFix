@@ -1,0 +1,110 @@
+package local.voxfix.debug
+
+import android.content.Context
+import android.graphics.*
+import android.view.InputDevice
+import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
+
+/**
+ * T16 text contract: `screenshotdefaultstyles.h` defaults, the original per-line background pill
+ * (`snow_canvas_text_render.cpp:drawBackground`) and the 6–256 double font size.
+ */
+internal object ScreenshotTextChecks {
+    private fun find(view: View,label: String): View? {
+        if(view.contentDescription==label) return view
+        if(view is ViewGroup) for(i in 0 until view.childCount) find(view.getChildAt(i),label)?.let { return it }
+        return null
+    }
+    private fun scroll(view: View,delta: Float) {
+        val pointer=MotionEvent.PointerProperties().apply { id=0; toolType=MotionEvent.TOOL_TYPE_MOUSE }
+        val position=MotionEvent.PointerCoords().apply { setAxisValue(MotionEvent.AXIS_VSCROLL,delta) }
+        val event=MotionEvent.obtain(0,1,MotionEvent.ACTION_SCROLL,1,arrayOf(pointer),arrayOf(position),0,0,1f,1f,0,0,InputDevice.SOURCE_MOUSE,0)
+        try { check(view.dispatchGenericMotionEvent(event)) } finally { event.recycle() }
+    }
+    /** The bar is rebuilt by the host after every style change; a test has to do that itself. */
+    private fun chip(controls: ScreenshotDrawingControls,label: String): View {
+        controls.refresh()
+        return find(controls,label) ?: error("缺少控件：$label")
+    }
+    fun run(context: Context) {
+        val image=Bitmap.createBitmap(400,300,Bitmap.Config.ARGB_8888).apply { eraseColor(Color.WHITE) }
+        val renderer=ScreenshotDrawingRenderer(image) { 1f }
+        val memory=ScreenshotToolMemory(context)
+        val layer=ScreenshotDrawingLayer(context,image,memory) {}
+        val defaults=defaultScreenshotDrawingStyle(ScreenshotDrawingTool.TEXT)
+        val red=Color.RED
+        fun text(style: ScreenshotDrawingStyle=defaults,value: String="WWWW\nW")=ScreenshotDrawingStroke(ScreenshotDrawingTool.TEXT,
+            listOf(ScreenshotDrawingPoint(20f,20f)),style.color,2f,
+            style.copy(hasFill=true,fillPattern=ScreenshotFillPattern.SOLID),text=value,textWidth=360f)
+        fun render(stroke: ScreenshotDrawingStroke)=image.copy(Bitmap.Config.ARGB_8888,true).also {
+            renderer.draw(Canvas(it),listOf(stroke),Rect(0,0,400,300))
+        }
+        try {
+            // screenshotdefaultstyles.h text block.
+            check(defaults.fontSize==30f && defaults.color==0xFFF5222D.toInt()) { "文字默认字号或颜色不符" }
+            check(defaults.outlineColor==0xFFFFCCC7.toInt() && defaults.outlineWidth==0)
+            check(defaults.cornerRadius==6 && defaults.align==0 && defaults.verticalAlign==1)
+            check(!defaults.hasFill && (defaults.fillColor ushr 24)==0) { "文字默认填充应为透明" }
+
+            // One pill per laid-out line with 0.32/0.1 line-height padding, not one full-width box.
+            val stroke=text(style=defaults.copy(fillColor=red))
+            val box=renderer.bounds(stroke)
+            val y1=(box.top+box.height()/4).toInt(); val y2=(box.top+box.height()*3/4).toInt()
+            val painted=render(stroke)
+            try {
+                check(painted.getPixel((box.left-6).toInt(),y1)==red && painted.getPixel((box.left-6).toInt(),y2)==red) { "逐行背景缺少外扩内边距" }
+                check(painted.getPixel((box.right-20).toInt(),y1)==Color.WHITE) { "首行背景仍按整框铺满" }
+                check(painted.getPixel((box.right-20).toInt(),y2)==Color.WHITE) { "次行背景仍按整框铺满" }
+                check(painted.getPixel(20,box.bottom.toInt()+20)==Color.WHITE) { "文字背景越出文字范围" }
+            } finally { painted.recycle() }
+
+            // Doubles survive the document and the per-tool memory; the badge keeps its wider bound.
+            val fractional=text(style=defaults.copy(fontSize=24.5f)).copy(id=9001)
+            val encoded=ScreenshotDocumentCodec.encode(ScreenshotDocument.full(400,300).copy(objects=listOf(fractional)))
+            check(ScreenshotDocumentCodec.decode(encoded).objects.single().style.fontSize==24.5f) { "工程丢失字号小数" }
+            val legacy=org.json.JSONObject(encoded)
+            legacy.getJSONArray("objects").getJSONObject(0).getJSONObject("style").put("fontSize",30)
+            check(ScreenshotDocumentCodec.decode(legacy.toString()).objects.single().style.fontSize==30f) { "旧整数字号无法读取" }
+            memory.save(ScreenshotDrawingTool.TEXT,defaults.copy(fontSize=24.5f))
+            check(memory.style(ScreenshotDrawingTool.TEXT)?.fontSize==24.5f) { "参数记忆丢失字号小数" }
+            memory.save(ScreenshotDrawingTool.SERIAL,defaultScreenshotDrawingStyle(ScreenshotDrawingTool.SERIAL).copy(fontSize=300f))
+            check(memory.style(ScreenshotDrawingTool.SERIAL)?.fontSize==300f) { "序号字号上限未放宽到512" }
+            memory.save(ScreenshotDrawingTool.TEXT,defaults)
+            memory.save(ScreenshotDrawingTool.SERIAL,defaultScreenshotDrawingStyle(ScreenshotDrawingTool.SERIAL))
+
+            // Toolbar: readout, wheel step and the typed editor share the same bounds.
+            layer.layout(0,0,400,300); layer.region=Rect(0,0,400,300); layer.savedFontUnit=1f; layer.savedPixelUnit=1f
+            layer.tool=ScreenshotDrawingTool.TEXT
+            layer.applyStyle(defaults)
+            var asked=""
+            val controls=ScreenshotDrawingControls(context,layer,{ title,_,save -> if(title=="字号") { asked=title; save("24.5") } },false)
+            chip(controls,"字号 30").performClick()
+            check(layer.style.fontSize==24.5f && asked=="字号") { "字号输入未接入" }
+            scroll(chip(controls,"字号 24.5"),1f); check(layer.style.fontSize==25.5f)
+            scroll(chip(controls,"字号 25.5"),-1f); check(layer.style.fontSize==24.5f)
+            chip(controls,"字号 42").performClick(); check(layer.style.fontSize==42f)
+            // The editor rejects out-of-range input; it must not silently write a clamped value.
+            val rejecting=ScreenshotDrawingControls(context,layer,{ title,_,save -> if(title=="字号") save("300") },false)
+            chip(rejecting,"字号 42").performClick(); check(layer.style.fontSize==42f) { "文字字号接受了超过256的值" }
+            layer.applyStyle(layer.style.copy(fontSize=256f))
+            scroll(chip(controls,"字号 256"),1f); check(layer.style.fontSize==256f) { "字号滚轮越过256" }
+
+            // The serial badge reaches 512, the text tool stops at 256.
+            layer.tool=ScreenshotDrawingTool.SERIAL
+            val serialControls=ScreenshotDrawingControls(context,layer,{ title,_,save -> if(title=="字号") save("300") },false)
+            chip(serialControls,"字号 24").performClick(); check(layer.style.fontSize==300f) { "序号字号未接受300" }
+            scroll(chip(serialControls,"字号 300"),1f); check(layer.style.fontSize==301f) { "序号字号滚轮未生效" }
+            layer.tool=ScreenshotDrawingTool.TEXT
+
+            // Evidence for the record: three lines with the light-yellow fill and 6px corners.
+            val evidence=render(text(style=defaults.copy(hasFill=true,fillColor=0xFFFFF1B8.toInt()),
+                value="文字默认\n逐行背景\n短"))
+            try {
+                java.io.File(context.getExternalFilesDir(null),"snow-t16-text.png").outputStream()
+                    .use { evidence.compress(Bitmap.CompressFormat.PNG,100,it) }
+            } finally { evidence.recycle() }
+        } finally { layer.close(); renderer.close(); image.recycle() }
+    }
+}

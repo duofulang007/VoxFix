@@ -30,8 +30,29 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
     override fun onStart() {
         val output = Bundle()
         try {
+            if (modelCompare == "screenshot-linear-handles") {
+                output.putString("result", ScreenshotLinearHandlesChecks.run(this)); finish(Activity.RESULT_OK,output); return
+            }
+            if (modelCompare == "screenshot-selection-resize") {
+                output.putString("result", ScreenshotSelectionResizeChecks.run(this)); finish(Activity.RESULT_OK,output); return
+            }
+            if (modelCompare == "screenshot-selection-style") {
+                output.putString("result", ScreenshotSelectionStyleChecks.run(this)); finish(Activity.RESULT_OK,output); return
+            }
+            if (modelCompare == "screenshot-pen-feedback") {
+                output.putString("result", ScreenshotPenFeedbackChecks.run(this)); finish(Activity.RESULT_OK,output); return
+            }
+            if (modelCompare == "screenshot-color-picker") {
+                output.putString("result", ScreenshotColorPickerSmoke.run(this)); finish(Activity.RESULT_OK,output); return
+            }
+            if (modelCompare == "screenshot-parity-foundation") {
+                output.putString("result", ScreenshotParityFoundationSmoke.run(this)); finish(Activity.RESULT_OK,output); return
+            }
             if (modelCompare == "screenshot-filter") {
                 output.putString("result", ScreenshotFilterStabilitySmoke.run(this)); finish(Activity.RESULT_OK,output); return
+            }
+            if (modelCompare == "screenshot-history") {
+                output.putString("result", ScreenshotHistorySmoke.run(this)); finish(Activity.RESULT_OK,output); return
             }
             if (modelCompare == "screenshot-memory") {
                 output.putString("result", ScreenshotToolMemorySmoke.run(this)); finish(Activity.RESULT_OK,output); return
@@ -170,12 +191,18 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
                 modelCompare == "translate-download" -> "TRANSLATE_DOWNLOAD_FAIL"
                 modelCompare == "production-ocr-layouts" -> "PRODUCTION_OCR_LAYOUT_FAIL"
                 modelCompare == "screenshot-toolbar" -> "SCREENSHOT_TOOLBAR_FAIL"
+                modelCompare == "screenshot-selection-style" -> "SCREENSHOT_SELECTION_STYLE_FAIL"
+                modelCompare == "screenshot-selection-resize" -> "SCREENSHOT_SELECTION_RESIZE_FAIL"
+                modelCompare == "screenshot-linear-handles" -> "SCREENSHOT_LINEAR_HANDLES_FAIL"
+                modelCompare == "screenshot-color-picker" -> "SCREENSHOT_COLOR_PICKER_FAIL"
+                modelCompare == "screenshot-parity-foundation" -> "SCREENSHOT_PARITY_FOUNDATION_FAIL"
                 modelCompare == "screenshot-selected" -> "SCREENSHOT_SELECTED_TOOLS_FAIL"
                 modelCompare == "screenshot-editing" -> "SCREENSHOT_OBJECT_EDITING_FAIL"
                 modelCompare == "screenshot-document" -> "SCREENSHOT_DOCUMENT_FAIL"
                 modelCompare == "screenshot-project" -> "SCREENSHOT_PROJECT_FAIL"
                 modelCompare == "screenshot-overlay-suites" -> "SCREENSHOT_OVERLAY_SUITES_FAIL"
                 modelCompare == "screenshot-refinement" -> "SCREENSHOT_REFINEMENT_FAIL"
+                modelCompare == "screenshot-history" -> "SCREENSHOT_HISTORY_FAIL"
                 modelCompare == "screenshot-filter" -> "SCREENSHOT_FILTER_STABILITY_FAIL"
                 modelCompare.startsWith("screenshot-memory") -> "SCREENSHOT_TOOL_MEMORY_FAIL"
                 modelCompare.startsWith("screen-text") -> "SCREEN_TEXT_SMOKE_FAIL"

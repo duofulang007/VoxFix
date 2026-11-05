@@ -30,7 +30,7 @@ object ScreenshotDocumentSmoke {
                 id = 11),
             ScreenshotDrawingStroke(ScreenshotDrawingTool.TEXT, listOf(ScreenshotDrawingPoint(200f, 1200f)),
                 0xFF00FF00.toInt(), 2f,
-                ScreenshotDrawingStyle(color = 0xFF00FF00.toInt(), fontSize = 32, bold = true, align = 2,
+                ScreenshotDrawingStyle(color = 0xFF00FF00.toInt(), fontSize = 32f, bold = true, align = 2,
                     fontFamily = "serif", verticalAlign = 1, hasFill = true, fillColor = 0xFF223344.toInt(), cornerRadius = 8),
                 text = "第一行\n第二行", textWidth = 480f, fontScale = 1.5f, textHeight = 90f, id = 12),
             ScreenshotDrawingStroke(ScreenshotDrawingTool.FILTER,

@@ -87,7 +87,7 @@ class ScreenshotToolbarLayoutTest {
         val ready = ScreenshotToolbarState(hasRegion=true,hasText=true)
         assertFalse(layout.visible(ready).flatten().contains(ScreenshotAction.EDIT))
         assertTrue(layout.visible(ready.copy(editing=true)).contains(listOf(ScreenshotAction.EDIT)))
-        assertEquals(listOf(listOf(ScreenshotAction.TRANSLATE)),layout.visible(ready.copy(translating=true)))
+        assertEquals(setOf(listOf(ScreenshotAction.TRANSLATE),listOf(ScreenshotAction.CLOSE)),layout.visible(ready.copy(translating=true)).toSet())
     }
 
     @Test fun stacksFollowContextAndKeepCompletionAndCancelDirect() {
@@ -100,7 +100,7 @@ class ScreenshotToolbarLayoutTest {
         val editing = layout.visible(ready.copy(editing = true))
         assertTrue(editing.contains(listOf(ScreenshotAction.EDIT)))
         assertFalse(editing.flatten().contains(ScreenshotAction.SAVE))
-        assertEquals(listOf(listOf(ScreenshotAction.TRANSLATE)), layout.visible(ready.copy(translating = true)))
+        assertEquals(setOf(listOf(ScreenshotAction.TRANSLATE),listOf(ScreenshotAction.CLOSE)), layout.visible(ready.copy(translating = true)).toSet())
         assertEquals(listOf(listOf(ScreenshotAction.CLOSE)), layout.visible(ready.copy(busy = true)))
     }
 }

@@ -40,8 +40,12 @@ data class ScreenshotDocument(
     val text: ScreenshotDocumentText? = null,
     /** Empty means the rectangular viewport; otherwise these canvas rectangles form the mask. */
     val regions: List<ScreenshotDocRect> = emptyList(),
+    /** JSON operand list for a custom (non-rect) capture area; takes priority over [regions]. */
+    val regionOperands: String? = null,
     val drawingUnit: Float = 0f,
-    val fontUnit: Float = 0f
+    val fontUnit: Float = 0f,
+    /** Canvas-level watermark; null keeps projects written before T23 unchanged. */
+    val watermark: ScreenshotWatermark? = null
 ) {
     fun isEmpty() = objects.isEmpty() && text == null
     companion object {

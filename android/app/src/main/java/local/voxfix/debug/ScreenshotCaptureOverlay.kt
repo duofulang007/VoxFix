@@ -7,6 +7,7 @@ import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Insets
 import android.graphics.PixelFormat
+import android.graphics.PointF
 import android.graphics.PorterDuff
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
@@ -82,10 +83,6 @@ class ScreenshotCaptureOverlay(
         override fun onMeasure(widthSpec: Int, heightSpec: Int) {
             val width = View.MeasureSpec.getSize(widthSpec)
             if (width > 0 && toolbarAvailable != width-bars.left-bars.right-dp(16)) rebuildToolbar(width)
-            if (width > 0) drawingStyles.layoutParams?.let { params ->
-                val available = minOf(dp(320),width-bars.left-bars.right-dp(16)).coerceAtLeast(1)
-                if (params.width != available) { params.width = available; drawingStyles.layoutParams = params }
-            }
             super.onMeasure(widthSpec,heightSpec)
         }
     }
@@ -140,6 +137,12 @@ class ScreenshotCaptureOverlay(
         background = surface(PANEL_RADIUS)
         setPadding(dp(12),dp(4),dp(12),dp(4)); elevation = dp(6).toFloat(); visibility = View.GONE
     }
+    /** Selected-object actions live in the bar's right column, not a full-width bottom row. */
+    private val selectSideActions = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL; gravity = Gravity.TOP
+        setPadding(dp(2),dp(4),dp(2),dp(4)); contentDescription = "选中对象操作"; visibility = View.GONE
+    }
+    private var selectActionKey: String? = null
     private var annotationEditor: View? = null
     private var annotationBackdrop: View? = null
     private var annotationField: ScreenshotTextEditor? = null
@@ -150,6 +153,7 @@ class ScreenshotCaptureOverlay(
     private var toolbarAnchor=android.graphics.Point()
     /** Set once the user drags the grip: the bar then stays where they put it. */
     private var toolbarManual: android.graphics.Point?=null
+    private val detailBody = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.TOP }
     private var secondaryMaxHeight=dp(280)
     private val secondaryPanel=object : LinearLayout(context) {
         override fun onMeasure(widthSpec: Int,heightSpec: Int) {
@@ -167,6 +171,7 @@ class ScreenshotCaptureOverlay(
     private val languageDivider=View(context).apply { setBackgroundColor(COLOR_SEPARATOR); visibility=View.GONE }
     private var actionGeneration = 0
     private var disposed = false
+    private var closeRequested = false
     private val actionWorker = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val selector = ScreenTextRegionView(context,image.width,image.height,null,::select)
     private val resultLayer = FrameLayout(context).apply { visibility = View.INVISIBLE }
@@ -176,10 +181,24 @@ class ScreenshotCaptureOverlay(
         setColor(COLOR_PRIMARY); cornerRadius = dp(radius).toFloat()
     }
     private val toolbar = ScreenshotToolbarPanel(context)
+    /** A10/A11: the selection readout switches between physical pixels and density-independent dp. */
+    private var logicalUnits = false
     private val status = TextView(context).apply {
         text = "拖动框选，可移动和拉边调整"; textSize = 12f; setTextColor(COLOR_TEXT)
         setPadding(dp(10),dp(6),dp(10),dp(6)); background = surface(PANEL_RADIUS)
         elevation = dp(6).toFloat(); accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        isClickable = true
+        setOnClickListener {
+            if (selectActionsScroll.visibility == View.VISIBLE && regionOperation == null && picked != null) {
+                logicalUnits = !logicalUnits; sync()
+            }
+        }
+    }
+    private fun selectionSize(rect: Rect): String {
+        if (!logicalUnits) return "选区 ${rect.width()} × ${rect.height()} px"
+        val density = context.resources.displayMetrics.density
+        val scale = if (density > 0f) density else 1f
+        return "选区 ${Math.round(rect.width() / scale)} × ${Math.round(rect.height() / scale)} dp"
     }
     private val full = Action(ScreenshotAction.FULL_SCREEN, R.drawable.ic_screenshot_fullscreen) { selectFull() }
     private val recognizeAction = Action(ScreenshotAction.RECOGNIZE, R.drawable.snow_recognize) { toggleRecognition() }
@@ -188,7 +207,11 @@ class ScreenshotCaptureOverlay(
     private val editAction = Action(ScreenshotAction.EDIT, R.drawable.snow_edit) { setEditing(!editing, document = true) }
     private val translateAction = Action(ScreenshotAction.TRANSLATE, R.drawable.snow_translate) { requestTranslation() }
     private val eyeAction = Action(ScreenshotAction.SHOW_ORIGINAL, R.drawable.snow_eye) { toggleOriginal() }
-    private val closeAction = Action(ScreenshotAction.CLOSE, R.drawable.snow_close, danger = true) { exit() }
+    private val closeAction = Action(ScreenshotAction.CLOSE, R.drawable.snow_close, danger = true) {
+        closeRequested = true
+        translator.cancel()
+        exit()
+    }
     private fun editedLayer() = if (showingTranslation) translationLayer else textLayer
     private val undoAction = Action(ScreenshotAction.UNDO, R.drawable.snow_undo) { if (editing) editedLayer()?.undo() else drawing.undo() }
     private val redoAction = Action(ScreenshotAction.REDO, R.drawable.snow_redo) { if (editing) editedLayer()?.redo() else drawing.redo() }
@@ -206,14 +229,14 @@ class ScreenshotCaptureOverlay(
     /** Placeholder entries: the slot and icon exist, the capture itself is not built yet. */
     private val scrollAction = Action(ScreenshotAction.SCROLL,R.drawable.snow_scroll) { showFeedback("长截屏暂未支持，入口已保留") }
     private val recordAction = Action(ScreenshotAction.RECORD,R.drawable.snow_record) { showFeedback("录屏暂未支持，入口已保留") }
-    private val lineAction = Action(ScreenshotAction.LINE,R.drawable.snow_line) { showFeedback("直线暂未支持，入口已保留") }
-    private val watermarkAction = Action(ScreenshotAction.WATERMARK,R.drawable.snow_watermark) { showFeedback("水印暂未支持，入口已保留") }
     /** Edit-selection mode: add/subtract parts of the capture area, as Snow Shot's move bar does. */
     private val moveAction = Action(ScreenshotAction.MOVE,R.drawable.snow_move) { toggleMoveMode() }
-    private val actions = listOf(full,recognizeAction,saveAction,closeAction,copyAction,eyeAction,editAction,translateAction,undoAction,redoAction,barcodeAction,pinAction,shareAction,scrollAction,recordAction,moveAction,lineAction,watermarkAction)+drawingActions
+    private val actions = listOf(full,recognizeAction,saveAction,closeAction,copyAction,eyeAction,editAction,translateAction,undoAction,redoAction,barcodeAction,pinAction,shareAction,scrollAction,recordAction,moveAction)+drawingActions
     private var moveMode = false
     private var captureRegion: ScreenshotRegion?=null
     private var regionOperation: ScreenshotRegionOp?=null
+    /** Region shape for the next selection, persisted like the original's region_type preference. */
+    private var regionShape = loadRegionShapePreference()
     private val selectActions=LinearLayout(context).apply {
         // Two rows so every control is visible on a phone; the scroll wrapper only guards narrow cases.
         orientation=LinearLayout.VERTICAL; setPadding(dp(4),dp(2),dp(4),dp(2)); visibility=View.VISIBLE
@@ -236,17 +259,22 @@ class ScreenshotCaptureOverlay(
     }
     init {
         root.addView(content,FrameLayout.LayoutParams(-1,-1))
+        drawing.colorSamplingBase={ if(resultLayer.visibility==View.VISIBLE) (if(showingTranslation) translationLayer else textLayer)?.render(Rect(0,0,image.width,image.height)) else null }
         content.addView(background,FrameLayout.LayoutParams(-1,-1))
         content.addView(selector,FrameLayout.LayoutParams(-1,-1))
         content.addView(resultLayer,FrameLayout.LayoutParams(-1,-1))
         content.addView(drawing,FrameLayout.LayoutParams(-1,-1))
         selector.onRegionMoved = ::select
         selector.onRegionOperation = ::applyRegionOperation
+        selector.onDraftCommit = ::commitRegionShape
+        selector.regionShape = regionShape
         selector.contentDescription = "拖动框选截图区域，可在框内移动或拉边调整，松手后可识别或保存"
         selector.setOnTouchListener { _,_ -> busy || editing || translating || project!=null }
         root.addView(toolbar,FrameLayout.LayoutParams(dp(200),dp(BUTTON+PANEL_V*2)))
         root.addView(status,FrameLayout.LayoutParams(-2,-2))
-        secondaryPanel.addView(drawingStyles,LinearLayout.LayoutParams(-1,-2))
+        detailBody.addView(drawingStyles,LinearLayout.LayoutParams(0,-2,1f))
+        detailBody.addView(selectSideActions,LinearLayout.LayoutParams(dp(76),-2))
+        secondaryPanel.addView(detailBody,LinearLayout.LayoutParams(-1,-2))
         initSelectionActions()
         selectActionsScroll.addView(selectActions,android.widget.FrameLayout.LayoutParams(-2,-2))
         secondaryPanel.addView(selectActionsScroll,LinearLayout.LayoutParams(-1,dp(80)))
@@ -276,14 +304,16 @@ class ScreenshotCaptureOverlay(
         val restored=project ?: return
         val document=restored.document
         picked=document.viewport.toRect()
-        captureRegion=document.regions.takeIf { it.isNotEmpty() }?.let { ScreenshotRegion(it.map(ScreenshotDocRect::toRect)) }
+        captureRegion=document.regionOperands?.let { value ->
+            runCatching { ScreenshotRegion.fromJson(org.json.JSONArray(value)) }.getOrNull()
+        } ?: document.regions.takeIf { it.isNotEmpty() }?.let { ScreenshotRegion.ofRects(it.map(ScreenshotDocRect::toRect)) }
         drawing.region=picked?.let(::Rect)
         drawing.savedPixelUnit=document.drawingUnit
         drawing.savedFontUnit=document.fontUnit
-        drawing.history.load(document.objects)
+        drawing.history.load(document.objects, document.watermark ?: ScreenshotWatermark())
         drawing.invalidate()
         picked?.let { selector.selectRegion(Rect(it)) }
-        captureRegion?.let { selector.showParts(it.rects) }
+        captureRegion?.let { if (it.isCustom) selector.showRegion(it.path()) else selector.showParts(it.rects) }
         drawing.tool=ScreenshotDrawingTool.SELECT
         status.visibility=View.GONE
         val text=document.text ?: return
@@ -325,6 +355,7 @@ class ScreenshotCaptureOverlay(
         drawingActions.forEach { it.active = ScreenshotDrawingTools.actions[drawing.tool] == it.action }
         drawing.visibility = if (showingOriginal || showingTranslation || translating || editing) View.INVISIBLE else View.VISIBLE
         drawingStyles.visibility = if (drawingStyleCardVisible()) View.VISIBLE else View.GONE
+        syncSelectSideActions()
         translateAction.setImageResource(R.drawable.snow_translate)
         actions.forEach {
             it.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
@@ -349,9 +380,13 @@ class ScreenshotCaptureOverlay(
         selectActionsScroll.visibility=if(showSelection) View.VISIBLE else View.GONE
         applyCellStyle(addRegionButton,regionOperation==ScreenshotRegionOp.ADD)
         applyCellStyle(subtractRegionButton,regionOperation==ScreenshotRegionOp.SUBTRACT)
-        applyCellStyle(regionRectButton,true)
+        applyCellStyle(regionRectButton,regionShape==ScreenshotRegionShape.RECTANGLE)
+        applyCellStyle(regionPolylineButton,regionShape==ScreenshotRegionShape.POLYLINE)
+        applyCellStyle(regionCurveButton,regionShape==ScreenshotRegionShape.CURVE)
+        applyCellStyle(regionFreehandButton,regionShape==ScreenshotRegionShape.FREEHAND)
         if(showSelection && regionOperation==null) picked?.let {
-            status.text="选区 ${it.width()} × ${it.height()}"
+            status.text=selectionSize(it)
+            status.contentDescription="${selectionSize(it)}，点击切换单位"
             status.visibility=View.VISIBLE
         }
         secondaryPanel.visibility=if(annotationEditor==null && (drawingStyles.visibility==View.VISIBLE || resultActions.visibility==View.VISIBLE ||
@@ -381,10 +416,10 @@ class ScreenshotCaptureOverlay(
         }
         icon(addRegionButton,R.drawable.snow_region_add,"添加截图区域") { toggleRegionOperation(ScreenshotRegionOp.ADD) }
         icon(subtractRegionButton,R.drawable.snow_region_reduce,"减少截图区域") { toggleRegionOperation(ScreenshotRegionOp.SUBTRACT) }
-        icon(regionRectButton,R.drawable.snow_region_rect,"矩形截图区域") {}
-        icon(regionPolylineButton,R.drawable.snow_region_polyline,"折线截图区域，暂未支持") { showFeedback("折线截图区域暂未支持") }
-        icon(regionCurveButton,R.drawable.snow_region_curve,"曲线截图区域，暂未支持") { showFeedback("曲线截图区域暂未支持") }
-        icon(regionFreehandButton,R.drawable.snow_region_freehand,"自由手绘截图区域，暂未支持") { showFeedback("自由手绘截图区域暂未支持") }
+        icon(regionRectButton,R.drawable.snow_region_rect,"矩形截图区域") { setRegionShape(ScreenshotRegionShape.RECTANGLE) }
+        icon(regionPolylineButton,R.drawable.snow_region_polyline,"折线截图区域") { setRegionShape(ScreenshotRegionShape.POLYLINE) }
+        icon(regionCurveButton,R.drawable.snow_region_curve,"曲线截图区域") { setRegionShape(ScreenshotRegionShape.CURVE) }
+        icon(regionFreehandButton,R.drawable.snow_region_freehand,"自由手绘截图区域") { setRegionShape(ScreenshotRegionShape.FREEHAND) }
         icon(cursorButton,R.drawable.snow_cursor,"捕捉光标，暂未支持") { showFeedback("捕捉光标暂未支持") }
         icon(recaptureButton,R.drawable.snow_recapture,"重新截图") { recapture() }
         icon(qrButton,R.drawable.snow_barcode,"显示二维码") { scanBarcode() }
@@ -433,15 +468,55 @@ class ScreenshotCaptureOverlay(
         rebuildDrawingStyles(); sync()
     }
     private fun applyRegionOperation(box: Rect) {
+        applyRegionShape(rectVertices(box), ScreenshotRegionShape.RECTANGLE)
+    }
+
+    private fun rectVertices(box: Rect) = listOf(
+        PointF(box.left.toFloat(), box.top.toFloat()), PointF(box.right.toFloat(), box.top.toFloat()),
+        PointF(box.right.toFloat(), box.bottom.toFloat()), PointF(box.left.toFloat(), box.bottom.toFloat()))
+
+    /** Region-type switching: construction drops, a confirmed selection survives (setRegionType). */
+    private fun setRegionShape(value: ScreenshotRegionShape) {
+        if (busy || translating || editing || project != null) return
+        if (regionShape == value) return
+        selector.cancelConstruction()
+        selector.regionShape = value
+        regionShape = value
+        context.getSharedPreferences("screenshot-region-type", Context.MODE_PRIVATE).edit()
+            .putString("screenshot_selection/region_type", value.id).apply()
+        sync()
+    }
+
+    private fun loadRegionShapePreference() = ScreenshotRegionShape.fromId(
+        context.getSharedPreferences("screenshot-region-type", Context.MODE_PRIVATE)
+            .getString("screenshot_selection/region_type", null))
+
+    /** A finished custom shape lands here: replace the selection, or feed the armed operation. */
+    private fun commitRegionShape(vertices: List<PointF>, shape: ScreenshotRegionShape) {
+        if (project != null || busy || translating || editing) return
+        if (regionOperation != null) { applyRegionShape(vertices, shape); return }
+        val next = ScreenshotRegion.ofShape(vertices, shape)
+        if (next.isEmpty) return
+        captureRegion = next.takeIf { it.isCustom || !it.isRectangle }
+        picked = Rect(next.bounds)
+        drawing.region = picked?.let(::Rect); drawing.invalidate()
+        clearText()
+        selector.showRegion(next.path())
+        status.visibility = View.GONE
+        moveMode = false; moveAction.active = false
+        sync()
+    }
+
+    private fun applyRegionShape(vertices: List<PointF>, shape: ScreenshotRegionShape) {
         val op=regionOperation ?: return
-        val base=captureRegion ?: picked?.let { ScreenshotRegion(listOf(Rect(it))) } ?: return
-        val next=if(op==ScreenshotRegionOp.ADD) base.united(box) else base.subtracted(box)
+        val base=captureRegion ?: picked?.let { ScreenshotRegion.ofRects(listOf(Rect(it))) } ?: return
+        val next=base.combined(vertices, shape, op)
         if(next.isEmpty) { showFeedback("选区已为空，请重新框选"); picked?.let { selector.showParts(base.rects) }; return }
-        captureRegion=next.takeIf { !it.isRectangle }
+        captureRegion=next.takeIf { it.isCustom || !it.isRectangle }
         picked=Rect(next.bounds)
         drawing.region=picked?.let(::Rect); drawing.invalidate()
         clearText()
-        selector.showParts(next.rects)
+        if (next.isCustom) selector.showRegion(next.path()) else selector.showParts(next.rects)
         status.visibility=View.GONE
         sync()
     }
@@ -562,14 +637,38 @@ class ScreenshotCaptureOverlay(
     }
     private fun rebuildDrawingStyles() {
         val scroll=drawingStyles.scrollY
-        val key=(drawing.selected?.tool ?: drawing.tool) to drawing.selectedIndex
+        val key=drawing.inspectedTool to drawing.selectedIndex
         val controls=(drawingStyles.getChildAt(0) as? ScreenshotDrawingControls)?.takeIf { drawingControlKey==key }?.also { it.refresh() }
-            ?: ScreenshotDrawingControls(context,drawing,::editDrawingValue).also {
+            ?: ScreenshotDrawingControls(context,drawing,::editDrawingValue,showSelectActions=false).also {
                 drawingStyles.removeAllViews(); drawingStyles.addView(it); drawingControlKey=key
             }
         drawingStyles.post { drawingStyles.scrollTo(0,scroll) }
         drawingStyles.visibility=if(controls.hasContent && drawing.tool!=null && annotationEditor==null) View.VISIBLE else View.GONE
+        syncSelectSideActions()
         placeControls()
+    }
+    /**
+     * Selected-object actions sit in the detail bar's right column: the rows above rarely fill the
+     * card width, and a full-width bottom row cost a whole 44dp band for two chips.
+     */
+    private fun syncSelectSideActions() {
+        val key = drawing.selected?.takeIf { drawing.selectedIndices.size==1 }?.let { "${it.tool}:${it.id}:${drawing.overlapCount}" }
+        if (key != selectActionKey) { selectActionKey = key; rebuildSelectActions() }
+        selectSideActions.visibility = if (key != null && drawingStyles.visibility == View.VISIBLE) View.VISIBLE else View.GONE
+    }
+    private fun rebuildSelectActions() {
+        selectSideActions.removeAllViews()
+        if (drawing.selected == null) return
+        if (drawing.overlapCount > 1)
+            selectSideActions.addView(selectAction("切换重叠","切换重叠对象，共 ${drawing.overlapCount} 个") { drawing.cycleSelection(); sync() })
+        selectSideActions.addView(selectAction("删除标注","删除选中的标注") { drawing.deleteSelected(); sync() })
+    }
+    private fun selectAction(label: String, description: String, run: () -> Unit) = TextView(context).apply {
+        text=label; textSize=12f; gravity=Gravity.CENTER; setTextColor(COLOR_TEXT)
+        contentDescription=description; tooltipText=description; isFocusable=true; minHeight=dp(30)
+        setPadding(dp(4),dp(4),dp(4),dp(4))
+        background=RippleDrawable(ColorStateList.valueOf(0x1FFFFFFF),null,null)
+        setOnClickListener { run() }
     }
     private fun closeDrawingEditor() {
         annotationInput?.close(); annotationInput=null
@@ -599,7 +698,9 @@ class ScreenshotCaptureOverlay(
         }
         panel.addView(TextView(context).apply { text=title; textSize=16f; setTextColor(COLOR_TEXT) })
         val field=ScreenshotTextEditor(context,value).apply { contentDescription=title }
-        if(title=="字号" || title=="序号") field.inputType=android.text.InputType.TYPE_CLASS_NUMBER
+        // The original stores font size as a double; the badge and the text tool clamp at different bounds.
+        if(title=="字号") field.inputType=android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        else if(title=="序号") field.inputType=android.text.InputType.TYPE_CLASS_NUMBER
         panel.addView(field,LinearLayout.LayoutParams(-1,0,1f))
         val buttons=LinearLayout(context)
         fun button(label: String, run:()->Unit)=TextView(context).apply {
@@ -613,13 +714,18 @@ class ScreenshotCaptureOverlay(
         },LinearLayout.LayoutParams(0,dp(44),1f))
         buttons.addView(button(positive) {
             val result=field.text.toString()
+            val fontTool=drawing.selected?.tool ?: drawing.tool
             val valid=when(title) {
                 "颜色" -> result.matches(Regex("#[0-9a-fA-F]{6}"))
-                "字号" -> result.toIntOrNull() in 8..96
-                "序号" -> result.toIntOrNull() in 1..9999
+                "字号" -> ScreenshotFontSize.parse(fontTool,result)!=null
+                "序号" -> result.toLongOrNull()?.let { it>=0 }==true
                 else -> true
             }
-            if(!valid) showFeedback(when(title) { "颜色" -> "请输入 #RRGGBB 颜色"; "字号" -> "字号范围为 8–96"; else -> "序号范围为 1–9999" })
+            if(!valid) showFeedback(when(title) {
+                "颜色" -> "请输入 #RRGGBB 颜色"
+                "字号" -> "字号范围为 ${ScreenshotFontSize.format(ScreenshotFontSize.MIN)}–${ScreenshotFontSize.format(ScreenshotFontSize.max(fontTool))}"
+                else -> "请输入非负整数"
+            })
             else { closeDrawingEditor(); save(result); sync() }
         },LinearLayout.LayoutParams(0,dp(44),1f))
         panel.addView(buttons)
@@ -1099,7 +1205,9 @@ class ScreenshotCaptureOverlay(
     }
     /** Everything needed to reopen this screenshot, captured before the session is released. */
     private fun currentDocument(region: Rect)=ScreenshotDocument(image.width,image.height,
-        ScreenshotDocRect.of(region),drawing.history.items,currentText(),captureRegion?.rects?.map(ScreenshotDocRect::of).orEmpty(),drawing.pixelUnit,drawing.fontUnit)
+        ScreenshotDocRect.of(region),drawing.history.items,currentText(),captureRegion?.rects?.map(ScreenshotDocRect::of).orEmpty(),
+        captureRegion?.takeIf { it.isCustom }?.let { region -> region.toJson().toString() },
+        drawing.pixelUnit,drawing.fontUnit,drawing.watermark.takeIf { it.isVisible() })
     private fun currentText(): ScreenshotDocumentText? {
         val layer=textLayer ?: return null
         val blocks=layer.currentBlocks()
@@ -1182,7 +1290,7 @@ class ScreenshotCaptureOverlay(
             setPadding(dp((BUTTON-ICON)/2),dp((BUTTON-ICON)/2),dp((BUTTON-ICON)/2),dp((BUTTON-ICON)/2))
             background = RippleDrawable(ColorStateList.valueOf(0x14000000),null,null)
             isClickable = true; isFocusable = true
-            setOnClickListener { toolMemory?.remember(action); run() }
+            setOnClickListener { if (!disposed && !closeRequested) { toolMemory?.remember(action); run() } }
         }
         fun refreshTint() {
             val color = when {

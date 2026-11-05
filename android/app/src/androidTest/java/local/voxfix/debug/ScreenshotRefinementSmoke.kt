@@ -57,7 +57,7 @@ object ScreenshotRefinementSmoke {
                     return Rect(p.x,p.y,p.x+p.width,p.y+p.height)
                 }
                 invoke("thumbnail"); invoke("thumbnail")
-                check(geometry()==region) { "thumbnail restore lost pin geometry" }
+                check(geometry()==region) { "thumbnail restore lost pin geometry: got ${geometry()} want $region" }
                 invoke("resetSize"); check(geometry().sizeEquals(region)) { "100% lost original dimensions" }
                 var result: ScreenshotPinResult?=null
                 val editor=ScreenshotPinEditor(context,bitmap,region) { result=it }

@@ -55,6 +55,7 @@ internal class ScreenshotPinEditor(private val context: Context,private val imag
         root.addView(canvas,FrameLayout.LayoutParams(geometry.width(),geometry.height()).apply { leftMargin=geometry.left; topMargin=geometry.top })
         placeCanvas()
         layer.region=Rect(viewport)
+        layer.colorSamplingBase={ textLayer?.render(Rect(0,0,image.width,image.height)) }
         layer.savedPixelUnit=document?.drawingUnit?.takeIf { it>0 } ?: (context.resources.displayMetrics.density*image.width/manager.currentWindowMetrics.bounds.width())
         layer.savedFontUnit=document?.fontUnit?.takeIf { it>0 } ?: (context.resources.displayMetrics.scaledDensity*image.width/manager.currentWindowMetrics.bounds.width())
         layer.history.load(document?.objects.orEmpty())
@@ -91,7 +92,9 @@ internal class ScreenshotPinEditor(private val context: Context,private val imag
             try {
                 val composed=textLayer?.render(viewport)
                 val rendered=layer.render(viewport,composed) ?: Bitmap.createBitmap(image,viewport.left,viewport.top,viewport.width(),viewport.height())
-                val region=document?.regions?.takeIf { it.isNotEmpty() }?.let { ScreenshotRegion(it.map(ScreenshotDocRect::toRect)) }
+                val region=document?.regionOperands?.let { value ->
+                    runCatching { ScreenshotRegion.fromJson(org.json.JSONArray(value)) }.getOrNull()
+                } ?: document?.regions?.takeIf { it.isNotEmpty() }?.let { ScreenshotRegion.ofRects(it.map(ScreenshotDocRect::toRect)) }
                 val result=if(region==null) {
                     if(rendered===image) image.copy(Bitmap.Config.ARGB_8888,false) else rendered
                 } else region.mask(if(rendered.isMutable && rendered!==image) rendered else rendered.copy(Bitmap.Config.ARGB_8888,true),viewport)
@@ -140,8 +143,8 @@ internal class ScreenshotPinEditor(private val context: Context,private val imag
         body.addView(TextView(context).apply {
             text="保存$title"; gravity=Gravity.CENTER; setTextColor(0xFF1677FF.toInt()); contentDescription="保存$title"
             setOnClickListener {
-                val number=field.text.toString().toIntOrNull()
-                if(number==null || (title=="字号" && number !in 8..96) || (title=="序号" && number !in 1..9999)) field.error="数值超出范围"
+                val number=field.text.toString().toLongOrNull()
+                if(number==null || (title=="字号" && number !in 8L..96L) || (title=="序号" && number<0)) field.error="数值超出范围"
                 else { save(number.toString()); popup.dismiss() }
             }
         },LinearLayout.LayoutParams(-1,dp(44)))
@@ -156,7 +159,7 @@ internal class ScreenshotPinEditor(private val context: Context,private val imag
         undoButton?.apply { isEnabled=layer.history.canUndo; alpha=if(isEnabled) 1f else .4f }
         redoButton?.apply { isEnabled=layer.history.canRedo; alpha=if(isEnabled) 1f else .4f }
         val scroll=styles.scrollY
-        val key=(layer.selected?.tool ?: layer.tool) to layer.selectedIndex
+        val key=layer.inspectedTool to layer.selectedIndex
         if(controls==null || key!=controlKey) {
             styles.removeAllViews(); controls=ScreenshotDrawingControls(context,layer,::editValue)
             styles.addView(controls); controlKey=key

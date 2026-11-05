@@ -30,6 +30,7 @@ data class ScreenshotToolbarState(
         val secondaryActions=setOf(ScreenshotAction.SHOW_ORIGINAL,ScreenshotAction.EDIT,ScreenshotAction.COPY_TEXT)
     }
     fun visible(action: ScreenshotAction): Boolean {
+        if (action == ScreenshotAction.CLOSE) return true
         if (translating) return action == ScreenshotAction.TRANSLATE
         if (busy) return action == ScreenshotAction.CLOSE
         return when (action) {
@@ -43,9 +44,9 @@ data class ScreenshotToolbarState(
         ScreenshotAction.UNDO, ScreenshotAction.REDO -> (hasText && editing) || (hasDrawingHistory && !editing && !showingOriginal && !showingTranslation)
         ScreenshotAction.ARROW, ScreenshotAction.RECTANGLE, ScreenshotAction.PEN,
         ScreenshotAction.FILTER,ScreenshotAction.HIGHLIGHT,ScreenshotAction.SPOTLIGHT,ScreenshotAction.TEXT,
-        ScreenshotAction.SERIAL,ScreenshotAction.ERASER,ScreenshotAction.SELECT,ScreenshotAction.MOVE -> hasRegion && !editing && !showingTranslation
+        ScreenshotAction.SERIAL,ScreenshotAction.ERASER,ScreenshotAction.SELECT,ScreenshotAction.MOVE,ScreenshotAction.LINE -> hasRegion && !editing && !showingTranslation
         ScreenshotAction.BARCODE,ScreenshotAction.PIN,ScreenshotAction.SHARE -> hasRegion && !editing
-        ScreenshotAction.SCROLL,ScreenshotAction.RECORD,ScreenshotAction.LINE,ScreenshotAction.WATERMARK -> hasRegion && !editing && !showingTranslation
+        ScreenshotAction.SCROLL,ScreenshotAction.RECORD,ScreenshotAction.WATERMARK -> hasRegion && !editing && !showingTranslation
         // Copying text and comparing with the original are only meaningful with a text layer;
         // an image copy would duplicate the save exit the user asked to keep separate.
         ScreenshotAction.COPY_TEXT, ScreenshotAction.EDIT -> hasText && !translating
@@ -69,8 +70,8 @@ data class ScreenshotToolbarState(
         ScreenshotAction.FILTER -> "滤镜打码"
         ScreenshotAction.HIGHLIGHT -> "高亮"
         ScreenshotAction.SPOTLIGHT -> "聚光灯"
-        ScreenshotAction.LINE -> "直线，暂未支持"
-        ScreenshotAction.WATERMARK -> "水印，暂未支持"
+        ScreenshotAction.LINE -> "直线"
+        ScreenshotAction.WATERMARK -> "水印"
         ScreenshotAction.TEXT -> "文字标注"
         ScreenshotAction.SERIAL -> "序号"
         ScreenshotAction.ERASER -> "橡皮擦"

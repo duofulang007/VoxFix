@@ -20,7 +20,7 @@ object ScreenshotSelectedToolsSmoke {
         error?.let { throw it }
         scan(test,qr(),"VOXFIX_OFFLINE_QR_20261104")
         scan(test,ean(),"5901234123457")
-        return "SCREENSHOT_SELECTED_TOOLS_PASS: effects,text,serial,select-move-resize-style,erase,undo-redo,section-migration,editor-space,share-uri,frameless-pin,offline-QR-EAN13"
+        return "SCREENSHOT_SELECTED_TOOLS_PASS: effects,text,serial,select-move-resize-style,selection-order,selection-align,selection-copy,erase,undo-redo,section-migration,editor-space,share-uri,frameless-pin,offline-QR-EAN13"
     }
     private fun pinPresentation(context: Context) {
         val clazz=Class.forName("local.voxfix.debug.ScreenshotPins\$Pin")
@@ -90,8 +90,8 @@ object ScreenshotSelectedToolsSmoke {
         source.setPixels(pixels,0,600,0,0,600,900)
         val layer=ScreenshotDrawingLayer(context,source) {}
         layer.layout(0,0,600,900); layer.region=Rect(0,0,600,900)
-        fun touch(action: Int,x: Float,y: Float) {
-            val event=MotionEvent.obtain(1,2,action,x,y,0)
+        fun touch(action: Int,x: Float,y: Float,meta: Int=0) {
+            val event=MotionEvent.obtain(1,2,action,x,y,meta)
             try { check(layer.onTouchEvent(event)) } finally { event.recycle() }
         }
         fun drag(x: Float,y: Float,ex: Float,ey: Float) {
@@ -124,7 +124,7 @@ object ScreenshotSelectedToolsSmoke {
             drag(100f,300f,100f,300f)
             check(requested && layer.history.items.single().text.contains("换行"))
             layer.tool=ScreenshotDrawingTool.SERIAL; drag(200f,400f,200f,400f); drag(300f,400f,300f,400f)
-            check(layer.history.items.takeLast(2).map { it.number }==listOf(1,2))
+            check(layer.history.items.takeLast(2).map { it.number }==listOf(1L,2L))
             for(shape in ScreenshotSerialShape.values()) {
                 layer.applyStyle(layer.inspectedStyle.copy(serialShape=shape)); drag(400f,400f,400f,400f)
                 val output=layer.render(layer.region!!,null)!!; check(!output.isRecycled); output.recycle()
@@ -159,6 +159,46 @@ object ScreenshotSelectedToolsSmoke {
             layer.applyStyle(layer.inspectedStyle.copy(area=ScreenshotAreaMode.PEN,width=24,filter=ScreenshotFilter.BLUR))
             drag(150f,500f,150f,500f); output=layer.render(layer.region!!,null)!!
             check(output.getPixel(150,500)!=source.getPixel(150,500)) { "filter tap must redact pixels" }; output.recycle()
+            val points = listOf(ScreenshotDrawingPoint(320f,500f),ScreenshotDrawingPoint(470f,660f))
+            val bottom = before.copy(points=points, color=Color.RED,
+                style=before.style.copy(fillColor=Color.RED, hasFill=true))
+            val top = bottom.copy(id=0, color=Color.BLUE,style=bottom.style.copy(fillColor=Color.BLUE))
+            layer.history.load(listOf(bottom,top))
+            layer.tool=ScreenshotDrawingTool.SELECT
+            fun actions(): ViewGroup {
+                val panel = ScreenshotDrawingControls(context,layer,{ _,_,_ -> })
+                    .getChildAt(0) as ScreenshotSelectionActionControls
+                return panel.getChildAt(0) as ViewGroup
+            }
+            val disabled = actions()
+            check((0 until disabled.childCount).none { disabled.getChildAt(it).isClickable && disabled.getChildAt(it).isEnabled })
+            drag(320f,570f,320f,570f)
+            val topId = layer.history.items.last().id
+            check(layer.selected?.id==topId)
+            val order = actions()
+            check(order.getChildAt(0).performClick())
+            check(layer.history.items.first().id==topId && layer.selected?.id==topId)
+            output=layer.render(layer.region!!,null)!!
+            check(output.getPixel(400,580)==Color.RED); output.recycle()
+            layer.undo(); check(layer.history.items.last().id==topId && !layer.history.canUndo)
+            layer.redo(); check(layer.history.items.first().id==topId)
+            drag(320f,570f,320f,570f)
+            val original = layer.selected!!
+            val copy = actions().let { panel -> panel.getChildAt(panel.childCount - 1) }
+            check(copy.contentDescription == "复制选中对象" && copy.performClick())
+            check(layer.selected?.id != original.id && layer.selected?.points?.first() == ScreenshotDrawingPoint(332f,512f))
+            layer.undo(); check(layer.history.items.size == 2)
+            val left = top.copy(points=listOf(ScreenshotDrawingPoint(100f,300f),ScreenshotDrawingPoint(240f,440f)))
+            layer.history.load(listOf(bottom,left))
+            drag(320f,570f,320f,570f)
+            touch(MotionEvent.ACTION_DOWN,100f,370f,android.view.KeyEvent.META_SHIFT_ON)
+            touch(MotionEvent.ACTION_UP,100f,370f,android.view.KeyEvent.META_SHIFT_ON)
+            check(layer.selectedIndices.size==2)
+            val alignment = actions()
+            val alignLeft = (0 until alignment.childCount).map(alignment::getChildAt).single { it.contentDescription == "左对齐" }
+            check(alignLeft.isEnabled && alignLeft.performClick())
+            check(layer.history.items.all { it.points.first().x==100f } && layer.selectedIndices.size==2)
+            layer.undo(); check(layer.history.items.first().points == bottom.points && !layer.history.canUndo)
             renderer.close()
         } finally { layer.close(); source.recycle() }
     }

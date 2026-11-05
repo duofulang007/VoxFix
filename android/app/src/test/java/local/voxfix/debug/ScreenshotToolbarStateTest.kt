@@ -6,6 +6,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ScreenshotToolbarStateTest {
+    @Test fun cancelIsVisibleAndEnabledInEveryTranslationAndEditingState() {
+        for(busy in listOf(false,true)) for(translating in listOf(false,true)) for(editing in listOf(false,true)) {
+            val state=ScreenshotToolbarState(hasRegion=true,hasText=true,busy=busy,translating=translating,editing=editing)
+            assertTrue(state.visible(ScreenshotAction.CLOSE))
+            assertTrue(state.enabled(ScreenshotAction.CLOSE))
+            assertTrue(state.mainEnabled(ScreenshotAction.CLOSE))
+        }
+    }
     @Test fun drawingRequiresARegionAndHistoryUsesItsOwnUndo() {
         val region = ScreenshotToolbarState(hasRegion=true)
         for (action in listOf(ScreenshotAction.ARROW,ScreenshotAction.RECTANGLE,ScreenshotAction.PEN)) {

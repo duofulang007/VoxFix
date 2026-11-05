@@ -24,20 +24,34 @@ internal object ScreenshotDocumentCodec {
                 .put("color", stroke.style.color).put("width", stroke.style.width)
                 .put("opacity", stroke.style.opacity.toDouble()).put("area", stroke.style.area.name)
                 .put("filter", stroke.style.filter.name).put("strength", stroke.style.strength)
-                .put("fontSize", stroke.style.fontSize).put("bold", stroke.style.bold)
+                .put("fontSize", stroke.style.fontSize.toDouble()).put("bold", stroke.style.bold)
                 .put("align", stroke.style.align).put("serial", stroke.style.serialShape.name)
                 .put("family", stroke.style.fontFamily).put("verticalAlign", stroke.style.verticalAlign)
                 .put("outlineColor", stroke.style.outlineColor).put("outlineWidth", stroke.style.outlineWidth)
                 .put("fillColor", stroke.style.fillColor).put("hasFill", stroke.style.hasFill)
                 .put("cornerRadius", stroke.style.cornerRadius)
+                .put("strokePattern", stroke.style.strokePattern.name).put("fillPattern", stroke.style.fillPattern.name)
+                .put("shape", stroke.style.shape.name).put("curved", stroke.style.curved)
+                .put("arrowType", stroke.style.arrowType.name).put("arrowRatio", stroke.style.arrowRatio.toDouble())
+                .put("arrowShaftType", stroke.style.arrowShaftType.name)
+                .put("startHead", stroke.style.startHead.name).put("endHead", stroke.style.endHead.name)
+                .put("serialGeometryVersion",stroke.style.serialGeometryVersion)
             val points = JSONArray()
             stroke.points.forEach { points.put(it.x.toDouble()).put(it.y.toDouble()) }
-            objects.put(JSONObject()
+            val objectRow = JSONObject()
                 .put("id", stroke.id).put("tool", stroke.tool.name).put("color", stroke.color)
                 .put("width", stroke.width.toDouble()).put("style", style)
                 .put("text", stroke.text).put("number", stroke.number)
                 .put("textWidth", stroke.textWidth.toDouble()).put("fontScale", stroke.fontScale.toDouble())
-                .put("textHeight", stroke.textHeight.toDouble()).put("points", points))
+                .put("textHeight", stroke.textHeight.toDouble()).put("points", points)
+                // Written only for pen strokes that use the smoothed geometry; a missing key means the
+                // legacy polyline, so older readers and older documents stay valid.
+                .put("smooth", stroke.smooth).put("closedPath", stroke.closedPath).put("boundTextId",stroke.boundTextId)
+                .put("rotation",stroke.rotation.toDouble())
+            if (stroke.fixedElbowSegments.isNotEmpty()) {
+                objectRow.put("fixedElbowSegments", JSONArray(stroke.fixedElbowSegments.sorted()))
+            }
+            objects.put(objectRow)
         }
         val root = JSONObject()
             .put("version", VERSION).put("canvasWidth", document.canvasWidth)
@@ -54,6 +68,16 @@ internal object ScreenshotDocumentCodec {
         if(document.regions.isNotEmpty()) root.put("regions",JSONArray().apply {
             document.regions.forEach { put(JSONArray().put(it.left).put(it.top).put(it.right).put(it.bottom)) }
         })
+        document.regionOperands?.let { root.put("regionOperands", JSONArray(it)) }
+        document.watermark?.let { mark ->
+            val row = JSONObject()
+                .put("text", mark.text).put("fontSize", mark.fontSize.toDouble())
+                .put("fontFamily", mark.fontFamily).put("color", mark.color)
+                .put("angle", mark.angle.toDouble()).put("gap", mark.gap.toDouble())
+                .put("opacity", mark.opacity.toDouble())
+            if (mark.template.isNotEmpty()) row.put("template", mark.template).put("appliedAt", mark.appliedAt)
+            root.put("watermark", row)
+        }
         return root.toString()
     }
 
@@ -106,11 +130,38 @@ internal object ScreenshotDocumentCodec {
                 list.add(ScreenshotDrawingPoint(x, y))
             }
             if (list.isEmpty()) throw FormatException("工程对象缺少坐标")
+            if(row.has("boundTextId") && row.opt("boundTextId") !is Int && row.opt("boundTextId") !is Long)
+                throw FormatException("工程序号文字关联编号无效")
+            if(row.has("rotation") && row.opt("rotation") !is Number) throw FormatException("工程对象旋转角无效")
+            val rotation=row.optDouble("rotation",0.0).toFloat()
+            if(!rotation.isFinite()) throw FormatException("工程对象旋转角无效")
+            val fontScale=row.optDouble("fontScale",1.0).toFloat()
+            if(!fontScale.isFinite() || fontScale<=0f) throw FormatException("工程字体缩放无效")
+            val style = style(row.optJSONObject("style"), tool, fontScale)
+            val fixedSegments = linkedSetOf<Int>()
+            if (row.has("fixedElbowSegments")) {
+                val fixed = row.optJSONArray("fixedElbowSegments")
+                    ?: throw FormatException("工程折线固定段无效")
+                if (tool != ScreenshotDrawingTool.ARROW || style.arrowType != ScreenshotArrowType.ELBOW ||
+                    fixed.length() >= list.size) throw FormatException("工程折线固定段无效")
+                for (i in 0 until fixed.length()) {
+                    val segment = fixed.opt(i) as? Int ?: throw FormatException("工程折线固定段无效")
+                    if (segment !in 1 until list.size || !fixedSegments.add(segment))
+                        throw FormatException("工程折线固定段无效")
+                }
+            }
             objects.add(ScreenshotDrawingStroke(tool, list, row.optInt("color", 0), row.optDouble("width", 2.0).toFloat(),
-                style(row.optJSONObject("style")), row.optString("text", ""), row.optInt("number", 1),
-                row.optDouble("textWidth", 0.0).toFloat(), row.optDouble("fontScale", 1.0).toFloat(),
-                row.optDouble("textHeight", 0.0).toFloat(), id))
+                style, row.optString("text", ""), row.optLong("number", 1L),
+                row.optDouble("textWidth", 0.0).toFloat(), fontScale,
+                row.optDouble("textHeight", 0.0).toFloat(), id,
+                smooth = row.optBoolean("smooth", false), closedPath = row.optBoolean("closedPath", false),
+                boundTextId = row.optLong("boundTextId",0L), rotation=ScreenshotObjectTransform.normalize(rotation),
+                fixedElbowSegments = fixedSegments))
         }
+        val byId=objects.associateBy { it.id }
+        if(objects.any { it.boundTextId<0 || (it.boundTextId!=0L &&
+                (it.tool!=ScreenshotDrawingTool.SERIAL || byId[it.boundTextId]?.tool!=ScreenshotDrawingTool.TEXT)) })
+            throw FormatException("工程序号文字关联无效")
         ScreenshotIds.above(maxId)
         val text = root.optJSONObject("text")?.let { value ->
             val mode = runCatching { ScreenshotTextMode.valueOf(value.optString("mode", "ORIGINAL")) }
@@ -130,12 +181,27 @@ internal object ScreenshotDocumentCodec {
                 }
             }
         }.orEmpty()
+        val regionOperands = root.optJSONArray("regionOperands")?.let { operands ->
+            if (operands.length() > MAX_OBJECTS) throw FormatException("工程选区过多")
+            ScreenshotRegion.fromJson(operands)?.toJson()?.toString()
+                ?: throw FormatException("工程选区无效")
+        }
         fun unit(key: String): Float {
             val value=root.optDouble(key,0.0).toFloat()
             if(!value.isFinite() || value<0 || value>10000) throw FormatException("工程绘制比例无效")
             return value
         }
-        return ScreenshotDocument(width, height, ScreenshotDocRect(left, top, right, bottom), objects, text,regions,unit("drawingUnit"),unit("fontUnit"))
+        val watermark = root.optJSONObject("watermark")?.let { mark ->
+            val text = mark.optString("text", "")
+            if (text.length > 200) throw FormatException("水印文字过长")
+            val template = mark.optString("template", "")
+            if (template.length > 200) throw FormatException("水印模板过长")
+            ScreenshotWatermark(text, mark.optDouble("fontSize", 16.0).toFloat(),
+                mark.optString("fontFamily", "sans-serif"), mark.optInt("color", 0xFF000000.toInt()),
+                mark.optDouble("angle", 30.0).toFloat(), mark.optDouble("gap", 56.0).toFloat(),
+                mark.optDouble("opacity", .16).toFloat(), template, mark.optLong("appliedAt", 0L)).normalized()
+        }
+        return ScreenshotDocument(width, height, ScreenshotDocRect(left, top, right, bottom), objects, text,regions,regionOperands,unit("drawingUnit"),unit("fontUnit"),watermark)
     }
 
     private fun readBlocks(rows: JSONArray?): List<ScreenshotTextBlock> {
@@ -154,17 +220,24 @@ internal object ScreenshotDocumentCodec {
         }
     }
 
-    private fun style(row: JSONObject?): ScreenshotDrawingStyle {
+    private fun style(row: JSONObject?, tool: ScreenshotDrawingTool,fontScale: Float): ScreenshotDrawingStyle {
         if (row == null) return ScreenshotDrawingStyle()
         fun name(key: String, fallback: String) = row.optString(key, fallback)
+        val rawSize=row.optDouble("fontSize",18.0).toFloat()
+        // A size edit divides by the object's scale to leave its outline/background untouched.
+        val effectiveSize=rawSize*fontScale
+        val fontSize=if(rawSize.isFinite() && rawSize>0f && effectiveSize.isFinite() && effectiveSize>=ScreenshotFontSize.MIN) rawSize
+            else ScreenshotFontSize.clamp(tool,rawSize)
         return ScreenshotDrawingStyle(
-            color = row.optInt("color", 0xFFFF4D4F.toInt()),
+            color = row.optInt("color", 0xFFF5222D.toInt()),
             width = row.optInt("width", 2),
             opacity = row.optDouble("opacity", 1.0).toFloat().coerceIn(0f, 1f),
             area = runCatching { ScreenshotAreaMode.valueOf(name("area", "RECTANGLE")) }.getOrDefault(ScreenshotAreaMode.RECTANGLE),
             filter = runCatching { ScreenshotFilter.valueOf(name("filter", "MOSAIC")) }.getOrDefault(ScreenshotFilter.MOSAIC),
             strength = row.optInt("strength", 12).coerceIn(4, 64),
-            fontSize = row.optInt("fontSize", 18).coerceIn(8, 96),
+            // Doubles since the original model stores a double; older documents wrote integers and
+            // still decode, because a JSON number reads the same either way.
+            fontSize = fontSize,
             bold = row.optBoolean("bold", false),
             align = row.optInt("align", 0).coerceIn(0, 2),
             serialShape = runCatching { ScreenshotSerialShape.valueOf(name("serial", "OUTLINED_CIRCLE")) }
@@ -175,7 +248,21 @@ internal object ScreenshotDocumentCodec {
             outlineWidth = row.optInt("outlineWidth", 0).coerceIn(0, 32),
             fillColor = row.optInt("fillColor", 0xFFFFFFFF.toInt()),
             hasFill = row.optBoolean("hasFill", false),
-            cornerRadius = row.optInt("cornerRadius", 0).coerceIn(0, 64)
+            cornerRadius = row.optInt("cornerRadius", 0).coerceIn(0, 83),
+            strokePattern = runCatching { ScreenshotStrokePattern.valueOf(name("strokePattern", "SOLID")) }.getOrDefault(ScreenshotStrokePattern.SOLID),
+            fillPattern = runCatching { ScreenshotFillPattern.valueOf(name("fillPattern", "SOLID")) }.getOrDefault(ScreenshotFillPattern.SOLID),
+            shape = runCatching { ScreenshotRectangleShape.valueOf(name("shape", "RECTANGLE")) }.getOrDefault(ScreenshotRectangleShape.RECTANGLE),
+            curved = row.optBoolean("curved", false),
+            arrowType = runCatching { ScreenshotArrowType.valueOf(name("arrowType", "CURVE")) }
+                .getOrDefault(ScreenshotArrowType.CURVE),
+            // A missing key means a document written before the shaft options existed: the original
+            // starts every arrow on Curve at ratio 1, so older projects keep that shape.
+            arrowRatio = row.optDouble("arrowRatio", 1.0).toFloat().coerceIn(1f, 3f),
+            arrowShaftType = runCatching { ScreenshotArrowShaftType.valueOf(name("arrowShaftType", "PLAIN")) }
+                .getOrDefault(ScreenshotArrowShaftType.PLAIN),
+            startHead = runCatching { ScreenshotArrowhead.valueOf(name("startHead", "NONE")) }.getOrDefault(ScreenshotArrowhead.NONE),
+            endHead = runCatching { ScreenshotArrowhead.valueOf(name("endHead", "ARROW")) }.getOrDefault(ScreenshotArrowhead.ARROW),
+            serialGeometryVersion = row.optInt("serialGeometryVersion",0).coerceIn(0,1)
         )
     }
 }

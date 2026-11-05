@@ -24,7 +24,7 @@ internal object ScreenshotToolMemorySmoke {
         }
         try {
             check(memory.style(ScreenshotDrawingTool.PEN)?.width==8 && memory.style(ScreenshotDrawingTool.PEN)?.color==Color.BLUE)
-            check(memory.entry(listOf(ScreenshotAction.ARROW,ScreenshotAction.PEN))==ScreenshotAction.PEN && memory.startNumber==23)
+            check(memory.entry(listOf(ScreenshotAction.ARROW,ScreenshotAction.PEN))==ScreenshotAction.PEN && memory.startNumber==23L)
             return "SCREENSHOT_MEMORY_PROCESS_RESTART_PASS"
         } finally { prefs.edit().clear().commit() }
     }
@@ -103,19 +103,19 @@ internal object ScreenshotToolMemorySmoke {
                 reopened.tool=ScreenshotDrawingTool.FILTER
                 check(reopened.style.filter==ScreenshotFilter.BLUR && reopened.style.area==ScreenshotAreaMode.PEN && reopened.style.strength==32)
                 reopened.changeArea(ScreenshotAreaMode.RECTANGLE); check(reopened.style.strength==52)
-                check(reopened.nextNumber==17)
+                check(reopened.nextNumber==17L)
             } finally { reopened.close() }
-            val textStyle=ScreenshotDrawingStyle(color=Color.CYAN,fontFamily="serif",bold=true,fontSize=28,align=2,verticalAlign=1,
+            val textStyle=ScreenshotDrawingStyle(color=Color.CYAN,fontFamily="serif",bold=true,fontSize=28f,align=2,verticalAlign=1,
                 hasFill=true,fillColor=Color.YELLOW,outlineColor=Color.BLUE,outlineWidth=3,cornerRadius=12,opacity=.6f)
             memory.save(ScreenshotDrawingTool.TEXT,textStyle)
             check(ScreenshotToolMemory(context).style(ScreenshotDrawingTool.TEXT)==textStyle) { "text style did not round-trip" }
             val prefs=context.getSharedPreferences("screenshot-tool-memory",Context.MODE_PRIVATE)
             prefs.edit().putInt("style.TEXT.last",42).putString("start-number","bad").putString("recent","UNKNOWN,PEN,PEN").commit()
-            check(memory.style(ScreenshotDrawingTool.TEXT)==null && memory.startNumber==1)
+            check(memory.style(ScreenshotDrawingTool.TEXT)==null && memory.startNumber==1L)
             check(memory.entry(listOf(ScreenshotAction.PEN,ScreenshotAction.ARROW))==ScreenshotAction.PEN)
             prefs.edit().putString("style.TEXT.last","{\"width\":-1,\"fontSize\":9000,\"opacity\":\"NaN\",\"fontFamily\":\"invalid\"}").commit()
             val safe=memory.style(ScreenshotDrawingTool.TEXT)!!
-            check(safe.width==1 && safe.fontSize==96 && safe.opacity==1f && safe.fontFamily=="sans-serif")
+            check(safe.width==1 && safe.fontSize==256f && safe.opacity==1f && safe.fontFamily=="sans-serif") { "Invalid style was not normalized: $safe" }
         } finally { second.dismiss(context.getSystemService(WindowManager::class.java)); bitmap.recycle() }
     }
 }
