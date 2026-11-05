@@ -28,10 +28,14 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     private var handle: ScreenTextHandle? = null
     private var overlay: ScreenTextOverlay? = null
     private var screenshot: ScreenshotCaptureOverlay? = null
+    private var scrolling: ScreenshotScrollCapture? = null
+    private var scrollWindowId: Int? = null
+    private var scrollNotificationTimeout: Long? = null
     private val screenshotWorker = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var session: ScreenshotSession? = null
     private val frame: Bitmap? get() = session?.image
     private var busy = false
+    private var captureWindowRevision = 0L
     @Volatile private var generation = 0
     private var connected = false
     private var ocrInFlight = false
@@ -59,7 +63,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     private val expire = Runnable {
         if (screenshot?.isEditing == true || screenshot?.isProjectEditor == true) keepSession() else retainText()
     }
-    private val captureTimeout = Runnable { fail("截图超时，请重试") }
+    private val captureTimeout = Runnable { captureFailed("截图超时，请重试") }
 
     override fun onServiceConnected() {
         connected = true
@@ -80,6 +84,12 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         if (key == "enabled") { closeSession(); showHandle() }
     }
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event?.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
+            if (event.windowId == scrollWindowId) scrolling?.onHostScrolled()
+            return
+        }
+        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            event.packageName?.toString() != packageName) captureWindowRevision++
         if (getSystemService(KeyguardManager::class.java).isKeyguardLocked) {
             closeSession(); removeHandle()
         } else showHandle()
@@ -98,7 +108,9 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         if (overlay?.imeVisible == true) return false
         if ((overlay != null || screenshot != null || busy) && event.keyCode == KeyEvent.KEYCODE_BACK) {
             if (event.action == KeyEvent.ACTION_UP) {
-                if (screenshot?.back() != true) overlay?.closeAnimated() ?: closeSession()
+                val scroll = scrolling
+                if (scroll != null) scroll.back()
+                else if (screenshot?.back() != true) overlay?.closeAnimated() ?: closeSession()
             }
             return true
         }
@@ -130,37 +142,154 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             .onFailure { android.util.Log.w("VoxFix", "SCREEN_TEXT_HANDLE_FAILED", it) }
     }
     private fun removeHandle() { handle?.let { runCatching { it.dismiss() } }; handle = null }
-    private fun capture() {
-        if (busy || overlay != null || screenshot != null) return
+    private fun capture(replacing: ScreenshotCaptureOverlay? = null) {
+        if (!connected || busy || overlay != null || screenshot !== replacing) return
         if (ocrInFlight) { Toast.makeText(this, "上次识别正在结束，请稍后重试", Toast.LENGTH_SHORT).show(); return }
+        if (replacing != null && !replacing.hideForRecapture()) return
         busy = true; removeHandle(); ScreenshotPins.visible(false)
+        main.removeCallbacks(expire)
         val token = ++generation
         main.postDelayed(captureTimeout, 4000)
         main.postDelayed({
             if (token != generation || !connected) return@postDelayed
             try {
+                val windowRevision = captureWindowRevision
+                val hitSnapshot = runCatching { ScreenshotSmartSelection.snapshot(this) }.getOrNull()
                 takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
                     override fun onSuccess(result: ScreenshotResult) {
                         val buffer = result.hardwareBuffer
+                        var unowned: Bitmap? = null
                         try {
                             if (token != generation) return
                             main.removeCallbacks(captureTimeout)
                             val hardware = Bitmap.wrapHardwareBuffer(buffer, result.colorSpace) ?: error("No screenshot bitmap")
-                            val image = try { hardware.copy(Bitmap.Config.ARGB_8888, false) } finally { hardware.recycle() }
-                            session = ScreenshotSession(image ?: error("Screenshot copy failed"))
-                            screenshot = ScreenshotCaptureOverlay(this@ScreenTextService,frame!!,::saveScreenshot,::recognizeScreenshot,::updateText,::closeSession,::keepSession,TranslateRuntime,ScreenshotToolMemory(this@ScreenTextService))
-                            screenshot!!.show(windows)
+                            val image = try { checkNotNull(hardware.copy(Bitmap.Config.ARGB_8888, false)) } finally { hardware.recycle() }
+                            unowned = image
+                            val snapshot = hitSnapshot?.takeIf {
+                                captureWindowRevision == windowRevision &&
+                                    runCatching { it.matchesWindows(this@ScreenTextService) }.getOrDefault(false)
+                            }
+                            if (replacing != null) {
+                                val current = checkNotNull(session)
+                                if (image.width != current.image.width || image.height != current.image.height) {
+                                    captureFailed("屏幕尺寸已变化，已保留当前截图")
+                                    return
+                                }
+                                replacing.replaceCaptureSource(image, snapshot)
+                                current.replaceFrame(image).recycle()
+                                unowned = null
+                                replacing.restoreAfterRecapture(null)
+                            } else {
+                                session = ScreenshotSession(image)
+                                unowned = null
+                                val editor = ScreenshotCaptureOverlay(this@ScreenTextService,image,::saveScreenshot,::recognizeScreenshot,::updateText,::closeSession,::keepSession,TranslateRuntime,ScreenshotToolMemory(this@ScreenTextService))
+                                editor.onRecaptureRequested = { capture(editor) }
+                                editor.onScrollRequested = { region, top, horizontal -> startScroll(editor,region,top,horizontal) }
+                                screenshot = editor
+                                editor.enableSmartSelection(snapshot)
+                                editor.show(windows)
+                            }
                             busy = false
                             keepSession()
-                        } catch (error: Exception) { if (token == generation) fail("无法打开截图，请重试", error) }
-                        finally { buffer.close() }
+                        } catch (error: Exception) { if (token == generation) captureFailed("无法打开截图，请重试", error) }
+                        finally { unowned?.recycle(); buffer.close() }
                     }
                     override fun onFailure(errorCode: Int) {
-                        if (token == generation) fail(if (errorCode == ERROR_TAKE_SCREENSHOT_SECURE_WINDOW) "此页面禁止截图" else "截图失败，请重试或检查无障碍服务")
+                        if (token == generation) captureFailed(if (errorCode == ERROR_TAKE_SCREENSHOT_SECURE_WINDOW) "此页面禁止截图" else "截图失败，请重试或检查无障碍服务")
                     }
                 })
-            } catch (error: Exception) { fail("截图不可用，请检查无障碍服务", error) }
+            } catch (error: Exception) { captureFailed("截图不可用，请检查无障碍服务", error) }
         }, 120)
+    }
+    private fun captureFailed(message: String, error: Exception? = null) {
+        val editor = screenshot?.takeIf { it.isRecapturing }
+        if (editor == null) {
+            fail(message, error)
+            return
+        }
+        error?.let { android.util.Log.w("VoxFix", "SCREEN_TEXT_RECAPTURE_FAILED", it) }
+        ++generation
+        main.removeCallbacks(captureTimeout)
+        busy = false
+        editor.restoreAfterRecapture(message)
+        keepSession()
+    }
+
+    private fun startScroll(editor: ScreenshotCaptureOverlay, region: Rect, top: Int, horizontal: Boolean) {
+        if (screenshot !== editor || busy || ocrInFlight || scrolling != null) return
+        val image = frame ?: return
+        val center = listOf(region.centerX() to region.centerY())
+        val targetWindow = scrollTargetAt(center, ignoreOverlay = true) ?: run {
+            editor.setScrollCaptureActive(false, "请在应用页面中选择长截图区域")
+            return
+        }
+        main.removeCallbacks(expire)
+        busy = true
+        editor.setScrollCaptureActive(true)
+        val next = ScreenshotScrollCapture(this,windows,region,image.width,image.height,top,horizontal,
+            { targetWindow == scrollTargetAt(center, ignoreOverlay = true) },
+            { done -> scrollStep(region,horizontal,targetWindow,done) }) { message ->
+            scrolling = null
+            listenToScrollEvents(null)
+            busy = false
+            if (screenshot === editor) {
+                editor.setScrollCaptureActive(false,message)
+                keepSession()
+            }
+        }
+        scrolling = next
+        listenToScrollEvents(targetWindow)
+        next.start()
+    }
+
+    private fun listenToScrollEvents(windowId: Int?) {
+        scrollWindowId = windowId
+        if (windowId == null && scrollNotificationTimeout == null) return
+        runCatching {
+            val info = serviceInfo ?: return@runCatching
+            if (windowId == null) {
+                info.eventTypes = info.eventTypes and AccessibilityEvent.TYPE_VIEW_SCROLLED.inv()
+                info.notificationTimeout = checkNotNull(scrollNotificationTimeout)
+            } else {
+                scrollNotificationTimeout = info.notificationTimeout
+                info.eventTypes = info.eventTypes or AccessibilityEvent.TYPE_VIEW_SCROLLED
+                info.notificationTimeout = 40
+            }
+            serviceInfo = info
+        }
+        if (windowId == null) scrollNotificationTimeout = null
+    }
+
+    @Suppress("DEPRECATION")
+    private fun scrollTargetAt(points: List<Pair<Int,Int>>, ignoreOverlay: Boolean = false): Int? {
+        val visible = getWindows()
+        try {
+            val bounds = android.graphics.Region()
+            val ids = points.map { (x,y) ->
+                val hit = visible.firstOrNull {
+                    (!ignoreOverlay || it.type != android.view.accessibility.AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) &&
+                        bounds.also(it::getRegionInScreen).contains(x,y)
+                }
+                hit?.takeIf { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }?.id
+            }
+            return ids.distinct().singleOrNull()
+        } finally { visible.forEach { it.recycle() } }
+    }
+
+    private fun scrollStep(region: Rect, horizontal: Boolean, targetWindow: Int?, done: (Boolean) -> Unit): Boolean {
+        if (targetWindow == null || getSystemService(KeyguardManager::class.java).isKeyguardLocked) return false
+        val extent = if (horizontal) region.width() else region.height()
+        if (extent / 3f <= android.view.ViewConfiguration.get(this).scaledTouchSlop) return false
+        val points = ScreenshotScrollCapture.swipe(region.left,region.top,region.right,region.bottom,horizontal)
+        if (targetWindow != scrollTargetAt(listOf(points.startX.toInt() to points.startY.toInt(),
+                region.centerX() to region.centerY(), points.endX.toInt() to points.endY.toInt()))) return false
+        val path = android.graphics.Path().apply { moveTo(points.startX,points.startY); lineTo(points.endX,points.endY) }
+        val gesture = android.accessibilityservice.GestureDescription.Builder()
+            .addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path,0,440)).build()
+        return dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: android.accessibilityservice.GestureDescription?) { done(true) }
+            override fun onCancelled(gestureDescription: android.accessibilityservice.GestureDescription?) { done(false) }
+        }, main)
     }
     private fun recognize(region: Rect) = recognizeImage(region, false)
 
@@ -209,6 +338,8 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         if (frame != null) main.postDelayed(expire, 90_000)
     }
     private fun retainText() {
+        scrolling?.close(); scrolling = null
+        listenToScrollEvents(null)
         val state = screenshot?.retainedResult() ?: overlay?.retainedResult()
         if (state == null) { closeSession(); return }
         ++generation; busy = false
@@ -226,6 +357,8 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show(); closeSession()
     }
     private fun closeSession() {
+        scrolling?.close(); scrolling = null
+        listenToScrollEvents(null)
         ScreenshotPins.visible(true)
         ++generation; busy = false
         TranslateRuntime.cancel(); TranslateRuntime.idle()

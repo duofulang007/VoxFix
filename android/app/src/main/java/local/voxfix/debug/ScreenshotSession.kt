@@ -26,5 +26,12 @@ class ScreenshotSession(source: Bitmap) : AutoCloseable {
         return if (crop === source) source.copy(Bitmap.Config.ARGB_8888,false) ?: error("截图复制失败") else crop
     }
     fun updateText(value: String) { image; text = value }
+    /** The editor swaps every reader before the returned frame can be released. */
+    internal fun replaceFrame(next: Bitmap): Bitmap {
+        val previous = image
+        require(next !== previous && !next.isRecycled && next.width == previous.width && next.height == previous.height)
+        bitmap = next
+        return previous
+    }
     override fun close() { bitmap?.recycle(); bitmap = null; text = ""; region = null }
 }

@@ -1,6 +1,7 @@
 package local.voxfix.debug
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -45,6 +46,26 @@ internal class ScreenTextRegionView(
     var onRegionOperation: ((Rect) -> Unit)? = null
     /** A finished custom shape (polyline/curve/freehand vertices in image coordinates). */
     var onDraftCommit: ((List<PointF>, ScreenshotRegionShape) -> Unit)? = null
+    var smartHit: ((Int, Int) -> List<ScreenshotDocRect>)? = null
+        set(value) {
+            field = value
+            lastSmartTap = null
+        }
+    var onSmartCommit: ((List<ScreenshotDocRect>, Int) -> Unit)? = null
+    var smartFrame: Bitmap? = null
+    var smartWindowMode = false
+    var smartEnabled = true
+        set(value) {
+            field = value
+            if (!value) lastSmartTap = null
+        }
+    private var smartPath = emptyList<ScreenshotDocRect>()
+    private var smartIndex = -1
+    private var smartPreview: RectF? = null
+    private var smartPointer: PointF? = null
+    private var smartTracking = false
+    private var lastSmartTap: PointF? = null
+    val selectionInProgress get() = active || constructing
     var opMode = false
     private var parts: List<Rect> = emptyList()
     private var pendingSelection: Rect? = null
@@ -73,6 +94,7 @@ internal class ScreenTextRegionView(
         }
 
     fun selectRegion(region: Rect) {
+        lastSmartTap = null
         parts = emptyList()
         confirmedPath = null
         if (width == 0 || height == 0) { pendingSelection = Rect(region); return }
@@ -209,6 +231,7 @@ internal class ScreenTextRegionView(
             drawConstruction(canvas)
             return
         }
+        val rect = smartPreview ?: this.rect
         paint.style = Paint.Style.FILL; paint.color = 0x80000000.toInt()
         val confirmed = confirmedPath
         if (confirmed != null) {
@@ -239,6 +262,10 @@ internal class ScreenTextRegionView(
             part.left * width.toFloat() / imageWidth,part.top * height.toFloat() / imageHeight,
             part.right * width.toFloat() / imageWidth,part.bottom * height.toFloat() / imageHeight,paint)
         else if (confirmedPath == null) canvas.drawRect(rect, paint)
+        smartPointer?.let {
+            drawSmartLoupe(canvas, it)
+            return
+        }
         val points = mutableListOf<Pair<Float,Float>>()
         val side = minOf(rect.width(),rect.height())
         if (side > 32 * density) for (x in listOf(rect.left,rect.right)) for (y in listOf(rect.top,rect.bottom)) points.add(x to y)
@@ -247,6 +274,70 @@ internal class ScreenTextRegionView(
             paint.style = Paint.Style.FILL; paint.color = blue; canvas.drawCircle(x,y,4*density,paint)
             paint.style = Paint.Style.STROKE; paint.color = Color.WHITE; paint.strokeWidth = 1.5f*density; canvas.drawCircle(x,y,4*density,paint)
         }
+    }
+
+    private fun previewSmart(x: Float, y: Float) {
+        val point = toImage(x, y)
+        smartPath = smartHit?.invoke(point.x.toInt(), point.y.toInt()).orEmpty()
+        val current = rect.takeUnless { it.isEmpty }?.let {
+            val bounds = region()
+            ScreenshotDocRect(bounds.left, bounds.top, bounds.right, bounds.bottom)
+        }
+        smartIndex = ScreenshotSmartSelection.targetIndex(smartPath, current, point.x.toInt(), point.y.toInt(), smartWindowMode)
+        val hit = smartPath.getOrNull(smartIndex)
+        smartPreview = hit?.let { RectF(it.left * width.toFloat() / imageWidth, it.top * height.toFloat() / imageHeight,
+            it.right * width.toFloat() / imageWidth, it.bottom * height.toFloat() / imageHeight) }
+        smartPointer = if (hit == null) null else PointF(x, y)
+        invalidate()
+    }
+
+    private fun clearSmartPreview() {
+        smartPath = emptyList()
+        smartIndex = -1
+        smartPreview = null
+        smartPointer = null
+        smartTracking = false
+        invalidate()
+    }
+
+    fun refineLastSmartTap() {
+        val tap = lastSmartTap ?: return
+        lastSmartTap = null
+        if (!smartEnabled || active) return
+        previewSmart(tap.x, tap.y)
+        val path = smartPath
+        val index = smartIndex
+        clearSmartPreview()
+        if (index >= 0) onSmartCommit?.invoke(path, index)
+    }
+
+    private fun drawSmartLoupe(canvas: Canvas, point: PointF) {
+        val frame = smartFrame ?: return
+        val size = (72 * density).coerceAtMost(minOf(width, height) / 2f)
+        val gap = 28 * density
+        val left = (point.x - size / 2).coerceIn(0f, width - size)
+        val top = (if (point.y >= size + gap) point.y - size - gap else point.y + gap)
+            .coerceIn(0f, height - size)
+        val target = RectF(left, top, left + size, top + size)
+        val pixel = toImage(point.x, point.y)
+        val radiusX = size * imageWidth / width / 6
+        val radiusY = size * imageHeight / height / 6
+        canvas.save()
+        canvas.clipRect(target)
+        paint.style = Paint.Style.FILL
+        paint.color = Color.BLACK
+        canvas.drawRect(target, paint)
+        val scaleX = size / (2 * radiusX)
+        val scaleY = size / (2 * radiusY)
+        canvas.drawBitmap(frame, null, RectF(target.centerX() - pixel.x * scaleX,
+            target.centerY() - pixel.y * scaleY, target.centerX() + (imageWidth - pixel.x) * scaleX,
+            target.centerY() + (imageHeight - pixel.y) * scaleY), null)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 2 * density
+        paint.color = 0xff4096ff.toInt()
+        canvas.drawRect(target, paint)
+        canvas.drawCircle(target.centerX(), target.centerY(), 3 * density, paint)
+        canvas.restore()
     }
 
     /** Draft preview: dim everything outside confirmed∪draft, outline the draft, show vertices. */
@@ -277,6 +368,7 @@ internal class ScreenTextRegionView(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                lastSmartTap = null
                 pressAt = event.downTime; removedLast = false
                 if (shape != ScreenshotRegionShape.RECTANGLE) {
                     active = true; moved = false
@@ -296,6 +388,7 @@ internal class ScreenTextRegionView(
                 downX = event.x.coerceIn(0f, width.toFloat()); downY = event.y.coerceIn(0f, height.toFloat())
                 before.set(rect); edges = 0
                 if (opMode) { rect.set(downX, downY, downX, downY); invalidate(); return true }
+                smartTracking = smartEnabled && smartHit != null
                 val hit = RectF(rect).apply { inset(-20 * density, -20 * density) }
                 if (!rect.isEmpty && hit.contains(downX, downY)) {
                     if (abs(downX - rect.left) <= 20 * density && abs(downX - rect.left) <= abs(downX - rect.right)) edges = edges or 1
@@ -303,11 +396,17 @@ internal class ScreenTextRegionView(
                     if (abs(downY - rect.top) <= 20 * density && abs(downY - rect.top) <= abs(downY - rect.bottom)) edges = edges or 4
                     else if (abs(downY - rect.bottom) <= 20 * density) edges = edges or 8
                     if (edges == 0) edges = 16
-                } else rect.set(downX, downY, downX, downY)
+                } else if (!smartTracking) rect.set(downX, downY, downX, downY)
+                if (smartTracking && (edges == 0 || edges == 16)) previewSmart(downX, downY)
                 invalidate()
             }
             MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> {
                 if (!active) return true
+                if (smartTracking) {
+                    active = false
+                    clearSmartPreview()
+                    return true
+                }
                 if (freehandPressed) {
                     finishFreehand(event)
                     return true
@@ -330,6 +429,15 @@ internal class ScreenTextRegionView(
                     return true
                 }
                 val dx = x - downX; val dy = y - downY
+                if (smartTracking) {
+                    val held = event.eventTime - pressAt >= ViewConfiguration.getLongPressTimeout()
+                    if (held || dx * dx + dy * dy < slop * slop) {
+                        if (held) previewSmart(x, y)
+                        return true
+                    }
+                    clearSmartPreview()
+                    moved = true
+                }
                 if (abs(dx) > slop || abs(dy) > slop) moved = true
                 when (edges) {
                     0 -> rect.set(minOf(downX, x), minOf(downY, y), maxOf(downX, x), maxOf(downY, y))
@@ -370,6 +478,25 @@ internal class ScreenTextRegionView(
                     return true
                 }
                 val dx = x - downX; val dy = y - downY
+                if (smartTracking) {
+                    val held = event.eventTime - pressAt >= ViewConfiguration.getLongPressTimeout()
+                    if (held || dx * dx + dy * dy < slop * slop) {
+                        previewSmart(x, y)
+                        val path = smartPath
+                        val index = smartIndex
+                        clearSmartPreview()
+                        active = false
+                        val refine = !smartWindowMode
+                        if (index >= 0) {
+                            if (index < path.lastIndex) smartWindowMode = false
+                            onSmartCommit?.invoke(path, index)
+                        }
+                        if (refine) lastSmartTap = PointF(x, y)
+                        return true
+                    }
+                    clearSmartPreview()
+                    moved = true
+                }
                 if (abs(dx) > slop || abs(dy) > slop) moved = true
                 when (edges) {
                     0 -> rect.set(minOf(downX, x), minOf(downY, y), maxOf(downX, x), maxOf(downY, y))

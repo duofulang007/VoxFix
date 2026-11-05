@@ -20,6 +20,8 @@ android {
     sourceSets["main"].java.srcDir("src/voice/java")
     sourceSets["main"].jniLibs.srcDir("../../.android/pinyin-rime/jni")
     sourceSets["main"].jniLibs.srcDir("../../.android/translate/jni")
+    sourceSets["main"].jniLibs.srcDir("../../.android/snow-auto-region/jni")
+    sourceSets["main"].jniLibs.srcDir("../../.android/snow-scroll-capture/jni")
     androidResources { noCompress += listOf("onnx", "wav") }
     // sherpa's AAR also ships an x86 emulator onnxruntime; this build is arm64-only and the
     // pinned rescue AAR supplies its own arm64 runtime, so other ABIs must not collide.
@@ -46,6 +48,7 @@ val stageKeyboard by tasks.registering(Sync::class) {
     from("src/main/licenses/meme") { include("UPSTREAM.md"); into("licenses/meme") }
     from("src/main/licenses/llama") { include("LICENSE", "UPSTREAM.md"); into("licenses/llama") }
     from("src/main/licenses/hy-mt2") { include("LICENSE", "UPSTREAM.md"); into("licenses/hy-mt2") }
+    from("src/main/licenses/snow-region") { into("licenses/snow-region") }
     into(layout.buildDirectory.dir("keyboardAssets/keyboard"))
 }
 val buildPinyinNative by tasks.registering(Exec::class) {
@@ -61,6 +64,15 @@ val buildTranslateNative by tasks.registering(Exec::class) {
         "../../tools/build_translate_native.py", "../../tools/translate-dependencies.json")
     outputs.files("../../.android/translate/jni/arm64-v8a/libvoxfix_translate.so")
 }
+val buildSnowRegion by tasks.registering(Exec::class) {
+    dependsOn(buildTranslateNative)
+    workingDir("../..")
+    commandLine(file("../../.venv/Scripts/python.exe"), "tools/build_snow_region.py")
+    inputs.files("src/main/cpp/snow_region_jni.c", "src/main/cpp/snow_stitch_jni.c",
+        "../../tools/build_snow_region.py", "../../tools/snow-region.Cargo.lock", "../../tools/snow-stitch.Cargo.lock")
+    outputs.files("../../.android/snow-auto-region/jni/arm64-v8a/libvoxfix_snow_region.so",
+        "../../.android/snow-scroll-capture/jni/arm64-v8a/libvoxfix_snow_stitch.so")
+}
 val stagePinyin by tasks.registering(Sync::class) {
     from("../../.android/pinyin-rime/data") { include("luna_pinyin.*.bin", "opencc/**"); into("pinyin") }
     from("src/main/pinyin") { into("pinyin") }
@@ -73,7 +85,7 @@ val prepareScreenOcr by tasks.registering(Exec::class) {
     workingDir("../..")
     commandLine(file("../../.venv/Scripts/python.exe"), "tools/prepare_screen_ocr.py")
 }
-tasks.named("preBuild") { dependsOn(stageModels, stageKeyboard, buildPinyinNative, buildTranslateNative, stagePinyin, prepareScreenOcr) }
+tasks.named("preBuild") { dependsOn(stageModels, stageKeyboard, buildPinyinNative, buildTranslateNative, buildSnowRegion, stagePinyin, prepareScreenOcr) }
 dependencies {
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")

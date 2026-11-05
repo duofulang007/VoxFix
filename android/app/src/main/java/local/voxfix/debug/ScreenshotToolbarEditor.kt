@@ -139,7 +139,10 @@ class ScreenshotToolbarEditor(context: Context, private val section: ScreenshotT
             contentDescription = if (hidden) "隐藏工具区域" else "截图工具栏预览"
             if (hidden) config.hidden.forEach { addView(tool(it)) }
             else config.columns.flatten().forEach { addView(tool(it)) }
-            setOnDragListener { _, event -> handleDrag(event) }
+            setOnDragListener { _, event ->
+                val action = event.localState as? ScreenshotAction ?: return@setOnDragListener false
+                handleDrag(event.action, event.x, event.y, action)
+            }
         }
 
         override fun onMeasure(widthSpec: Int, heightSpec: Int) {
@@ -253,24 +256,23 @@ class ScreenshotToolbarEditor(context: Context, private val section: ScreenshotT
             indicator = RectF(lineX-dp(1),bottom-dp(32),lineX+dp(2),bottom)
         }
 
-        private fun handleDrag(event: DragEvent): Boolean {
-            val action = event.localState as? ScreenshotAction ?: return false
-            when (event.action) {
+        private fun handleDrag(kind: Int, x: Float, y: Float, action: ScreenshotAction): Boolean {
+            when (kind) {
                 DragEvent.ACTION_DRAG_STARTED -> { dragging = true; invalidate() }
                 DragEvent.ACTION_DRAG_LOCATION, DragEvent.ACTION_DRAG_ENTERED -> {
-                    locate(event.x,event.y,action)
+                    locate(x,y,action)
                     dragging = true
                     if (!hidden) preview?.let { scroll ->
                         val origin = IntArray(2); val viewport = IntArray(2)
                         getLocationOnScreen(origin); scroll.getLocationOnScreen(viewport)
-                        val y = origin[1]+event.y-viewport[1]
-                        scrollStep = when { y < dp(32) -> -dp(8); y > scroll.height-dp(32) -> dp(8); else -> 0 }
+                        val viewportY = origin[1]+y-viewport[1]
+                        scrollStep = when { viewportY < dp(32) -> -dp(8); viewportY > scroll.height-dp(32) -> dp(8); else -> 0 }
                         removeCallbacks(autoScroll); if (scrollStep != 0) this@ScreenshotToolbarEditor.post(autoScroll)
                     }
                     invalidate()
                 }
                 DragEvent.ACTION_DROP -> {
-                    locate(event.x,event.y,action)
+                    locate(x,y,action)
                     scrollStep = 0; this@ScreenshotToolbarEditor.removeCallbacks(autoScroll)
                     save(if (hidden) config.hide(action,destination) else config.place(action,destination,insertion))
                 }

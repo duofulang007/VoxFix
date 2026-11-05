@@ -68,6 +68,29 @@ internal object ScreenshotSelectionActionsChecks {
                     check(layer.history.items.size==2) { "重置画布不能一步撤销：${layer.history.items.size}" }
                 }
             }
+            touch(MotionEvent.ACTION_DOWN,50f,50f)
+            touch(MotionEvent.ACTION_UP,450f,250f)
+            val source = checkNotNull(layer.selectedTemplate())
+            val prefsName = "screenshot-draw-template-check-${java.util.UUID.randomUUID()}"
+            val isolated = object : android.content.ContextWrapper(context) {
+                override fun getSharedPreferences(name: String, mode: Int) = context.getSharedPreferences(prefsName, mode)
+            }
+            try {
+                val store = ScreenshotDrawTemplateStore(isolated)
+                store.save("测试模板", source)
+                check(store.names() == listOf("测试模板"))
+                val reopened = ScreenshotDrawTemplateStore(isolated).load("测试模板")
+                check(reopened == source)
+                check(layer.insertTemplate(reopened))
+                check(layer.selectedIndices == setOf(2,3))
+                val copies = layer.history.items.takeLast(2)
+                check(copies[0].points.first().x == 150f && copies[0].points.first().y == 400f)
+                check(copies[1].points.last().x == 450f && copies[1].points.last().y == 500f)
+                layer.undo()
+                check(layer.history.items == listOf(a,b))
+                store.delete("测试模板")
+                check(store.names().isEmpty())
+            } finally { context.deleteSharedPreferences(prefsName) }
         } finally { layer.close(); image.recycle() }
     }
 }

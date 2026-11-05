@@ -3,7 +3,6 @@ package local.voxfix.debug
 /** Toolbar rules for one unsaved screenshot: text actions only exist after recognition. */
 enum class ScreenshotAction { FULL_SCREEN, RECOGNIZE, SAVE, COPY_TEXT, EDIT, SHOW_ORIGINAL, TRANSLATE, CLOSE, UNDO, REDO, SEPARATOR,
     ARROW, RECTANGLE, PEN, FILTER, HIGHLIGHT, SPOTLIGHT, TEXT, SERIAL, ERASER, SELECT, MOVE, BARCODE, PIN, SHARE,
-    /** Reserved slots: the icons ship now, the capture itself is not implemented yet. */
     SCROLL, RECORD, LINE, WATERMARK }
 
 data class ScreenshotToolbarState(
@@ -80,7 +79,7 @@ data class ScreenshotToolbarState(
         ScreenshotAction.BARCODE -> "识别二维码和条码"
         ScreenshotAction.PIN -> "贴图到屏幕"
         ScreenshotAction.SHARE -> "分享图片"
-        ScreenshotAction.SCROLL -> "长截屏，暂未支持"
+        ScreenshotAction.SCROLL -> "长截屏"
         ScreenshotAction.RECORD -> "录屏，暂未支持"
         ScreenshotAction.FULL_SCREEN -> "选择整屏"
         ScreenshotAction.RECOGNIZE -> "识别文字"

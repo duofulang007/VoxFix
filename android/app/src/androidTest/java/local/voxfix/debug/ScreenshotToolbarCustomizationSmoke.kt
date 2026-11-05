@@ -32,20 +32,12 @@ object ScreenshotToolbarCustomizationSmoke {
                     if (view is ViewGroup) (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
                 fun stage() = descendants(editor).first { it.contentDescription == "截图工具栏预览" }
                 fun drop(surface: View, action: ScreenshotAction, x: Float, y: Float) {
-                    val obtain = android.view.DragEvent::class.java.declaredMethods.first { it.name == "obtain" && it.parameterCount > 4 }
-                    obtain.isAccessible = true
+                    val handleDrag = surface.javaClass.getDeclaredMethod("handleDrag", Int::class.javaPrimitiveType,
+                        Float::class.javaPrimitiveType, Float::class.javaPrimitiveType, ScreenshotAction::class.java)
+                        .apply { isAccessible = true }
                     for (kind in listOf(android.view.DragEvent.ACTION_DRAG_STARTED,android.view.DragEvent.ACTION_DRAG_ENTERED,
                         android.view.DragEvent.ACTION_DRAG_LOCATION,android.view.DragEvent.ACTION_DROP,android.view.DragEvent.ACTION_DRAG_ENDED)) {
-                        var coordinate = 0
-                        val args = obtain.parameterTypes.map { type -> when(type) {
-                            Int::class.javaPrimitiveType -> kind
-                            Float::class.javaPrimitiveType -> when(coordinate++) { 0 -> x; 1 -> y; else -> 0f }
-                            Boolean::class.javaPrimitiveType -> false
-                            Any::class.java -> action
-                            else -> null
-                        } }.toTypedArray()
-                        surface.javaClass.getDeclaredMethod("handleDrag",android.view.DragEvent::class.java)
-                            .apply { isAccessible = true }.invoke(surface,obtain.invoke(null,*args) as android.view.DragEvent)
+                        check(handleDrag.invoke(surface, kind, x, y, action) == true)
                     }
                     layoutEditor()
                 }

@@ -7,7 +7,7 @@ import android.text.TextPaint
 import android.util.LruCache
 import kotlin.math.*
 
-internal class ScreenshotDrawingRenderer(private val image: Bitmap, private val fontUnit: () -> Float) {
+internal class ScreenshotDrawingRenderer(private var image: Bitmap, private val fontUnit: () -> Float) {
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap=Paint.Cap.ROUND; strokeJoin=Paint.Join.ROUND }
     private val penPaint=Paint()
     private data class FilterKey(val left:Int,val top:Int,val right:Int,val bottom:Int,val type:ScreenshotFilter,val strength:Int)
@@ -16,6 +16,10 @@ internal class ScreenshotDrawingRenderer(private val image: Bitmap, private val 
         override fun sizeOf(key: FilterKey,value: Bitmap)=value.allocationByteCount
     }
     fun close() { filters.evictAll() }
+    fun replaceSource(next: Bitmap) {
+        close()
+        image = next
+    }
     fun fitSerialLabel(stroke: ScreenshotDrawingStroke): ScreenshotDrawingStroke {
         val centerX=stroke.points.first().x+stroke.textWidth/2
         val centerY=stroke.points.first().y+(stroke.textHeight.takeIf { it>0 } ?: textLayout(stroke).height.toFloat())/2

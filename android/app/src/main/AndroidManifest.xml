@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
     <application android:label="VoxFix 真机验证" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false" android:supportsRtl="true">
         <service android:name=".VoxFixImeService" android:label="VoxFix" android:permission="android.permission.BIND_INPUT_METHOD" android:exported="true">
@@ -12,6 +15,11 @@
             <meta-data android:name="android.accessibilityservice" android:resource="@xml/screen_text_service" />
         </service>
         <activity android:name=".ScreenTextSettingsActivity" android:exported="false" />
+        <activity android:name=".ScreenshotProjectionActivity" android:exported="false"
+            android:taskAffinity="" android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <service android:name=".ScreenshotProjectionService" android:exported="false"
+            android:foregroundServiceType="mediaProjection|microphone" />
         <activity android:name=".ScreenshotToolbarSettingsActivity" android:exported="false" />
         <activity android:name=".LexiconActivity" android:exported="false" />
         <activity android:name=".DictionaryActivity" android:exported="false" />

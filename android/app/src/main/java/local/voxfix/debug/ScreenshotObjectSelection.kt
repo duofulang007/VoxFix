@@ -6,7 +6,7 @@ import kotlin.math.*
 /** T22 selection transaction; coordinates are image pixels, never view pixels. */
 internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
     private val renderer: ScreenshotDrawingRenderer,private val unit: ()->Float,private val slop: ()->Float,
-    private val snap: ScreenshotSnapConfig? = null) {
+    var snap: ScreenshotSnapConfig? = null) {
     private var ids: Set<Long> = emptySet()
     val indices: Set<Int> get() {
         val byId=history.items.mapIndexed { index,stroke -> stroke.id to index }.toMap()
@@ -161,15 +161,16 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
             Mode.MOVE -> {
                 val selected=SelBox.of(box)
                 val canvas=SelBox(0f,0f,imageWidth.toFloat(),imageHeight.toFloat())
-                var dx=ScreenshotSelection.moveX(selected,canvas,point.x-down.x).toDouble()
-                var dy=ScreenshotSelection.moveY(selected,canvas,point.y-down.y).toDouble()
+                val dx=ScreenshotSelection.moveX(selected,canvas,point.x-down.x).toDouble()
+                val dy=ScreenshotSelection.moveY(selected,canvas,point.y-down.y).toDouble()
                 // T22: resolve_move_snap — grid snaps the translated min corner, object
                 // snapping aligns the translated selection rect to the other elements.
                 val applied=ScreenshotSnapApplication.moveSnap(
                     snap,false,ScreenshotSnapping.DrawRect(box.left.toDouble(),box.top.toDouble(),
                         box.right.toDouble(),box.bottom.toDouble()),dx,dy,snapReferences())
-                dx=applied.dx; dy=applied.dy; snapGuides=applied.guides
-                val fx=dx.toFloat(); val fy=dy.toFloat()
+                val constrained=ScreenshotSnapApplication.constrainMove(applied,selected,canvas)
+                snapGuides=constrained.guides
+                val fx=constrained.dx.toFloat(); val fy=constrained.dy.toFloat()
                 liveBox=RectF(box).apply { offset(fx,fy) }; previewRotation=frameRotation
                 val moved=original.mapValues { (_,stroke) -> stroke.transformed(0f,0f,fx,fy) }
                 moved+boundFollowers(moved)
@@ -365,7 +366,7 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
         if(mode==Mode.MARQUEE) {
             val rect=RectF(min(down.x,point.x),min(down.y,point.y),max(down.x,point.x),max(down.y,point.y))
             val hits=history.items.filter { stroke ->
-                if(rect.width()<=0 || rect.height()<=0) false
+                if(stroke.autoFilterCategory != null || rect.width()<=0 || rect.height()<=0) false
                 else if(stroke.tool==ScreenshotDrawingTool.ARROW || stroke.tool==ScreenshotDrawingTool.LINE) {
                     val b=renderer.bounds(stroke)
                     b.right>=rect.left && b.left<=rect.right && b.bottom>=rect.top && b.top<=rect.bottom

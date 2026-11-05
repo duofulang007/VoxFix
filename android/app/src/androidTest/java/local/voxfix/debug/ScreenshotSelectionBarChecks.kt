@@ -2,6 +2,7 @@ package local.voxfix.debug
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.Rect
 import android.view.View
 import android.view.ViewGroup
@@ -25,6 +26,7 @@ internal object ScreenshotSelectionBarChecks {
     }
     fun run(context: Context) {
         val image=Bitmap.createBitmap(1080,2400,Bitmap.Config.ARGB_8888)
+        val fresh=Bitmap.createBitmap(image.width,image.height,Bitmap.Config.ARGB_8888)
         val overlay=ScreenshotCaptureOverlay(context,image,{},{},{},{},{},Translator())
         try {
             val root=field(overlay,"root") as ViewGroup
@@ -46,9 +48,72 @@ internal object ScreenshotSelectionBarChecks {
             check(picked!=null && picked.width()==600 && picked.height()==500) { "切换单位改变了选区：$picked" }
             status.performClick()
             check(status.text.toString()=="选区 600 × 500 px") { "无法切回物理像素：${status.text}" }
+            checkNotNull(find(root,"隐藏选择工具栏")).performClick()
+            check(status.visibility == View.GONE)
+            check((field(overlay,"toolbar") as View).visibility == View.VISIBLE)
+            check((field(overlay,"selectActionsScroll") as View).visibility == View.VISIBLE)
+            checkNotNull(find(root,"显示选择工具栏")).performClick()
+            check(status.visibility == View.VISIBLE && status.text.toString()=="选区 600 × 500 px")
+            check(field(overlay,"picked") == picked)
+            checkRecapture(overlay,root,image,fresh,checkNotNull(picked))
         } finally {
             overlay.dismiss(context.getSystemService(android.view.WindowManager::class.java))
             image.recycle()
+            fresh.recycle()
         }
+    }
+
+    private fun checkRecapture(overlay: ScreenshotCaptureOverlay, root: ViewGroup,
+                               original: Bitmap, fresh: Bitmap, picked: Rect) {
+        val drawing = field(overlay,"drawing") as ScreenshotDrawingLayer
+        original.eraseColor(Color.RED)
+        val box = listOf(ScreenshotDrawingPoint(320f,420f),ScreenshotDrawingPoint(450f,550f))
+        drawing.history.add(ScreenshotDrawingStroke(ScreenshotDrawingTool.FILTER,box,Color.BLACK,4f))
+        val before = drawing.history.items
+        fun renderColor(): Int {
+            val rendered = checkNotNull(drawing.render(picked,null))
+            return try { rendered.getPixel(50,50) } finally { rendered.recycle() }
+        }
+        check(renderColor() == Color.RED)
+        var requests = 0
+        overlay.onRecaptureRequested = { requests++; check(overlay.hideForRecapture()) }
+        overlay.javaClass.getDeclaredMethod("sync").apply { isAccessible=true }.invoke(overlay)
+        val button = checkNotNull(find(root,"重新截图"))
+        check(button.isEnabled)
+        button.performClick()
+        check(requests == 1 && root.visibility == View.INVISIBLE)
+        overlay.restoreAfterRecapture("测试失败")
+        check(root.visibility == View.VISIBLE && field(overlay,"picked") == picked)
+        check(drawing.history.items == before && renderColor() == Color.RED)
+
+        overlay.textResult(listOf(ScreenshotTextBlock(310,410,440,445,"原识别结果")))
+        val text = field(overlay,"textLayer") as ScreenshotTextLayer
+        (text.getChildAt(0) as android.widget.EditText).setText("手动修改的文字")
+        check(text.canUndo)
+        val move = checkNotNull(find(root,"编辑选区"))
+        move.performClick()
+        move.performClick()
+
+        val session = ScreenshotSession(original)
+        val wrongSize = Bitmap.createBitmap(2,2,Bitmap.Config.ARGB_8888)
+        try {
+            check(runCatching { session.replaceFrame(wrongSize) }.isFailure)
+            check(session.image === original)
+        } finally { wrongSize.recycle() }
+        fresh.eraseColor(Color.BLUE)
+        button.performClick()
+        check(requests == 2 && root.visibility == View.INVISIBLE)
+        overlay.replaceCaptureSource(fresh,null)
+        check(session.replaceFrame(fresh) === original && session.image === fresh)
+        overlay.restoreAfterRecapture(null)
+        check(root.visibility == View.VISIBLE && field(overlay,"picked") == picked)
+        check(field(overlay,"textLayer") == null)
+        check(overlay.retainedResult()?.value?.contains("手动修改的文字") == true)
+        check(checkNotNull(find(root,"上次文字草稿")).visibility == View.VISIBLE)
+        check(drawing.history.items == before && renderColor() == Color.BLUE)
+        drawing.undo()
+        check(drawing.history.items.isEmpty())
+        drawing.redo()
+        check(drawing.history.items == before && renderColor() == Color.BLUE)
     }
 }

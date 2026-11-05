@@ -70,7 +70,8 @@ data class ScreenshotDrawingStroke(
      * Null means a free endpoint, which is also what every project written before T22 has.
      */
     val startBinding: ScreenshotFixedPointBinding? = null,
-    val endBinding: ScreenshotFixedPointBinding? = null
+    val endBinding: ScreenshotFixedPointBinding? = null,
+    val autoFilterCategory: Int? = null
 ) {
     // Identity is not appearance: two independently built strokes that draw the same are equal, so
     // existing comparisons keep working while the document still tracks each object separately.
@@ -82,7 +83,8 @@ data class ScreenshotDrawingStroke(
             fontScale == other.fontScale && textHeight == other.textHeight &&
             smooth == other.smooth && closedPath == other.closedPath && boundTextId == other.boundTextId &&
             rotation == other.rotation && fixedElbowSegments == other.fixedElbowSegments &&
-            startBinding == other.startBinding && endBinding == other.endBinding
+            startBinding == other.startBinding && endBinding == other.endBinding &&
+            autoFilterCategory == other.autoFilterCategory
     }
     override fun hashCode(): Int {
         var result = tool.hashCode()
@@ -101,7 +103,8 @@ data class ScreenshotDrawingStroke(
         result = 31 * result + rotation.hashCode()
         result = 31 * result + fixedElbowSegments.hashCode()
         result = 31 * result + (startBinding?.hashCode() ?: 0)
-        return 31 * result + (endBinding?.hashCode() ?: 0)
+        result = 31 * result + (endBinding?.hashCode() ?: 0)
+        return 31 * result + (autoFilterCategory ?: 0)
     }
 }
 
@@ -171,6 +174,30 @@ class ScreenshotDrawing {
     fun reset(watermark: ScreenshotWatermark = ScreenshotWatermark()) = commit(emptyList(), watermark)
     fun add(stroke: ScreenshotDrawingStroke) {
         if (stroke.points.isNotEmpty() && !stroke.isDegenerate()) commit(items+stable(stroke), watermark)
+    }
+    internal fun fillAutoRegions(regions: List<ScreenshotAutoFilter.Region>, style: ScreenshotDrawingStyle,
+                                 pixelUnit: Float, toggle: Boolean) {
+        if (regions.isEmpty()) return
+        val (previous, other) = items.partition { it.autoFilterCategory != null }
+        fun key(stroke: ScreenshotDrawingStroke) = ScreenshotAutoFilter.Region(
+            ScreenshotDocRect(stroke.points.first().x.toInt(), stroke.points.first().y.toInt(),
+                stroke.points.last().x.toInt(), stroke.points.last().y.toInt()), stroke.autoFilterCategory!!
+        )
+        val fills = previous.associateByTo(linkedMapOf(), ::key)
+        val rectangleStyle = style.copy(area = ScreenshotAreaMode.RECTANGLE)
+        for (region in regions) {
+            val existing = fills[region]
+            if (toggle && existing?.style?.filter == style.filter) fills.remove(region)
+            else {
+                val bounds = region.bounds
+                val points = listOf(ScreenshotDrawingPoint(bounds.left.toFloat(), bounds.top.toFloat()),
+                    ScreenshotDrawingPoint(bounds.right.toFloat(), bounds.bottom.toFloat()))
+                fills[region] = stable(ScreenshotDrawingStroke(ScreenshotDrawingTool.FILTER, points, style.color,
+                    style.width * pixelUnit, rectangleStyle, id = existing?.id ?: 0,
+                    autoFilterCategory = region.category))
+            }
+        }
+        commit(fills.values.toList() + other, watermark)
     }
     /** Creating a badge with its label is one gesture and one undo step. */
     fun addSerialWithText(serial: ScreenshotDrawingStroke,text: ScreenshotDrawingStroke) {
@@ -250,6 +277,32 @@ class ScreenshotDrawing {
                 byId[items[index].boundTextId]?.let(::add)
             }
         }
+    }
+    internal fun templateObjects(indices: Set<Int>): List<ScreenshotDrawingStroke> {
+        val strokes = expandedSelection(indices).sorted().map { items[it] }
+        val ids = strokes.mapTo(hashSetOf()) { it.id }
+        return strokes.map { stroke ->
+            stroke.copy(startBinding = stroke.startBinding?.takeIf { it.elementId in ids },
+                endBinding = stroke.endBinding?.takeIf { it.elementId in ids }, autoFilterCategory = null)
+        }
+    }
+
+    internal fun insertTemplate(strokes: List<ScreenshotDrawingStroke>, selectedIds: Set<Long>,
+                                dx: Float, dy: Float): Set<Int> {
+        if (strokes.isEmpty() || items.size + strokes.size > ScreenshotDocumentCodec.MAX_OBJECTS ||
+            items.sumOf { it.points.size } + strokes.sumOf { it.points.size } > ScreenshotDocumentCodec.MAX_POINTS) return emptySet()
+        val ids = strokes.associate { it.id to ScreenshotIds.next() }
+        val copies = strokes.map { stroke ->
+            val start = stroke.startBinding?.let { binding -> ids[binding.elementId]?.let { binding.copy(elementId = it) } }
+            val end = stroke.endBinding?.let { binding -> ids[binding.elementId]?.let { binding.copy(elementId = it) } }
+            stroke.transformed(0f, 0f, dx, dy).copy(id = ids.getValue(stroke.id),
+                boundTextId = ids[stroke.boundTextId] ?: 0, startBinding = start, endBinding = end, autoFilterCategory = null)
+        }
+        val selected = strokes.indices.filterTo(linkedSetOf()) { strokes[it].id in selectedIds }
+            .mapTo(linkedSetOf()) { items.size + it }
+        if (selected.isEmpty()) return emptySet()
+        commit(items + copies, watermark)
+        return selected
     }
     internal fun duplicate(indices: Set<Int>): Set<Int> {
         val expanded = expandedSelection(indices)

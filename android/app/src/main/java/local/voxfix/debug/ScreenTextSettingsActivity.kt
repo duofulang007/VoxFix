@@ -40,6 +40,7 @@ class ScreenTextSettingsActivity : Activity() {
             text = "截图工具栏布局"
             setOnClickListener { startActivity(Intent(this@ScreenTextSettingsActivity,ScreenshotToolbarSettingsActivity::class.java)) }
         })
+        layout.addView(ScreenshotSnapSettings(this))
         layout.addView(TextView(this).apply {
             text = "从屏幕边缘的小弧线向内滑，打开截图；长按弧线后可拖动换边和调整高度。\n\n截图后先画框，可拖动框内移动、拖四边或角点调整。可直接保存图片、识别文字或翻译，识别后可复制文字；不会松手就处理。\n\n保存的截图在输入法剪贴板的「图片」页管理，支持预览、插入聊天、复制、裁剪另存和批量删除。不自动写入系统相册。直接插入需要聊天应用支持接收图片。\n\n只在主动截图时获取画面，未保存的画面退出或闲置90秒后释放；闲置或旋转时保留已识别文字和完成的译文，锁屏或主动退出时清理。安全页面无法截图。\n\n首次使用需手动启用「VoxFix 截图工具」无障碍服务，它独立于键盘运行。"
             textSize = 16f; setPadding(0, pad, 0, pad)

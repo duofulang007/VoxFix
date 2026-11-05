@@ -1,0 +1,132 @@
+package local.voxfix.debug
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
+import android.os.Bundle
+import android.view.MotionEvent
+import android.view.View
+import android.view.accessibility.AccessibilityNodeInfo
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+internal class ScreenshotScrollRangeView(
+    context: Context, private val preview: Bitmap, private val horizontal: Boolean,
+    private val trim: ScreenshotScrollTrim, private val changed: () -> Unit
+) : View(context) {
+    private val density = resources.displayMetrics.density
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val image = RectF()
+    private var draggingHead: Boolean? = null
+    private var dragOffset = 0f
+    private val axisStart get() = if (horizontal) image.left else image.top
+    private val axisLength get() = if (horizontal) image.width() else image.height()
+    private fun position(source: Int) = axisStart + source.toFloat() * axisLength / trim.extent
+
+    init {
+        isFocusable = true
+        contentDescription = "长截图裁边，拖动蓝色边线调整范围"
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        // ScrollView leaves its scrolling axis unconstrained.
+        setMeasuredDimension(
+            resolveSize(layoutParams.width.coerceAtLeast(0), widthMeasureSpec),
+            resolveSize(layoutParams.height.coerceAtLeast(0), heightMeasureSpec)
+        )
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        val gutter = 24 * density
+        if (horizontal) image.set(gutter, 0f, (w - gutter).coerceAtLeast(gutter + 1), h.toFloat())
+        else image.set(0f, gutter, w.toFloat(), (h - gutter).coerceAtLeast(gutter + 1))
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        paint.color = Color.WHITE
+        canvas.drawBitmap(preview, null, image, paint)
+        val head = position(trim.start)
+        val tail = position(trim.end)
+        paint.color = 0xb3000000.toInt()
+        if (horizontal) {
+            canvas.drawRect(image.left, image.top, head, image.bottom, paint)
+            canvas.drawRect(tail, image.top, image.right, image.bottom, paint)
+        } else {
+            canvas.drawRect(image.left, image.top, image.right, head, paint)
+            canvas.drawRect(image.left, tail, image.right, image.bottom, paint)
+        }
+        paint.color = 0xff4096ff.toInt()
+        paint.strokeWidth = 2 * density
+        for (edge in listOf(head, tail)) {
+            val half = 18 * density
+            val thickness = 4 * density
+            if (horizontal) {
+                canvas.drawLine(edge, image.top, edge, image.bottom, paint)
+                canvas.drawRoundRect(edge-thickness, image.centerY()-half, edge+thickness, image.centerY()+half, thickness, thickness, paint)
+            } else {
+                canvas.drawLine(image.left, edge, image.right, edge, paint)
+                canvas.drawRoundRect(image.centerX()-half, edge-thickness, image.centerX()+half, edge+thickness, thickness, thickness, paint)
+            }
+        }
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (!isEnabled || axisLength <= 0f) return false
+        val pointer = if (horizontal) event.x else event.y
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                val headDistance = abs(pointer - position(trim.start))
+                val tailDistance = abs(pointer - position(trim.end))
+                if (minOf(headDistance, tailDistance) > 24 * density) return false
+                draggingHead = headDistance <= tailDistance
+                dragOffset = pointer - position(if (draggingHead == true) trim.start else trim.end)
+                parent?.requestDisallowInterceptTouchEvent(true)
+            }
+            MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP -> {
+                val head = draggingHead ?: return false
+                val source = ((pointer - dragOffset - axisStart) * trim.extent / axisLength).roundToInt()
+                adjust(head, source)
+                if (event.actionMasked == MotionEvent.ACTION_UP) draggingHead = null
+            }
+            MotionEvent.ACTION_CANCEL -> draggingHead = null
+        }
+        return true
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info.addAction(AccessibilityNodeInfo.AccessibilityAction(ACTION_HEAD_IN, "收进起始边"))
+        info.addAction(AccessibilityNodeInfo.AccessibilityAction(ACTION_HEAD_OUT, "移回起始边"))
+        info.addAction(AccessibilityNodeInfo.AccessibilityAction(ACTION_TAIL_IN, "收进结束边"))
+        info.addAction(AccessibilityNodeInfo.AccessibilityAction(ACTION_TAIL_OUT, "移回结束边"))
+    }
+
+    override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
+        if (!isEnabled) return super.performAccessibilityAction(action, arguments)
+        val step = (trim.extent / 50).coerceAtLeast(1)
+        when (action) {
+            ACTION_HEAD_IN -> adjust(true, trim.start + step)
+            ACTION_HEAD_OUT -> adjust(true, trim.start - step)
+            ACTION_TAIL_IN -> adjust(false, trim.end - step)
+            ACTION_TAIL_OUT -> adjust(false, trim.end + step)
+            else -> return super.performAccessibilityAction(action, arguments)
+        }
+        return true
+    }
+
+    private fun adjust(head: Boolean, source: Int) {
+        if (head) trim.trimHead(source) else trim.trimTail(trim.extent - source)
+        invalidate()
+        changed()
+    }
+
+    private companion object {
+        const val ACTION_HEAD_IN = 0x00100001
+        const val ACTION_HEAD_OUT = 0x00100002
+        const val ACTION_TAIL_IN = 0x00100003
+        const val ACTION_TAIL_OUT = 0x00100004
+    }
+}

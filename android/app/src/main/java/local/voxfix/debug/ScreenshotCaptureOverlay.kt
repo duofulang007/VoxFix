@@ -49,7 +49,7 @@ class ScreenshotProject(val document: ScreenshotDocument, val replaceId: String?
  */
 class ScreenshotCaptureOverlay(
     private val context: Context,
-    private val image: Bitmap,
+    private var image: Bitmap,
     private val save: (ScreenshotSaveRequest) -> Unit,
     private val recognize: (Rect) -> Unit,
     private val onText: (String) -> Unit,
@@ -91,6 +91,11 @@ class ScreenshotCaptureOverlay(
     private val background = ImageView(context).apply { scaleType = ImageView.ScaleType.FIT_XY; setImageBitmap(image) }
     private var picked: Rect? = null
     private var busy = false
+    private var recapturing = false
+    internal val isRecapturing get() = recapturing
+    internal var onRecaptureRequested: (() -> Unit)? = null
+    internal var onScrollRequested: ((Rect, Int, Boolean) -> Unit)? = null
+    private val recaptureDrafts = linkedSetOf<String>()
     private var editing = false
     private var showingOriginal = false
     private var translating = false
@@ -174,6 +179,81 @@ class ScreenshotCaptureOverlay(
     private var closeRequested = false
     private val actionWorker = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val selector = ScreenTextRegionView(context,image.width,image.height,null,::select)
+    private var smartPath = emptyList<ScreenshotDocRect>()
+    private var smartIndex = 0
+    private val smartBar = LinearLayout(context).apply {
+        background = android.graphics.drawable.InsetDrawable(surface(20), 0, dp(4), 0, dp(4))
+        setPadding(0, 0, 0, 0)
+        elevation = dp(4).toFloat()
+        visibility = View.GONE
+    }
+    private val smartTarget = smartButton(R.drawable.snow_select, "选择元素") {
+        selector.smartWindowMode = !selector.smartWindowMode
+        if (smartPath.isNotEmpty()) {
+            commitSmartSelection(smartPath, if (selector.smartWindowMode) smartPath.lastIndex else 0)
+        } else syncSmartSelection()
+    }
+    private val smartInner = smartButton(R.drawable.snow_region_reduce, "缩小一层") { commitSmartSelection(smartPath, smartIndex - 1) }
+    private val smartOuter = smartButton(R.drawable.snow_region_add, "扩大一层") { commitSmartSelection(smartPath, smartIndex + 1) }
+
+    internal fun enableSmartSelection(snapshot: ScreenshotSmartSelection?) {
+        val frame = image
+        var text: ScreenshotSmartText? = null
+        selector.smartFrame = frame
+        selector.smartHit = { x, y ->
+            val native = snapshot?.path(x, y, frame.width, frame.height).orEmpty()
+            text?.refine(x, y, native) ?: native
+        }
+        selector.onSmartCommit = ::commitSmartSelection
+        if (picked == null) status.text = "轻点选区，按住后滑动探查，也可直接拖框"
+        syncSmartSelection()
+        val input = runCatching { frame.copy(Bitmap.Config.ARGB_8888, false) }.getOrNull() ?: return
+        actionWorker.execute {
+            val geometry = try { runCatching { ScreenshotSmartText.detect(input) }.getOrNull() }
+                finally { input.recycle() }
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                if (disposed || image !== frame || geometry == null) return@post
+                text = geometry
+                selector.refineLastSmartTap()
+            }
+        }
+    }
+
+    private fun smartButton(icon: Int, label: String, action: () -> Unit) = android.widget.ImageButton(context).apply {
+        setImageResource(icon)
+        setColorFilter(COLOR_TEXT)
+        scaleType = ImageView.ScaleType.FIT_CENTER
+        setPadding(dp(13), dp(13), dp(13), dp(13))
+        background = RippleDrawable(ColorStateList.valueOf(0x1FFFFFFF), null, surface(20))
+        contentDescription = label
+        tooltipText = label
+        isFocusable = true
+        setOnClickListener { action() }
+        smartBar.addView(this, LinearLayout.LayoutParams(dp(48), dp(48)))
+    }
+
+    private fun commitSmartSelection(path: List<ScreenshotDocRect>, index: Int) {
+        val hit = path.getOrNull(index) ?: return
+        selector.selectRegion(hit.toRect())
+        smartPath = path
+        smartIndex = index
+        syncSmartSelection()
+        placeControls()
+    }
+
+    private fun syncSmartSelection() {
+        val visible = selector.smartHit != null && !busy && !editing && !translating &&
+            resultTool == null && drawing.tool == null && !moveMode && regionShape == ScreenshotRegionShape.RECTANGLE &&
+            captureRegion == null
+        selector.smartEnabled = visible
+        smartBar.visibility = if (visible) View.VISIBLE else View.GONE
+        smartTarget.setImageResource(if (selector.smartWindowMode) R.drawable.ic_screenshot_fullscreen else R.drawable.snow_select)
+        smartTarget.stateDescription = if (selector.smartWindowMode) "窗口" else "元素"
+        smartTarget.contentDescription = if (selector.smartWindowMode) "切换到元素选择" else "切换到窗口选择"
+        smartTarget.tooltipText = smartTarget.contentDescription
+        smartInner.visibility = if (smartIndex > 0 && smartPath.size > 1) View.VISIBLE else View.GONE
+        smartOuter.visibility = if (smartIndex < smartPath.lastIndex) View.VISIBLE else View.GONE
+    }
     private val resultLayer = FrameLayout(context).apply { visibility = View.INVISIBLE }
     private fun surface(radius: Int) = GradientDrawable().apply { setColor(COLOR_PANEL); cornerRadius = dp(radius).toFloat() }
     /** Active tools paint a filled blue tile, matching Snow Shot's selected tool. */
@@ -226,8 +306,10 @@ class ScreenshotCaptureOverlay(
     private val barcodeAction = Action(ScreenshotAction.BARCODE,R.drawable.snow_barcode) { scanBarcode() }
     private val pinAction = Action(ScreenshotAction.PIN,R.drawable.snow_pin) { pinImage() }
     private val shareAction = Action(ScreenshotAction.SHARE,R.drawable.snow_share) { shareImage() }
-    /** Placeholder entries: the slot and icon exist, the capture itself is not built yet. */
-    private val scrollAction = Action(ScreenshotAction.SCROLL,R.drawable.snow_scroll) { showFeedback("长截屏暂未支持，入口已保留") }
+    private val scrollAction = Action(ScreenshotAction.SCROLL,R.drawable.snow_scroll) { chooseScrollAxis(false) }.apply {
+        tooltipText = "长截屏，轻点纵向，长按选择方向"
+        setOnLongClickListener { chooseScrollAxis(true); true }
+    }
     private val recordAction = Action(ScreenshotAction.RECORD,R.drawable.snow_record) { showFeedback("录屏暂未支持，入口已保留") }
     /** Edit-selection mode: add/subtract parts of the capture area, as Snow Shot's move bar does. */
     private val moveAction = Action(ScreenshotAction.MOVE,R.drawable.snow_move) { toggleMoveMode() }
@@ -249,11 +331,29 @@ class ScreenshotCaptureOverlay(
     private val regionCurveButton=ImageView(context)
     private val regionFreehandButton=ImageView(context)
     private val recaptureButton=ImageView(context)
+    private val recaptureDraftButton=TextView(context).apply {
+        text = "上次文字草稿"
+        contentDescription = text
+        gravity = Gravity.CENTER
+        setTextColor(COLOR_TEXT)
+        textSize = 12f
+        isFocusable = true
+        visibility = View.GONE
+        setOnClickListener {
+            showValueEditor("上次截图文字草稿",recaptureDrafts.joinToString("\n\n"),"复制") { value ->
+                runCatching { context.getSystemService(ClipboardManager::class.java)
+                    .setPrimaryClip(ClipData.newPlainText("截图文字草稿",value)) }
+                    .onSuccess { showFeedback("已复制文字草稿") }
+                    .onFailure { showFeedback("复制失败，请重试") }
+            }
+        }
+    }
     private val cursorButton=ImageView(context)
     private val qrButton=ImageView(context)
     private val pixelPhysicalButton=ImageView(context)
     private val pixelLogicalButton=ImageView(context)
     private val hideBarButton=ImageView(context)
+    private var selectionReadoutHidden = false
     private val selectActionsScroll=android.widget.HorizontalScrollView(context).apply {
         isHorizontalScrollBarEnabled=false; visibility=View.GONE
     }
@@ -272,6 +372,7 @@ class ScreenshotCaptureOverlay(
         selector.setOnTouchListener { _,_ -> busy || editing || translating || project!=null }
         root.addView(toolbar,FrameLayout.LayoutParams(dp(200),dp(BUTTON+PANEL_V*2)))
         root.addView(status,FrameLayout.LayoutParams(-2,-2))
+        root.addView(smartBar,FrameLayout.LayoutParams(-2,-2))
         detailBody.addView(drawingStyles,LinearLayout.LayoutParams(0,-2,1f))
         detailBody.addView(selectSideActions,LinearLayout.LayoutParams(dp(76),-2))
         secondaryPanel.addView(detailBody,LinearLayout.LayoutParams(-1,-2))
@@ -368,6 +469,7 @@ class ScreenshotCaptureOverlay(
         }
         undoAction.isEnabled=state.mainEnabled(ScreenshotAction.UNDO) && (if (editing) editedLayer()?.canUndo==true else drawing.history.canUndo)
         redoAction.isEnabled=state.mainEnabled(ScreenshotAction.REDO) && (if (editing) editedLayer()?.canRedo==true else drawing.history.canRedo)
+        scrollAction.isEnabled = scrollAction.isEnabled && onScrollRequested != null
         if(annotationEditor!=null) actions.filter { it.action!=ScreenshotAction.CLOSE }.forEach { it.isEnabled=false }
         rebuildToolbar()
         val working = busy || translating
@@ -378,20 +480,24 @@ class ScreenshotCaptureOverlay(
         moveAction.active=moveMode
         val showSelection=moveMode && picked!=null && !busy && !editing && !translating && resultTool==null && annotationEditor==null
         selectActionsScroll.visibility=if(showSelection) View.VISIBLE else View.GONE
+        recaptureButton.isEnabled = showSelection && canRecapture()
+        recaptureDraftButton.visibility = if(recaptureDrafts.isEmpty()) View.GONE else View.VISIBLE
         applyCellStyle(addRegionButton,regionOperation==ScreenshotRegionOp.ADD)
         applyCellStyle(subtractRegionButton,regionOperation==ScreenshotRegionOp.SUBTRACT)
         applyCellStyle(regionRectButton,regionShape==ScreenshotRegionShape.RECTANGLE)
         applyCellStyle(regionPolylineButton,regionShape==ScreenshotRegionShape.POLYLINE)
         applyCellStyle(regionCurveButton,regionShape==ScreenshotRegionShape.CURVE)
         applyCellStyle(regionFreehandButton,regionShape==ScreenshotRegionShape.FREEHAND)
+        applyCellStyle(hideBarButton, selectionReadoutHidden)
         if(showSelection && regionOperation==null) picked?.let {
             status.text=selectionSize(it)
             status.contentDescription="${selectionSize(it)}，点击切换单位"
-            status.visibility=View.VISIBLE
+            status.visibility=if(selectionReadoutHidden) View.GONE else View.VISIBLE
         }
         secondaryPanel.visibility=if(annotationEditor==null && (drawingStyles.visibility==View.VISIBLE || resultActions.visibility==View.VISIBLE ||
             selectActionsScroll.visibility==View.VISIBLE || pairBar?.visibility==View.VISIBLE)) View.VISIBLE else View.GONE
         if (working || showingTranslation) status.visibility = View.GONE
+        syncSmartSelection()
         placeControls()
     }
     /** Snow Shot's move-tool bar: icon controls only, no text labels. */
@@ -421,11 +527,17 @@ class ScreenshotCaptureOverlay(
         icon(regionCurveButton,R.drawable.snow_region_curve,"曲线截图区域") { setRegionShape(ScreenshotRegionShape.CURVE) }
         icon(regionFreehandButton,R.drawable.snow_region_freehand,"自由手绘截图区域") { setRegionShape(ScreenshotRegionShape.FREEHAND) }
         icon(cursorButton,R.drawable.snow_cursor,"捕捉光标，暂未支持") { showFeedback("捕捉光标暂未支持") }
-        icon(recaptureButton,R.drawable.snow_recapture,"重新截图") { recapture() }
+        icon(recaptureButton,R.drawable.snow_recapture,"重新截图") { if (canRecapture()) onRecaptureRequested?.invoke() }
         icon(qrButton,R.drawable.snow_barcode,"显示二维码") { scanBarcode() }
         icon(pixelPhysicalButton,R.drawable.snow_pixel_physical,"物理像素单位") { showFeedback("像素单位切换暂未支持") }
         icon(pixelLogicalButton,R.drawable.snow_pixel_logical,"逻辑像素单位") { showFeedback("像素单位切换暂未支持") }
-        icon(hideBarButton,R.drawable.snow_eye_off,"隐藏选择工具栏") { showFeedback("隐藏工具栏暂未支持，可拖动工具栏移开") }
+        icon(hideBarButton,R.drawable.snow_eye_off,"隐藏选择工具栏") {
+            selectionReadoutHidden = !selectionReadoutHidden
+            val label = if (selectionReadoutHidden) "显示选择工具栏" else "隐藏选择工具栏"
+            hideBarButton.contentDescription = label
+            hideBarButton.tooltipText = label
+            sync()
+        }
         val row1=LinearLayout(context).apply { gravity=Gravity.CENTER_VERTICAL }
         val row2=LinearLayout(context).apply { gravity=Gravity.CENTER_VERTICAL }
         selectActions.addView(row1,LinearLayout.LayoutParams(-2,dp(36)))
@@ -444,6 +556,7 @@ class ScreenshotCaptureOverlay(
         divider(row2)
         cell(row2,pixelPhysicalButton,dp(36)); cell(row2,pixelLogicalButton,dp(36)); divider(row2)
         cell(row2,hideBarButton,dp(36))
+        cell(row2,recaptureDraftButton,dp(98))
     }
     /** Edit-selection mode mirrors Snow Shot's move tool: the bar owns the add/subtract controls. */
     private fun toggleMoveMode() {
@@ -520,12 +633,80 @@ class ScreenshotCaptureOverlay(
         status.visibility=View.GONE
         sync()
     }
-    private fun recapture() {
-        setRegionOperation(null)
-        moveMode=false
-        captureRegion=null
-        selector.selectRegion(Rect(0,0,0,0))
+    private fun canRecapture() = project == null && onRecaptureRequested != null && !recapturing &&
+        !busy && !editing && !translating && !translateAfterRecognition && annotationEditor == null &&
+        moveMode && picked != null && regionOperation == null && !selector.selectionInProgress
+
+    internal fun hideForRecapture(): Boolean {
+        if (!canRecapture()) return false
+        recapturing = true
+        closeStack()
+        root.visibility = View.INVISIBLE
+        return true
+    }
+
+    internal fun replaceCaptureSource(next: Bitmap, snapshot: ScreenshotSmartSelection?) {
+        listOf("识别文字" to textLayer, "译文" to translationLayer).forEach { (label, layer) ->
+            if (layer != null && (layer.canUndo || layer.canRedo)) {
+                layer.text().takeIf { it.isNotBlank() }?.let { recaptureDrafts.add("$label\n$it") }
+            }
+        }
+        clearText()
+        translationLayer = null
+        onText("")
+        image = next
+        background.setImageBitmap(next)
+        drawing.replaceSource(next)
+        smartPath = emptyList()
+        smartIndex = 0
+        selector.smartFrame = null
+        selector.smartHit = null
+        enableSmartSelection(snapshot)
+    }
+
+    internal fun restoreAfterRecapture(error: String?) {
+        recapturing = false
+        root.visibility = View.VISIBLE
+        root.requestFocus()
         sync()
+        showFeedback(error ?: if (recaptureDrafts.isEmpty()) "已重新截图" else "已重新截图，已编辑文字保留在「上次文字草稿」")
+    }
+
+    private fun chooseScrollAxis(showDirections: Boolean) {
+        val capture = onScrollRequested ?: return
+        val crop = picked ?: return
+        if (busy || editing || translating || annotationEditor != null) return
+        if (captureRegion?.let { it.isCustom || it.rects.size != 1 } == true) {
+            showFeedback("长截屏需要矩形选区")
+            return
+        }
+        val top = ScreenshotScrollCapture.controlTop(crop.top,crop.bottom,bars.top,image.height-bars.bottom,
+            dp(ScreenshotScrollCapture.BAR_DP))
+        if (top == null) {
+            showFeedback("请在选区上方或下方留出长截屏控制栏的空间")
+            return
+        }
+        if (!showDirections) {
+            capture(Rect(crop), top, false)
+            return
+        }
+        android.widget.PopupMenu(context,toolbar).apply {
+            menu.add(0,1,0,"纵向长截屏")
+            menu.add(0,2,1,"横向长截屏")
+            setOnMenuItemClickListener { choice ->
+                capture(Rect(crop),top,choice.itemId == 2)
+                true
+            }
+            show()
+        }
+    }
+
+    internal fun setScrollCaptureActive(active: Boolean, message: String? = null) {
+        root.visibility = if (active) View.INVISIBLE else View.VISIBLE
+        if (!active) {
+            root.requestFocus()
+            message?.let(::showFeedback)
+        }
     }
     private fun rebuildToolbar(availableWidth: Int = root.width) {
         closeStack()
@@ -616,6 +797,7 @@ class ScreenshotCaptureOverlay(
         if(project!=null) return
         // While adding or subtracting, the drag is reported through onRegionOperation instead.
         if(regionOperation!=null) return
+        smartPath = emptyList()
         captureRegion=null
         moveMode=false; moveAction.active=false
         picked = region.takeIf { it.width() >= 2 && it.height() >= 2 }?.let(::Rect)
@@ -639,7 +821,8 @@ class ScreenshotCaptureOverlay(
         val scroll=drawingStyles.scrollY
         val key=drawing.inspectedTool to drawing.selectedIndex
         val controls=(drawingStyles.getChildAt(0) as? ScreenshotDrawingControls)?.takeIf { drawingControlKey==key }?.also { it.refresh() }
-            ?: ScreenshotDrawingControls(context,drawing,::editDrawingValue,showSelectActions=false).also {
+            ?: ScreenshotDrawingControls(context,drawing,::editDrawingValue,showSelectActions=false,
+                showDrawTemplates=::showDrawTemplates).also {
                 drawingStyles.removeAllViews(); drawingStyles.addView(it); drawingControlKey=key
             }
         drawingStyles.post { drawingStyles.scrollTo(0,scroll) }
@@ -690,6 +873,57 @@ class ScreenshotCaptureOverlay(
         drawingStyles.visibility=View.GONE; sync()
     }
     private fun editDrawingValue(title: String,value: String,save: (String)->Unit) = showValueEditor(title,value,"保存",save=save)
+    private val drawTemplates by lazy { ScreenshotDrawTemplateStore(context) }
+    private var drawTemplatePopup: android.widget.PopupWindow? = null
+
+    private fun showDrawTemplates(anchor: View) {
+        if (!anchor.isAttachedToWindow) return
+        val names = runCatching { drawTemplates.names() }.getOrElse {
+            showFeedback("无法读取绘图模板"); return
+        }
+        drawTemplatePopup?.dismiss()
+        val list = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8),dp(4),dp(8),dp(4)) }
+        val scroll = android.widget.ScrollView(context).apply { addView(list) }
+        val popup = android.widget.PopupWindow(scroll, minOf(dp(280),root.width-dp(16)).coerceAtLeast(1),
+            dp((44 * (names.size + 1)).coerceIn(132,300)), true).apply {
+            setBackgroundDrawable(surface(PANEL_RADIUS))
+            isOutsideTouchable = true
+            elevation = dp(8).toFloat()
+        }
+        drawTemplatePopup = popup
+        popup.setOnDismissListener { if(drawTemplatePopup === popup) drawTemplatePopup = null }
+        fun action(label: String, run: () -> Unit) = selectAction(label,label,run).apply { minHeight=dp(44) }
+        list.addView(action("将所选对象存为模板") {
+            popup.dismiss()
+            val template = drawing.selectedTemplate() ?: return@action
+            val suffix = generateSequence(1) { it + 1 }.first { n -> names.none { it == "模板 $n" } }
+            showValueEditor("模板名称", "模板 $suffix", "保存") { value ->
+                runCatching { drawTemplates.save(value,template) }
+                    .onSuccess { showFeedback("绘图模板已保存") }
+                    .onFailure { showFeedback(it.message ?: "无法保存绘图模板") }
+            }
+        }.apply { isEnabled = drawing.selectedIndices.isNotEmpty(); alpha = if(isEnabled) 1f else .4f })
+        for (name in names) {
+            val row = LinearLayout(context)
+            row.addView(action(name) {
+                popup.dismiss()
+                val inserted = runCatching { drawing.insertTemplate(drawTemplates.load(name)) }.getOrDefault(false)
+                if (!inserted) showFeedback("无法插入绘图模板")
+            },LinearLayout.LayoutParams(0,dp(44),1f))
+            row.addView(action("删除") {
+                list.removeAllViews()
+                list.addView(TextView(context).apply { text="删除「$name」后无法撤销"; setTextColor(COLOR_TEXT); minHeight=dp(44) })
+                list.addView(action("确认删除") {
+                    popup.dismiss()
+                    runCatching { drawTemplates.delete(name) }.onFailure { showFeedback("无法删除绘图模板") }
+                })
+                list.addView(action("取消") { popup.dismiss() })
+            },LinearLayout.LayoutParams(dp(64),dp(44)))
+            list.addView(row)
+        }
+        popup.showAtLocation(root,Gravity.CENTER,0,0)
+    }
+
     private fun showValueEditor(title: String, value: String, positive: String, link: android.net.Uri? = null, save: (String)->Unit) {
         closeStack(); closeDrawingEditor()
         val panel=LinearLayout(context).apply {
@@ -698,6 +932,7 @@ class ScreenshotCaptureOverlay(
         }
         panel.addView(TextView(context).apply { text=title; textSize=16f; setTextColor(COLOR_TEXT) })
         val field=ScreenshotTextEditor(context,value).apply { contentDescription=title }
+        if(title=="模板名称") { field.isSingleLine = true; field.filters = arrayOf(android.text.InputFilter.LengthFilter(80)) }
         // The original stores font size as a double; the badge and the text tool clamp at different bounds.
         if(title=="字号") field.inputType=android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
         else if(title=="序号") field.inputType=android.text.InputType.TYPE_CLASS_NUMBER
@@ -1127,7 +1362,8 @@ class ScreenshotCaptureOverlay(
         val left=rect?.let { it.left*width/image.width } ?: (width-toolbarWidth)/2
         val top=rect?.let { it.top*height/image.height } ?: safeBottom
         val bottom=rect?.let { it.bottom*height/image.height } ?: safeBottom
-        val anchorKey="$width,$height,$rect,${bars.top},${bars.bottom},$imeBottom,$toolbarWidth,$toolbarHeight"
+        val browsing = selector.smartEnabled && smartPath.isNotEmpty()
+        val anchorKey="$width,$height,$rect,${bars.top},${bars.bottom},$imeBottom,$toolbarWidth,$toolbarHeight,$browsing"
         val manual=toolbarManual
         if(manual!=null) {
             toolbarAnchor=android.graphics.Point(
@@ -1140,13 +1376,28 @@ class ScreenshotCaptureOverlay(
                 top-toolbarHeight-dp(8)-reserve>=safeTop -> top-toolbarHeight-dp(8)-reserve
                 else -> safeBottom-toolbarHeight-reserve
             }
-            toolbarAnchor=android.graphics.Point(
-                left.coerceIn(bars.left+dp(8),maxOf(bars.left+dp(8),width-bars.right-toolbarWidth-dp(8))),
+            val minX = bars.left+dp(8)
+            val maxX = maxOf(minX,width-bars.right-toolbarWidth-dp(8))
+            toolbarAnchor = if (browsing) android.graphics.Point((minX+maxX)/2, (safeBottom-toolbarHeight).coerceAtLeast(safeTop))
+            else android.graphics.Point(left.coerceIn(minX,maxX),
                 proposed.coerceIn(safeTop,maxOf(safeTop,safeBottom-toolbarHeight-dp(48))))
             toolbarAnchorKey=anchorKey
         }
-        val x=toolbarAnchor.x; val y=toolbarAnchor.y
+        val x=toolbarAnchor.x
+        val y=toolbarAnchor.y
         toolbar.translationX=x.toFloat(); toolbar.translationY=y.toFloat()
+        if (smartBar.visibility == View.VISIBLE) {
+            val safe = ScreenshotDocRect(bars.left+dp(8), safeTop, width-bars.right-dp(8), safeBottom)
+            val selection = rect?.let {
+                ScreenshotDocRect(left, top, it.right*width/image.width, bottom)
+            }
+            val panel = if (toolbar.visibility == View.VISIBLE)
+                ScreenshotDocRect(x, y, x+toolbarWidth, y+toolbarHeight) else null
+            val buttonCount = 1 + listOf(smartInner, smartOuter).count { it.visibility == View.VISIBLE }
+            val dock = ScreenshotSmartSelection.dock(safe, selection, panel, dp(48)*buttonCount, dp(48), dp(8))
+            smartBar.translationX = dock.left.toFloat()
+            smartBar.translationY = dock.top.toFloat()
+        }
         val detailWidth=minOf(maxOf(toolbarWidth,dp(320)),width-bars.left-bars.right-dp(16)).coerceAtLeast(1)
         val below=(safeBottom-y-toolbarHeight-dp(8)).coerceAtLeast(0)
         val above=(y-safeTop-dp(8)).coerceAtLeast(0)
@@ -1235,6 +1486,7 @@ class ScreenshotCaptureOverlay(
     }
     /** Back key: leave editing first, otherwise the service closes the whole capture. */
     fun back(): Boolean {
+        if (recapturing) return false
         if (annotationEditor != null) { closeDrawingEditor(); sync(); return true }
         if (regionOperation != null) { setRegionOperation(null); sync(); return true }
         if (moveMode) { toggleMoveMode(); return true }
@@ -1253,7 +1505,10 @@ class ScreenshotCaptureOverlay(
         val source = textLayer?.retainedResult()
         val translated = if (translationComplete) translationLayer?.retainedResult()?.copy(translation = true) else null
         return if (showingTranslation && translated != null) translated.copy(alternate = source)
-            else source?.copy(alternate = translated) ?: translated
+            else source?.copy(alternate = translated) ?: translated ?: recaptureDrafts.takeIf { it.isNotEmpty() }?.let {
+                val draft = it.joinToString("\n\n")
+                ScreenTextOverlay.ResultState(draft, draft.length, draft.length, false)
+            }
     }
     fun show(windowManager: WindowManager) {
         windows = windowManager
@@ -1269,6 +1524,7 @@ class ScreenshotCaptureOverlay(
     }
     fun dismiss(windowManager: WindowManager) {
         disposed=true; actionGeneration++; actionWorker.shutdown()
+        drawTemplatePopup?.dismiss()
         closeDrawingEditor(); drawing.close()
         closeStack()
         hideKeyboard(); background.setImageDrawable(null)

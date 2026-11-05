@@ -17,7 +17,8 @@ import android.widget.TextView
 internal class ScreenshotDrawingControls(context: Context,private val drawing: ScreenshotDrawingLayer,
     private val edit: (String,String,(String)->Unit) -> Unit,
     /** The screenshot editor renders these in the bar's right column instead of a bottom row. */
-    private val showSelectActions: Boolean = true) : LinearLayout(context) {
+    private val showSelectActions: Boolean = true,
+    private val showDrawTemplates: ((View) -> Unit)? = null) : LinearLayout(context) {
     private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
     private val tool get()=drawing.inspectedTool
     private val style get()=drawing.inspectedStyle
@@ -94,6 +95,11 @@ internal class ScreenshotDrawingControls(context: Context,private val drawing: S
             val actions = ScreenshotSelectionActionControls(context, drawing)
             addView(actions, LayoutParams(-1, -2))
             if (selectionScroll != 0) actions.post { actions.scrollTo(selectionScroll, 0) }
+            showDrawTemplates?.let { show ->
+                val button = chip("绘图模板") {}
+                button.setOnClickListener { show(it) }
+                row(listOf(button))
+            }
         }
         if(active==ScreenshotDrawingTool.ERASER || active==ScreenshotDrawingTool.SELECT) return
         if(active==ScreenshotDrawingTool.WATERMARK) {
@@ -129,10 +135,11 @@ internal class ScreenshotDrawingControls(context: Context,private val drawing: S
             return
         }
         val hasWidth=active in setOf(ScreenshotDrawingTool.ARROW,ScreenshotDrawingTool.RECTANGLE,ScreenshotDrawingTool.PEN) ||
-            (active in setOf(ScreenshotDrawingTool.HIGHLIGHT,ScreenshotDrawingTool.FILTER) && style.area==ScreenshotAreaMode.PEN)
+            (active in setOf(ScreenshotDrawingTool.HIGHLIGHT,ScreenshotDrawingTool.FILTER) && style.area==ScreenshotAreaMode.PEN && !drawing.autoFilterActive)
         val customColor=if(active!=ScreenshotDrawingTool.FILTER) color("颜色",style.color,property=COLOR) { s,c -> s.copy(color=c!!) } else null
         if(drawing.selectedIndices.isEmpty() && active in setOf(ScreenshotDrawingTool.FILTER,ScreenshotDrawingTool.HIGHLIGHT))
-            row(ScreenshotAreaMode.values().map { mode -> chip(if(mode==ScreenshotAreaMode.PEN) "画笔" else "矩形",!mixed(AREA) && style.area==mode,"作用方式 ${mode.name}") { drawing.changeArea(mode) } })
+            row(ScreenshotAreaMode.values().map { mode -> chip(if(mode==ScreenshotAreaMode.PEN) "画笔" else "矩形",!drawing.autoFilterActive && !mixed(AREA) && style.area==mode,"作用方式 ${mode.name}") { drawing.changeArea(mode) } } +
+                if (active == ScreenshotDrawingTool.FILTER) listOf(chip("自动筛选", drawing.autoFilterActive) { drawing.chooseAutoFilter() }) else emptyList())
         if(active!=ScreenshotDrawingTool.FILTER) {
             val colors=if(active in setOf(ScreenshotDrawingTool.TEXT,ScreenshotDrawingTool.SERIAL))
                 listOf(0xFFF5222D.toInt() to "红色",0xFF52C41A.toInt() to "绿色",0xFF1677FF.toInt() to "蓝色",0xFFFADB14.toInt() to "黄色",Color.BLACK to "黑色")
@@ -156,6 +163,21 @@ internal class ScreenshotDrawingControls(context: Context,private val drawing: S
         if(active==ScreenshotDrawingTool.FILTER) {
             row(ScreenshotFilter.values().map { filter -> chip(if(filter==ScreenshotFilter.MOSAIC) "马赛克" else "高斯模糊",!mixed(FILTER) && style.filter==filter) { change(FILTER) { it.copy(filter=filter) } } })
             slider(STRENGTH,"强度",style.strength-4,60,4) { s,v -> s.copy(strength=v) }
+            if (drawing.autoFilterActive) {
+                val regions = drawing.autoFilterRegions
+                group(when {
+                    drawing.autoFilterFailed -> "识别失败，点自动筛选重试"
+                    regions == null -> "正在识别区域"
+                    regions.isEmpty() -> "未识别到区域"
+                    else -> "点按或框选区域打码，也可按类别填充"
+                })
+                regions.orEmpty().map { it.category }.distinct().sorted().chunked(4).forEach { categories ->
+                    row(categories.map { category ->
+                        val label = ScreenshotAutoFilter.labels[category]
+                        chip(label, description = "填充全部$label") { drawing.fillAutoFilterCategory(category) }
+                    })
+                }
+            }
         }
         if(hasWidth) {
             val widths=if(active in setOf(ScreenshotDrawingTool.HIGHLIGHT,ScreenshotDrawingTool.FILTER)) listOf(8,16,24,40) else listOf(2,4,8)

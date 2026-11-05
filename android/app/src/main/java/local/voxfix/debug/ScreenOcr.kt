@@ -14,30 +14,34 @@ import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 
 /** Called only on the screenshot worker. Each request owns and closes its native sessions. */
 internal object ScreenOcr {
-    fun recognize(context: Context, image: Bitmap, current: () -> Boolean): List<ScreenshotTextBlock> {
+    internal fun detect(image: Bitmap): Text {
         val detector = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
         try {
-            // Await completion before recycling the image: ML Kit may still own it after a timeout.
-            val detected = Tasks.await(detector.process(InputImage.fromBitmap(image, 0)))
-            if (!current()) return emptyList()
-            val lines = detected.textBlocks.flatMap { it.lines }
-            require(lines.size <= 400) { "文字过多，请缩小选区" }
-            if (lines.isEmpty()) return emptyList()
-            return ScreenTextPaddleRecognizer(context).use { reader ->
-                val blocks = mutableListOf<ScreenshotTextBlock>()
-                for (line in lines) {
-                    if (!current()) return emptyList()
-                    val box = line.boundingBox ?: continue
-                    if (box.width() < 2 || box.height() < 2) continue
-                    val crop = lineImage(image, line)
-                    val text = try { reader.recognize(crop) } finally { if (crop !== image) crop.recycle() }
-                    // A failed/empty candidate never silently falls back to the less accurate reader.
-                    check(text.isNotBlank()) { "文字行识别失败，请重新框选" }
-                    blocks.add(ScreenshotTextBlock(box.left, box.top, box.right, box.bottom, text))
-                }
-                ScreenshotParagraphs.readingOrder(blocks)
-            }
+            // The image stays owned by this request until ML Kit finishes.
+            return Tasks.await(detector.process(InputImage.fromBitmap(image, 0)))
         } finally { detector.close() }
+    }
+
+    fun recognize(context: Context, image: Bitmap, current: () -> Boolean): List<ScreenshotTextBlock> {
+        val detected = detect(image)
+        if (!current()) return emptyList()
+        val lines = detected.textBlocks.flatMap { it.lines }
+        require(lines.size <= 400) { "文字过多，请缩小选区" }
+        if (lines.isEmpty()) return emptyList()
+        return ScreenTextPaddleRecognizer(context).use { reader ->
+            val blocks = mutableListOf<ScreenshotTextBlock>()
+            for (line in lines) {
+                if (!current()) return emptyList()
+                val box = line.boundingBox ?: continue
+                if (box.width() < 2 || box.height() < 2) continue
+                val crop = lineImage(image, line)
+                val text = try { reader.recognize(crop) } finally { if (crop !== image) crop.recycle() }
+                // A failed/empty candidate never silently falls back to the less accurate reader.
+                check(text.isNotBlank()) { "文字行识别失败，请重新框选" }
+                blocks.add(ScreenshotTextBlock(box.left, box.top, box.right, box.bottom, text))
+            }
+            ScreenshotParagraphs.readingOrder(blocks)
+        }
     }
 
     internal fun lineImage(image: Bitmap, line: Text.Line): Bitmap {

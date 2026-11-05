@@ -39,6 +39,20 @@ class ScreenshotSnapApplicationTest {
     }
 
     @Test
+    fun gridSnapCannotPullAnObjectPastAndroidCanvasEdge() {
+        val result = ScreenshotSnapApplication.moveSnap(gridOn, false, rect(20.0, 20.0, 30.0, 30.0),
+            43.0, 20.0, emptyList())
+        assertEquals(40.0, result.dx, 1e-9)
+        val snappedPastRight = ScreenshotSnapApplication.moveSnap(gridOn, false, rect(20.0, 20.0, 30.0, 30.0),
+            57.0, 20.0, emptyList())
+        assertEquals(60.0, snappedPastRight.dx, 1e-9)
+        val constrained = ScreenshotSnapApplication.constrainMove(snappedPastRight,
+            SelBox(20f, 20f, 50f, 50f), SelBox(0f, 0f, 107f, 107f))
+        assertEquals(57.0, constrained.dx, 1e-9)
+        assertEquals(20.0, constrained.dy, 1e-9)
+    }
+
+    @Test
     fun moveObjectSnapsToReferenceEdges() {
         // reference left edge at 100; selection 30..80 moved by base dx 24 → 54..104;
         // edge snap pulls back to 50 → total dx = 20.

@@ -55,6 +55,7 @@ internal object ScreenshotDocumentCodec {
             // byte and an older reader simply sees no binding.
             stroke.startBinding?.let { objectRow.put("startBinding", bindingRow(it)) }
             stroke.endBinding?.let { objectRow.put("endBinding", bindingRow(it)) }
+            stroke.autoFilterCategory?.let { objectRow.put("autoFilterCategory", it) }
             objects.put(objectRow)
         }
         val root = JSONObject()
@@ -154,6 +155,15 @@ internal object ScreenshotDocumentCodec {
                         throw FormatException("工程折线固定段无效")
                 }
             }
+            val autoFilterCategory = if (row.has("autoFilterCategory")) {
+                val category = row.opt("autoFilterCategory") as? Int
+                if (category == null || category !in ScreenshotAutoFilter.labels.indices ||
+                    tool != ScreenshotDrawingTool.FILTER || style.area != ScreenshotAreaMode.RECTANGLE ||
+                    list.size != 2 || list[0].x >= list[1].x || list[0].y >= list[1].y) {
+                    throw FormatException("工程自动筛选区域无效")
+                }
+                category
+            } else null
             objects.add(ScreenshotDrawingStroke(tool, list, row.optInt("color", 0), row.optDouble("width", 2.0).toFloat(),
                 style, row.optString("text", ""), row.optLong("number", 1L),
                 row.optDouble("textWidth", 0.0).toFloat(), fontScale,
@@ -161,7 +171,8 @@ internal object ScreenshotDocumentCodec {
                 smooth = row.optBoolean("smooth", false), closedPath = row.optBoolean("closedPath", false),
                 boundTextId = row.optLong("boundTextId",0L), rotation=ScreenshotObjectTransform.normalize(rotation),
                 fixedElbowSegments = fixedSegments,
-                startBinding = readBinding(row, "startBinding"), endBinding = readBinding(row, "endBinding")))
+                startBinding = readBinding(row, "startBinding"), endBinding = readBinding(row, "endBinding"),
+                autoFilterCategory = autoFilterCategory))
         }
         val byId=objects.associateBy { it.id }
         if(objects.any { it.boundTextId<0 || (it.boundTextId!=0L &&

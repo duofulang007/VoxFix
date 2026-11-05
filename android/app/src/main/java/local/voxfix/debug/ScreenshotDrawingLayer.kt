@@ -7,9 +7,49 @@ import android.view.View
 import android.view.ViewGroup
 import kotlin.math.*
 
-class ScreenshotDrawingLayer(context: Context,private val image: Bitmap,private val memory: ScreenshotToolMemory?=null,private val changed: () -> Unit) : View(context) {
+class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private val memory: ScreenshotToolMemory?=null,private val changed: () -> Unit) : View(context) {
     val history=ScreenshotDrawing()
     var region: Rect?=null
+        set(value) {
+            field = value
+            if (autoFilterActive) autoFilterSession?.request(value)
+        }
+    private var autoFilterSession: ScreenshotAutoFilterSession? = null
+    private var autoFilterMode = false
+    internal val autoFilterActive get() = tool == ScreenshotDrawingTool.FILTER && autoFilterMode
+    internal val autoFilterRegions get() = autoFilterSession?.result
+    internal val autoFilterFailed get() = autoFilterSession?.failed == true
+    private var autoFilterPress: ScreenshotDrawingPoint? = null
+    private var autoFilterPressRegions: List<ScreenshotAutoFilter.Region>? = null
+
+    internal fun chooseAutoFilter() {
+        autoFilterMode = true
+        requestAutoFilter()
+        changed()
+    }
+
+    private fun requestAutoFilter() {
+        val session = autoFilterSession ?: ScreenshotAutoFilterSession(image, ::invalidate, changed)
+            .also { autoFilterSession = it }
+        session.request(region)
+    }
+
+    internal fun replaceSource(next: Bitmap) {
+        autoFilterSession?.close()
+        autoFilterSession = null
+        image = next
+        renderer.replaceSource(next)
+        if (autoFilterActive) requestAutoFilter()
+        invalidate()
+    }
+
+    internal fun fillAutoFilterCategory(category: Int) {
+        if (!autoFilterActive) return
+        val regions = autoFilterRegions.orEmpty().filter { it.category == category }
+        history.fillAutoRegions(regions, style, pixelUnit, toggle = false)
+        invalidate()
+        changed()
+    }
     /** Canvas-level watermark; committed on the same stack, so undo/redo reverts it too. */
     val watermark: ScreenshotWatermark get()=history.watermark
     fun setWatermark(value: ScreenshotWatermark) {
@@ -56,8 +96,12 @@ class ScreenshotDrawingLayer(context: Context,private val image: Bitmap,private 
             finishStylePreview(false)
             field?.let { toolStyles[it]=style }
             field=value; pending=null; pen=null; continuation=null; selection.cancel(); penFeedback.clear()
+            autoFilterPress = null
+            autoFilterPressRegions = null
+            autoFilterSession?.hits = emptyList()
             if(value!=ScreenshotDrawingTool.SELECT) selectedIndex=null
             style=toolStyles[value] ?: value?.let { memory?.style(it) } ?: defaultScreenshotDrawingStyle(value)
+            if (autoFilterActive) requestAutoFilter()
             invalidate()
         }
     var color: Int
@@ -91,9 +135,8 @@ class ScreenshotDrawingLayer(context: Context,private val image: Bitmap,private 
     val fontUnit get()=savedFontUnit.takeIf { it>0 } ?: (resources.displayMetrics.scaledDensity*image.width/(width.takeIf { it>0 } ?: image.width))
     private val unit get()=resources.displayMetrics.density*image.width/(width.takeIf { it>0 } ?: image.width)
     private val renderer=ScreenshotDrawingRenderer(image) { fontUnit }
-    private val snapConfig by lazy { ScreenshotSnapConfig.fromPreferences(
-        context.getSharedPreferences("screenshot-snap-config",android.content.Context.MODE_PRIVATE)) }
-    private val selection by lazy { ScreenshotObjectSelection(history,renderer,{ unit },{ slop },snapConfig) }
+    private val snapPreferences by lazy { ScreenshotSnapConfig.preferences(context) }
+    private val selection by lazy { ScreenshotObjectSelection(history,renderer,{ unit },{ slop }) }
     private val penFeedback by lazy { ScreenshotPenFeedback(this,image.width,image.height) }
 
     init { contentDescription="截图绘图区域"; importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO }
@@ -114,6 +157,7 @@ class ScreenshotDrawingLayer(context: Context,private val image: Bitmap,private 
     }
     fun changeArea(area: ScreenshotAreaMode) {
         val active=selected?.tool ?: tool ?: return
+        if (active == ScreenshotDrawingTool.FILTER) autoFilterMode = false
         applyStyle(areaStyles[active to area] ?: memory?.style(active,area) ?: inspectedStyle.copy(area=area))
     }
     fun beginStylePreview() { if(previewOriginal==null) previewOriginal=inspectedStyle }
@@ -217,6 +261,28 @@ class ScreenshotDrawingLayer(context: Context,private val image: Bitmap,private 
         invalidate()
         changed()
     }
+    internal fun selectedTemplate(): ScreenshotDrawTemplate? {
+        val indices = selectedIndices
+        if (indices.isEmpty()) return null
+        val strokes = history.templateObjects(indices)
+        val bounds = renderer.bounds(strokes.first()).let(::RectF)
+        strokes.drop(1).forEach { bounds.union(renderer.bounds(it)) }
+        val document = ScreenshotDocument.full(image.width, image.height).copy(objects = strokes)
+        return ScreenshotDrawTemplate(document, indices.mapTo(linkedSetOf()) { history.items[it].id },
+            bounds.centerX(), bounds.centerY())
+    }
+
+    internal fun insertTemplate(template: ScreenshotDrawTemplate): Boolean {
+        val crop = region ?: return false
+        val copies = history.insertTemplate(template.document.objects, template.selectedIds,
+            crop.exactCenterX() - template.centerX, crop.exactCenterY() - template.centerY)
+        if (copies.isEmpty()) return false
+        selection.selectIndices(copies)
+        tapCandidates = emptyList()
+        invalidate()
+        changed()
+        return true
+    }
     /** How many objects sit under the last selection tap; more than one can be cycled through. */
     val overlapCount: Int get()=tapCandidates.size
     fun cycleSelection() {
@@ -259,6 +325,7 @@ class ScreenshotDrawingLayer(context: Context,private val image: Bitmap,private 
         canvas.save(); canvas.scale(width.toFloat()/image.width,height.toFloat()/image.height)
         renderer.draw(canvas,marks(true),Rect(0,0,image.width,image.height),watermark)
         if(tool==ScreenshotDrawingTool.SELECT) selection.draw(canvas)
+        if(autoFilterActive) autoFilterSession?.draw(canvas, unit, ::postInvalidateOnAnimation)
         canvas.restore()
         if(tool==ScreenshotDrawingTool.PEN && (pending==null || continuation!=null))
             penFeedback.draw(canvas,if(pending==null) history.items.flatMap { ScreenshotPenContinuation.endpoints(it,renderer) } else emptyList())
@@ -273,9 +340,9 @@ class ScreenshotDrawingLayer(context: Context,private val image: Bitmap,private 
     }
     private fun candidates(point: ScreenshotDrawingPoint,excluded: Set<Int> = emptySet()): List<Int> {
         val outline=history.items.indices.reversed()
-            .filter { it !in excluded && renderer.hit(history.items[it],point,7*unit,region,true) }
+            .filter { it !in excluded && history.items[it].autoFilterCategory == null && renderer.hit(history.items[it],point,7*unit,region,true) }
         val body=history.items.indices.reversed()
-            .filter { it !in excluded && it !in outline && renderer.hit(history.items[it],point,7*unit,region,false) }
+            .filter { it !in excluded && it !in outline && history.items[it].autoFilterCategory == null && renderer.hit(history.items[it],point,7*unit,region,false) }
         return outline+body
     }
     private val ERASER_RADIUS get()=8f
@@ -304,6 +371,7 @@ class ScreenshotDrawingLayer(context: Context,private val image: Bitmap,private 
         val rawX=event.x*image.width/width
         val rawY=event.y*image.height/height
         val point=ScreenshotDrawingPoint(rawX.coerceIn(0f,image.width.toFloat()),rawY.coerceIn(0f,image.height.toFloat()))
+        if (autoFilterActive) return touchAutoFilter(event, point)
         when(event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 cancelled=rawX<0 || rawY<0 || rawX>image.width || rawY>image.height
@@ -311,6 +379,7 @@ class ScreenshotDrawingLayer(context: Context,private val image: Bitmap,private 
                 penTouch=active==ScreenshotDrawingTool.PEN && event.getToolType(0)==MotionEvent.TOOL_TYPE_FINGER
                 if(!cancelled) when(active) {
                     ScreenshotDrawingTool.SELECT -> {
+                        selection.snap = ScreenshotSnapConfig.fromPreferences(snapPreferences)
                         tapCandidates=candidates(point)
                         selection.press(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,tapCandidates)
                         selected?.let { style=it.style }
@@ -431,7 +500,39 @@ class ScreenshotDrawingLayer(context: Context,private val image: Bitmap,private 
     }
     fun undo() { pending=null; pen=null; continuation=null; penFeedback.clear(); selectedIndex=null; history.undo(); invalidate(); changed() }
     fun redo() { pending=null; pen=null; continuation=null; penFeedback.clear(); selectedIndex=null; history.redo(); invalidate(); changed() }
-    fun close() { pending=null; pen=null; continuation=null; penFeedback.clear(); selection.cancel(); cancelTextPreview(); finishStylePreview(false); renderer.close() }
+    private fun touchAutoFilter(event: MotionEvent, point: ScreenshotDrawingPoint): Boolean {
+        val session = autoFilterSession ?: return true
+        val regions = session.result
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                autoFilterPress = point
+                autoFilterPressRegions = regions
+                session.hits = listOfNotNull(ScreenshotAutoFilter.hit(regions.orEmpty(), point.x, point.y))
+            }
+            MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP -> {
+                val start = autoFilterPress
+                if (start != null && regions != null && regions === autoFilterPressRegions) {
+                    val dragging = hypot((point.x - start.x) * width / image.width,
+                        (point.y - start.y) * height / image.height) >= slop
+                    session.hits = if (dragging) ScreenshotAutoFilter.intersecting(regions, start, point)
+                        else listOfNotNull(ScreenshotAutoFilter.hit(regions, point.x, point.y))
+                    if (event.actionMasked == MotionEvent.ACTION_UP) {
+                        history.fillAutoRegions(session.hits, style, pixelUnit, toggle = true)
+                        changed()
+                    }
+                }
+            }
+        }
+        if (event.actionMasked in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN)) {
+            autoFilterPress = null
+            autoFilterPressRegions = null
+            session.hits = emptyList()
+        }
+        invalidate()
+        return true
+    }
+
+    fun close() { autoFilterSession?.close(); pending=null; pen=null; continuation=null; penFeedback.clear(); selection.cancel(); cancelTextPreview(); finishStylePreview(false); renderer.close() }
     fun render(crop: Rect,composed: Bitmap?): Bitmap? {
         // The watermark is not an object, but it still has to be composed into the export.
         if(history.items.isEmpty() && !watermark.isVisible()) return composed

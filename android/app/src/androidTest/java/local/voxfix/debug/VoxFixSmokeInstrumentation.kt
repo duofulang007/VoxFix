@@ -30,6 +30,12 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
     override fun onStart() {
         val output = Bundle()
         try {
+            if (modelCompare == "screenshot-scroll") {
+                output.putString("result", ScreenshotScrollChecks.run(this)); finish(Activity.RESULT_OK,output); return
+            }
+            if (modelCompare == "screenshot-smart-tools") {
+                output.putString("result", ScreenshotSmartToolsChecks.run(this)); finish(Activity.RESULT_OK,output); return
+            }
             if (modelCompare == "screenshot-linear-handles") {
                 output.putString("result", ScreenshotLinearHandlesChecks.run(this)); finish(Activity.RESULT_OK,output); return
             }
@@ -204,6 +210,8 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
                 modelCompare == "screenshot-refinement" -> "SCREENSHOT_REFINEMENT_FAIL"
                 modelCompare == "screenshot-history" -> "SCREENSHOT_HISTORY_FAIL"
                 modelCompare == "screenshot-filter" -> "SCREENSHOT_FILTER_STABILITY_FAIL"
+                modelCompare == "screenshot-smart-tools" -> "SCREENSHOT_SMART_TOOLS_FAIL"
+                modelCompare == "screenshot-scroll" -> "SCREENSHOT_SCROLL_FAIL"
                 modelCompare.startsWith("screenshot-memory") -> "SCREENSHOT_TOOL_MEMORY_FAIL"
                 modelCompare.startsWith("screen-text") -> "SCREEN_TEXT_SMOKE_FAIL"
                 pinyin -> "ARM64_PINYIN_SMOKE_FAIL"

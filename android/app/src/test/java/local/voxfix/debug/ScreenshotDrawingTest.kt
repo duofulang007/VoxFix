@@ -18,6 +18,32 @@ class ScreenshotDrawingTest {
         assertEquals(before,history.items)
     }
 
+    @Test fun templateKeepsPaintOrderAndRemapsOnlyInternalLinksInOneUndoStep() {
+        val history = ScreenshotDrawing()
+        val insideBinding = ScreenshotFixedPointBinding(1, ScreenshotBindMode.ORBIT, .5, .5)
+        val outside = insideBinding.copy(elementId = 4)
+        history.load(listOf(
+            stroke(ScreenshotDrawingTool.RECTANGLE).copy(id = 1),
+            stroke(ScreenshotDrawingTool.ARROW).copy(id = 2, startBinding = insideBinding, endBinding = outside),
+            stroke(ScreenshotDrawingTool.SERIAL).copy(id = 3, boundTextId = 5),
+            stroke(ScreenshotDrawingTool.RECTANGLE).copy(id = 4),
+            stroke(ScreenshotDrawingTool.TEXT).copy(id = 5)
+        ))
+        val before = history.items
+        val template = history.templateObjects(linkedSetOf(2, 1, 0))
+        assertEquals(listOf(1L, 2L, 3L, 5L), template.map { it.id })
+        assertEquals(setOf(5, 6, 7), history.insertTemplate(template, setOf(1, 2, 3), 20f, -30f))
+        val (shape, arrow, serial, label) = history.items.takeLast(4)
+        assertNotEquals(1L, shape.id)
+        assertEquals(shape.id, arrow.startBinding?.elementId)
+        assertNull(arrow.endBinding)
+        assertEquals(label.id, serial.boundTextId)
+        assertEquals(template[0].points.map { ScreenshotDrawingPoint(it.x + 20, it.y - 30) }, shape.points)
+        history.undo()
+        assertEquals(before, history.items)
+        assertFalse(history.canUndo)
+    }
+
     @Test fun alignmentUsesUnionEdgesAndDistributionPreservesOuterUnits() {
         fun box(start: Float,end: Float) = SelBox(start,start,end,end)
         val separate = mapOf(0 to box(0f,10f),1 to box(20f,40f),2 to box(70f,100f))

@@ -14,8 +14,7 @@ package local.voxfix.debug
  * - No Ctrl key on touch, so the effective mode is always the persistent one
  *   (`resolveEffective(..., ctrlPressed=false)`); the engine also inverts with Ctrl.
  * - The phone editor has no viewport zoom, so the snap distance is not divided by camera zoom.
- * - Toggle UI is not ported yet; both switches default to off like upstream, so behaviour is
- *   unchanged until the settings surface is ported.
+ * - Screenshot settings persist the mutually exclusive Object / Grid controls from the Qt demo.
  */
 internal class ScreenshotSnapConfig(
     val snapEnabled: Boolean = DEFAULT_SNAP_ENABLED,
@@ -27,6 +26,9 @@ internal class ScreenshotSnapConfig(
     val gridSize: Double = DEFAULT_GRID_SIZE
 ) {
     companion object {
+        fun preferences(context: android.content.Context) =
+            context.getSharedPreferences("screenshot-snap-config", android.content.Context.MODE_PRIVATE)
+
         /** `SnapConfig::DEFAULT_ENABLED` */
         const val DEFAULT_SNAP_ENABLED = false
         /** `SnapConfig::DEFAULT_DISTANCE` */
@@ -41,6 +43,8 @@ internal class ScreenshotSnapConfig(
         const val DEFAULT_GRID_ENABLED = false
         /** `GridConfig::DEFAULT_SIZE` */
         const val DEFAULT_GRID_SIZE = 20.0
+        const val MIN_GRID_SIZE = 5.0
+        const val MAX_GRID_SIZE = 100.0
 
         fun fromPreferences(prefs: android.content.SharedPreferences): ScreenshotSnapConfig =
             ScreenshotSnapConfig(
@@ -51,8 +55,8 @@ internal class ScreenshotSnapConfig(
                 enableGapSnaps = prefs.getBoolean("enableGapSnaps", DEFAULT_ENABLE_GAP_SNAPS),
                 showGuides = prefs.getBoolean("showGuides", DEFAULT_SHOW_GUIDES),
                 gridEnabled = prefs.getBoolean("gridEnabled", DEFAULT_GRID_ENABLED),
-                gridSize = Double.fromBits(
-                    prefs.getLong("gridSize", DEFAULT_GRID_SIZE.toRawBits()))
+                gridSize = Double.fromBits(prefs.getLong("gridSize", DEFAULT_GRID_SIZE.toRawBits()))
+                    .takeIf { it in MIN_GRID_SIZE..MAX_GRID_SIZE } ?: DEFAULT_GRID_SIZE
             )
     }
 }
@@ -65,6 +69,16 @@ internal class ScreenshotSnapConfig(
 internal object ScreenshotSnapApplication {
 
     data class MoveResult(val dx: Double, val dy: Double, val guides: List<ScreenshotObjectSnapping.SnapGuide>)
+
+    /** Preserve Android's existing canvas boundary after applying the upstream snap correction. */
+    fun constrainMove(result: MoveResult, selection: SelBox, canvas: SelBox): MoveResult {
+        val dx = result.dx.toFloat()
+        val dy = result.dy.toFloat()
+        val safeX = ScreenshotSelection.moveX(selection, canvas, dx)
+        val safeY = ScreenshotSelection.moveY(selection, canvas, dy)
+        if (dx == safeX && dy == safeY) return result
+        return MoveResult(safeX.toDouble(), safeY.toDouble(), emptyList())
+    }
 
     fun moveSnap(
         config: ScreenshotSnapConfig?,
