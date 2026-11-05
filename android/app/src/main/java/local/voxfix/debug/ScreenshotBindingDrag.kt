@@ -73,4 +73,42 @@ internal object ScreenshotBindingDrag {
 
         return Result(points, bound.startBinding, bound.endBinding)
     }
+
+    /**
+     * Re-resolves both pinned ends without making a new decision. Used after the commit-time
+     * axis snap, which could otherwise push a pinned tip off its element.
+     */
+    fun resolve(
+        stroke: ScreenshotDrawingStroke,
+        worldPoints: List<ScreenshotDrawingPoint>,
+        bindables: List<ScreenshotBindingGeometry.Bindable>
+    ): Result? {
+        if (stroke.startBinding == null && stroke.endBinding == null) return null
+        if (worldPoints.size < 2) return null
+        val byId = bindables.associateBy { it.id }
+        val arrow = ScreenshotBindingArrow(
+            points = worldPoints,
+            elbowed = stroke.style.arrowType == ScreenshotArrowType.ELBOW,
+            startBinding = stroke.startBinding,
+            endBinding = stroke.endBinding,
+            hasStartArrowhead = stroke.style.startHead != ScreenshotArrowhead.NONE,
+            hasEndArrowhead = stroke.style.endHead != ScreenshotArrowhead.NONE
+        )
+        val points = worldPoints.toMutableList()
+        stroke.endBinding?.let { binding ->
+            byId[binding.elementId]?.let { element ->
+                ScreenshotBindingProjection.updateBoundPoint(
+                    arrow, ScreenshotEndpointEdge.END, binding, element, byId, dragging = false
+                )?.let { points[points.lastIndex] = ScreenshotDrawingPoint(it[0].toFloat(), it[1].toFloat()) }
+            }
+        }
+        stroke.startBinding?.let { binding ->
+            byId[binding.elementId]?.let { element ->
+                ScreenshotBindingProjection.updateBoundPoint(
+                    arrow, ScreenshotEndpointEdge.START, binding, element, byId, dragging = false
+                )?.let { points[0] = ScreenshotDrawingPoint(it[0].toFloat(), it[1].toFloat()) }
+            }
+        }
+        return Result(points, stroke.startBinding, stroke.endBinding)
+    }
 }

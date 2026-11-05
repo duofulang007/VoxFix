@@ -311,8 +311,14 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
         } else {
             if(mode==Mode.POINT) preview=preview.mapValues { (_,stroke) ->
                 if (ScreenshotElbowSegment.isElbow(stroke)) stroke
-                else renderer.withWorldPoints(stroke,ScreenshotObjectTransform.finishLinearPoints(pointHandles(stroke),handle,
-                    stroke.tool==ScreenshotDrawingTool.LINE,8*unit()))
+                else {
+                    val finished=renderer.withWorldPoints(stroke,ScreenshotObjectTransform.finishLinearPoints(pointHandles(stroke),handle,
+                        stroke.tool==ScreenshotDrawingTool.LINE,8*unit()))
+                    // A pinned tip must stay on its element even after the axis snap above.
+                    val resolved=ScreenshotBindingDrag.resolve(finished,pointHandles(finished),bindables(stroke.id))
+                    if(resolved==null) finished
+                    else renderer.withWorldPoints(finished,resolved.points)
+                }
             }
             history.replaceAll(preview)
             if(preview.isNotEmpty()) {
