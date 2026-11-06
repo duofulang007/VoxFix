@@ -189,7 +189,8 @@ internal class ScreenRecorder(
             ScreenRecordingGeometry.fileName(System.currentTimeMillis()))
         outputFile = file
         crop = ScreenRecordingGeometry.cropFraction(config.crop.left, config.crop.top,
-            config.crop.right, config.crop.bottom, config.screenWidth, config.screenHeight)
+            config.crop.right, config.crop.bottom, config.screenWidth, config.screenHeight,
+            insetPx = 2)
 
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, config.outputWidth, config.outputHeight)
         format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)

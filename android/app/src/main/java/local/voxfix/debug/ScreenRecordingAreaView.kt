@@ -36,7 +36,10 @@ internal class ScreenRecordingAreaView(context: Context, private val region: Rec
             State.RECORDING -> 0xFFF5222D.toInt()
             State.PAUSED, State.COUNTDOWN -> 0xFFFAAD14.toInt()
         }
-        val inset = 2f * density
+        // 4dp frame offset with a 2dp stroke leaves the inner edge 3dp (about 8px on a 2.75x screen)
+        // outside the selection, so neither the encoder's odd-size expansion nor bilinear sampling
+        // can pick the border up.
+        val inset = 4f * density
         canvas.drawRect(
             region.left - inset, region.top - inset,
             region.right + inset, region.bottom + inset,

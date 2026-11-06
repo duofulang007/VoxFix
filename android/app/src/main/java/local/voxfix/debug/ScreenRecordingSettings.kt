@@ -13,7 +13,9 @@ import kotlin.math.roundToInt
  */
 internal data class ScreenRecordingOptions(
     val format: Format = Format.MP4,
-    val clarity: Clarity = Clarity.FULL_HD,
+    // Upstream defaults to 1080p, but phone screens are taller than 1920 (K60 is 1080x2400), which
+    // would downscale every full-height capture by 20%. 2K keeps the native pixel grid there.
+    val clarity: Clarity = Clarity.QHD_2K,
     val frameRate: Int = 30,
     val quality: Int = 80,
     val microphone: Boolean = false,
@@ -55,13 +57,22 @@ internal object ScreenRecordingGeometry {
         return even((width * scale).roundToInt()) to even((height * scale).roundToInt())
     }
 
-    /** Normalised crop inside the captured frame, as `(u, v, width, height)`. */
-    fun cropFraction(left: Int, top: Int, right: Int, bottom: Int, screenWidth: Int, screenHeight: Int): FloatArray {
+    /**
+     * Normalised crop inside the captured frame, as `(u, v, width, height)`.
+     *
+     * [insetPx] shrinks the crop by a few pixels so the recording border and any one-texel edge
+     * blending can never leak into the file.
+     */
+    fun cropFraction(left: Int, top: Int, right: Int, bottom: Int, screenWidth: Int, screenHeight: Int,
+                     insetPx: Int = 0): FloatArray {
         require(screenWidth > 0 && screenHeight > 0) { "屏幕尺寸无效" }
-        val l = left.coerceIn(0, screenWidth)
-        val t = top.coerceIn(0, screenHeight)
-        val r = right.coerceIn(0, screenWidth)
-        val b = bottom.coerceIn(0, screenHeight)
+        var l = left.coerceIn(0, screenWidth)
+        var t = top.coerceIn(0, screenHeight)
+        var r = right.coerceIn(0, screenWidth)
+        var b = bottom.coerceIn(0, screenHeight)
+        if (insetPx > 0 && r - l > insetPx * 2 + 8 && b - t > insetPx * 2 + 8) {
+            l += insetPx; t += insetPx; r -= insetPx; b -= insetPx
+        }
         require(r > l && b > t) { "录制区域不在屏幕内" }
         return floatArrayOf(
             l.toFloat() / screenWidth,
@@ -89,12 +100,24 @@ internal object ScreenRecordingGeometry {
         return "VoxFix 录屏 $stamp.mp4"
     }
 
-    /** Video bitrate in bits per second for the chosen size, rate and 0–100 quality. */
+    /**
+     * Video bitrate for the chosen size, rate and 0–100 quality.
+     *
+     * Ported verbatim from Snow Shot's `video_quality.rs::smart_quality_bitrate_kbps`: a 1080p30
+     * ladder of roughly 3.5 Mbps at quality 0 up to 18 Mbps at 100, scaled by pixel count (^0.92)
+     * and frame rate (^0.85), with a floor so small regions do not starve.
+     */
     fun bitrate(width: Int, height: Int, frameRate: Int, quality: Int): Int {
-        val rate = frameRate.coerceIn(5, 60)
-        val q = quality.coerceIn(0, 100)
-        val raw = width.toLong() * height * rate * 0.07 * (q / 80.0)
-        return raw.toLong().coerceIn(1_000_000L, 40_000_000L).toInt()
+        val w = width.coerceAtLeast(1).toDouble()
+        val h = height.coerceAtLeast(1).toDouble()
+        val f = frameRate.coerceIn(1, 120).toDouble()
+        val q = quality.coerceIn(0, 100) / 100.0
+        val base = 3_500.0 + 14_500.0 * Math.pow(q, 1.35)
+        val pixelScale = Math.pow(w * h / (1920.0 * 1080.0), 0.92)
+        val fpsScale = Math.pow(f / 30.0, 0.85)
+        val minimum = (w * h * f * 0.028 / 1000.0).coerceIn(600.0, 6_000.0)
+        val kbps = maxOf(base * pixelScale * fpsScale, minimum).coerceIn(600.0, 240_000.0)
+        return (kbps * 1000).toInt()
     }
 
     private fun even(value: Int): Int = (value / 2 * 2).coerceAtLeast(16)

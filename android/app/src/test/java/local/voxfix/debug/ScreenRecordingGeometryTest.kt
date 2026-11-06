@@ -74,14 +74,26 @@ class ScreenRecordingGeometryTest {
         assertTrue(name, Regex("""VoxFix 录屏 \d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}\.mp4""").matches(name))
     }
 
+    @Test fun cropInsetKeepsTheBorderOutOfTheFile() {
+        val fraction = ScreenRecordingGeometry.cropFraction(100, 200, 500, 800, 1080, 2400, insetPx = 2)
+        assertEquals(102f / 1080, fraction[0], 1e-6f)
+        assertEquals(202f / 2400, fraction[1], 1e-6f)
+        assertEquals(396f / 1080, fraction[2], 1e-6f)
+        assertEquals(596f / 2400, fraction[3], 1e-6f)
+        // A tiny region keeps its full size instead of collapsing.
+        val tiny = ScreenRecordingGeometry.cropFraction(0, 0, 10, 10, 1080, 2400, insetPx = 2)
+        assertEquals(10f / 1080, tiny[2], 1e-6f)
+    }
+
     @Test fun bitrateScalesWithPixelsFrameRateAndQuality() {
+        // Upstream ladder: 1080p30 at quality 80 is roughly 14 Mbps.
         val standard = ScreenRecordingGeometry.bitrate(1920, 1080, 30, 80)
-        assertTrue(standard in 4_200_000..4_500_000)
+        assertTrue(standard in 14_000_000..14_500_000)
         assertTrue(ScreenRecordingGeometry.bitrate(1920, 1080, 30, 100) > standard)
         assertTrue(ScreenRecordingGeometry.bitrate(1920, 1080, 30, 40) < standard)
         assertTrue(ScreenRecordingGeometry.bitrate(1920, 1080, 60, 80) > standard)
-        assertTrue(ScreenRecordingGeometry.bitrate(3840, 2160, 60, 100) <= 40_000_000)
-        assertTrue(ScreenRecordingGeometry.bitrate(16, 16, 5, 0) >= 1_000_000)
+        assertTrue(ScreenRecordingGeometry.bitrate(3840, 2160, 60, 100) <= 240_000_000)
+        assertTrue(ScreenRecordingGeometry.bitrate(16, 16, 5, 0) >= 600_000)
     }
 
     @Test fun onlyMp4CarriesAudio() {

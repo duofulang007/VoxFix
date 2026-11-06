@@ -57,7 +57,7 @@ internal object ScreenshotRecordingChecks {
             view.draw(Canvas(bitmap))
             return bitmap
         }
-        val strokeCentre = region.left - Math.round(2f * density)
+        val strokeCentre = region.left - Math.round(4f * density)
         val inside = region.left + Math.round(1.5f * density)
         val recording = render(ScreenRecordingAreaView.State.RECORDING)
         try {
