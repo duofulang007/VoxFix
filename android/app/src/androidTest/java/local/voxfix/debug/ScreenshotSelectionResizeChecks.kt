@@ -43,6 +43,16 @@ internal object ScreenshotSelectionResizeChecks {
                 close(history.items[1].points[0].x,400f); close(history.items[1].points[1].x,550f)
                 check(history.items.map { it.id }==listOf(a.id,b.id)); check(history.items.all { it.width==4f })
                 history.undo(); check(history.items==listOf(a,b)); history.redo()
+                // Crossing the anchor mirrors the rect: per-corner radii swap like
+                // `flipped_corner_radii` (flip_x swaps TL<->TR and BL<->BR), one undo restores.
+                val radiiRect=a.copy(style=a.style.copy(cornerRadii=listOf(10f,20f,30f,40f)))
+                history.load(listOf(radiiRect)); selection.select(0)
+                selection.press(p(204f,150f),false,emptyList())
+                selection.release(p(-96f,150f),false,600,900)
+                check(history.items.single().style.cornerRadii==listOf(20f,10f,40f,30f)) {
+                    "翻转未按 flipped_corner_radii 交换角半径：${history.items.single().style.cornerRadii}"
+                }
+                history.undo(); check(history.items.single()==radiiRect)
                 val output=image.copy(Bitmap.Config.ARGB_8888,true)
                 try { renderer.draw(Canvas(output),history.items,Rect(0,0,600,900)); selection.draw(Canvas(output)) }
                 finally { output.recycle() }
@@ -97,6 +107,6 @@ internal object ScreenshotSelectionResizeChecks {
             finally { renderer.close(); image.recycle() }
         }
         failure?.let { throw it }
-        return "SCREENSHOT_SELECTION_RESIZE_PASS: edge,offset,flip,group,cancel,one-undo,identity,stroke,text-reflow,text-font,text-corner,reopen,serial-min,proxy"
+        return "SCREENSHOT_SELECTION_RESIZE_PASS: edge,offset,flip,group,cancel,one-undo,identity,stroke,text-reflow,text-font,text-corner,radii-flip,reopen,serial-min,proxy"
     }
 }

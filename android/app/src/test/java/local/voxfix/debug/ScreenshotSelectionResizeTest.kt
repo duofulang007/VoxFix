@@ -103,6 +103,26 @@ class ScreenshotSelectionResizeTest {
         assertEquals(SelBox(0f,0f,200f,160f),ScreenshotSelectionResize.textFrame(box,ScreenshotResizeHandle.BOTTOM,0f,200f,160f,false))
         assertEquals(SelBox(-50f,-40f,150f,120f),ScreenshotSelectionResize.textFrame(box,ScreenshotResizeHandle.BOTTOM,0f,200f,160f,true))
     }
+    @Test fun negativeScaleSwapsPerCornerRadiiLikeResizedSelectionRect() {
+        val radii=listOf(10f,20f,30f,40f)
+        // flipped_corner_radii: flip_x swaps TL<->TR and BL<->BR, flip_y then swaps top with bottom.
+        assertEquals(listOf(20f,10f,40f,30f),ScreenshotCornerRadii.flipped(radii,true,false))
+        assertEquals(listOf(40f,30f,20f,10f),ScreenshotCornerRadii.flipped(radii,false,true))
+        assertEquals(listOf(30f,40f,10f,20f),ScreenshotCornerRadii.flipped(radii,true,true))
+        assertEquals(radii,ScreenshotCornerRadii.flipped(radii,false,false))
+        assertNull(ScreenshotCornerRadii.flipped(null,true,true))
+        // member() mirrors the rect proxy: a crossed anchor swaps the stored radii once.
+        val s=stroke().copy(style=stroke().style.copy(cornerRadii=radii))
+        val flipped=ScreenshotSelectionResize.member(s,box,box,0f,
+            ScreenshotSelectionResize.Geometry(p(0f,0f),-1f,1f))
+        assertEquals(listOf(20f,10f,40f,30f),flipped.style.cornerRadii)
+        val flippedY=ScreenshotSelectionResize.member(s,box,box,0f,
+            ScreenshotSelectionResize.Geometry(p(0f,0f),1f,-2f))
+        assertEquals(listOf(40f,30f,20f,10f),flippedY.style.cornerRadii)
+        val upright=ScreenshotSelectionResize.member(s,box,box,0f,
+            ScreenshotSelectionResize.Geometry(p(0f,0f),2f,1f))
+        assertEquals(radii,upright.style.cornerRadii)
+    }
     @Test fun pathFramesExcludeHeadsAndUseActualCubicExtrema() {
         val s=stroke(ScreenshotDrawingTool.ARROW).copy(points=listOf(p(0f,0f),p(100f,0f),p(100f,100f)))
         val bounds=ScreenshotSelectionGeometry.bounds(s)

@@ -278,7 +278,7 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
                 else -> ScreenshotSelectionResize.member(stroke,SelBox.of(renderer.selectionBounds(stroke)),frame,frameRotation,g)
             }
         }
-        if(!allowSnap || snap==null) return strokes
+        if(!allowSnap || snap==null || !ScreenshotSnapApplication.resizeApplies(frameRotation,alt)) return strokes
         val unsnapped=ScreenshotSnapping.DrawRect(resized.left.toDouble(),resized.top.toDouble(),
             resized.right.toDouble(),resized.bottom.toDouble())
         // dragged_x_sign = handle.x_sign * scale_x (selection_edit.rs)

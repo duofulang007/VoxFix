@@ -21,6 +21,20 @@ internal object ScreenshotCornerRadii {
     fun set(radii: List<Float>?,corner: Int,value: Float): List<Float> =
         List(4) { if(it==corner) value else radii?.getOrNull(it) ?: 0f }
 
+    /**
+     * `flipped_corner_radii` (geometry/resize.rs): a negative resize scale mirrors the rect,
+     * so the stored radii swap corners — flip_x swaps TL↔TR and BL↔BR, flip_y then swaps the
+     * two top corners with the two bottom ones. `resized_selection_rect` applies this whenever
+     * scale_x/scale_y < -epsilon, before the render-side min(w,h)/2 cap.
+     */
+    fun flipped(radii: List<Float>?,flipX: Boolean,flipY: Boolean): List<Float>? {
+        if(radii==null) return null
+        var r=radii
+        if(flipX) r=listOf(r[TOP_RIGHT],r[TOP_LEFT],r[BOTTOM_LEFT],r[BOTTOM_RIGHT])
+        if(flipY) r=listOf(r[BOTTOM_LEFT],r[BOTTOM_RIGHT],r[TOP_RIGHT],r[TOP_LEFT])
+        return r
+    }
+
     /** `max_corner_radius_for`: each adjacent corner consumes width/height. */
     fun maxFor(width: Float,height: Float,radii: List<Float>?,uniform: Int,corner: Int): Float {
         fun r(i: Int)=radius(radii,i,uniform)

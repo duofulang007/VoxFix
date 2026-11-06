@@ -95,8 +95,11 @@ internal object ScreenshotSelectionResize {
         val scaleY=if(filter) { if(rawH>0f) (own.height*sy-s.width).coerceAtLeast(0f)/rawH else 1f } else sy
         val points=s.points.map { ScreenshotDrawingPoint(next.x+(it.x-center.x)*scaleX,next.y+(it.y-center.y)*scaleY) }
         val fontScale=if(s.tool==ScreenshotDrawingTool.SERIAL) min(sx,sy) else if(s.tool==ScreenshotDrawingTool.TEXT) sx else 1f
+        // resized_selection_rect: a negative axis scale mirrors the rect proxy, which swaps
+        // the stored per-corner radii (flipped_corner_radii) before the render-side cap.
+        val radii=ScreenshotCornerRadii.flipped(s.style.cornerRadii,g.sx<0f,g.sy<0f)
         // A multi-select resize always becomes a fixed-width text (resize.rs `_ =>` branch).
-        return s.copy(points=points,style=s.style.copy(fontSize=s.style.fontSize*fontScale),
+        return s.copy(points=points,style=s.style.copy(fontSize=s.style.fontSize*fontScale,cornerRadii=radii),
             textWidth=if(s.tool==ScreenshotDrawingTool.TEXT) own.width*sx else s.textWidth,
             textHeight=if(s.tool==ScreenshotDrawingTool.TEXT) own.height*sy else s.textHeight,
             autoResize=if(s.tool==ScreenshotDrawingTool.TEXT) false else s.autoResize)

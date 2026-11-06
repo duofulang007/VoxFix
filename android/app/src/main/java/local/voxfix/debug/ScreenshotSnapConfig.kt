@@ -125,6 +125,13 @@ internal object ScreenshotSnapApplication {
      */
     data class ResizeResult(val dx: Double, val dy: Double, val guides: List<ScreenshotObjectSnapping.SnapGuide>)
 
+    /**
+     * `resolve_resize_snap` early return (selection_edit.rs): snapping is skipped for a
+     * rotated selection frame and while Alt scales from the centre. Move snap has no
+     * such guard upstream, so this only gates the resize path.
+     */
+    fun resizeApplies(frameRotation: Float, alt: Boolean) = frameRotation == 0f && !alt
+
     fun resizeSnap(
         config: ScreenshotSnapConfig?,
         ctrlPressed: Boolean,

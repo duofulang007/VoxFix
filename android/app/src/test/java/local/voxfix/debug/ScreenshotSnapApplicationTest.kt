@@ -1,6 +1,7 @@
 package local.voxfix.debug
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -165,6 +166,15 @@ class ScreenshotSnapApplicationTest {
     }
 
     // ---------------------------------------------------------------- anchors parity
+
+    @Test
+    fun resizeSnapSkipsRotatedFramesAndAltCentreScale() {
+        // resolve_resize_snap early return: a rotated frame or Alt (scale from centre) disables snap.
+        assertTrue(ScreenshotSnapApplication.resizeApplies(0f, false))
+        assertFalse(ScreenshotSnapApplication.resizeApplies(0.4f, false))
+        assertFalse(ScreenshotSnapApplication.resizeApplies(-0.4f, false))
+        assertFalse(ScreenshotSnapApplication.resizeApplies(0f, true))
+    }
 
     @Test
     fun anchorsForSignMatchesUpstream() {
