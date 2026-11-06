@@ -71,19 +71,34 @@ internal object ScreenRecordingLibrary {
         false
     }
 
-    /** Upstream "open recording folder": Android has no folder browser, so show the gallery list. */
-    fun openFolder(context: Context): Boolean = try {
-        context.startActivity(Intent(Intent.ACTION_VIEW)
-            .setDataAndType(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, "video/*")
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        true
-    } catch (_: Exception) {
-        try {
-            context.startActivity(Intent(Intent.ACTION_PICK, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+    /**
+     * Upstream "open recording folder": Android has no folder browser.
+     *
+     * Viewing the MediaStore video collection resolved to a chooser of video players on the K60
+     * (Tencent Video, NetEase Music, …), which is not a folder view at all. Open the system gallery
+     * first — that is where `Movies/VoxFix` shows up — and keep the collection view as a fallback.
+     */
+    fun openFolder(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // No resolveActivity() gate here: Android 11+ package visibility hides the gallery and
+            // would silently push every device onto the player-chooser fallback.
+            val gallery = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_GALLERY)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (runCatching { context.startActivity(gallery) }.isSuccess) return true
+        }
+        return try {
+            context.startActivity(Intent(Intent.ACTION_VIEW)
+                .setDataAndType(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, "video/*")
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             true
         } catch (_: Exception) {
-            false
+            try {
+                context.startActivity(Intent(Intent.ACTION_PICK, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                true
+            } catch (_: Exception) {
+                false
+            }
         }
     }
 }

@@ -66,21 +66,22 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != DEBUG_RECORD) return
             if (intent.getStringExtra("action") == "stop") { recorder?.stop(); return }
-            if (recorder != null || busy) return
+            if (recorder != null || busy || recordingSetup != null) {
+                android.util.Log.i("VoxFix", "RECORDING_SETUP_SKIPPED busy=$busy setup=${recordingSetup != null}")
+                return
+            }
             val metrics = resources.displayMetrics
             debugRecordingRegion = intent.getStringExtra("region")?.split(',')?.mapNotNull { it.toIntOrNull() }
                 ?.takeIf { it.size == 4 }
                 ?.let { Rect(it[0], it[1], it[2], it[3]) }
                 ?: Rect(60, 960, 1020, 1660)
             val options = recordingPreferences.load()
-            busy = true
-            ScreenshotProjection.request(this@ScreenTextService, "录屏", { projection, stop ->
-                beginRecording(projection, stop, Rect(debugRecordingRegion), metrics.widthPixels,
-                    metrics.heightPixels, options)
-            }, { message ->
-                busy = false
-                Toast.makeText(this@ScreenTextService, message, Toast.LENGTH_SHORT).show()
-            }, microphone = options.microphone)
+            recordingDebugAuto = true
+            enterRecordingSetup(Rect(debugRecordingRegion), metrics.widthPixels,
+                metrics.heightPixels, options)
+            // `setup` stops at the idle stage so the adjustable frame can be captured for review.
+            if (intent.getStringExtra("action") == "setup") return
+            requestRecordingStart()
         }
     }
     private var debugRecordingRegion = Rect()
@@ -283,37 +284,92 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     private val recordingPreferences by lazy { ScreenRecordingPreferences(this) }
     private var recorder: ScreenRecorder? = null
     private var recordingControl: ScreenRecordingControl? = null
+    private var recordingControlParams: WindowManager.LayoutParams? = null
     private var recordingArea: ScreenRecordingAreaView? = null
+    private var recordingSetup: ScreenRecordingSetupView? = null
+    private var recordingSetupParams: WindowManager.LayoutParams? = null
+    private var recordingSetupAttached = false
+    private var recordingRegion: Rect? = null
+    private var recordingScreen: Pair<Int, Int>? = null
+    private var recordingOptions: ScreenRecordingOptions? = null
     private var recordingSaved: ScreenRecordingLibrary.Saved? = null
     private var recordingRotation = -1
     private var recordingBarWarned = false
     private var recordingBarManual = false
+    /** Debug broadcast path: skip the idle wait, but still honour consent and cancel cleanly. */
+    private var recordingDebugAuto = false
     private var recordingDisplay: android.hardware.display.DisplayManager.DisplayListener? = null
 
+    /**
+     * Upstream `startScreenshotRecording` (screenshotrecordingworkflow.h): the capture overlay is
+     * closed and the recording area opens in `Idle`, where the frame can still be moved or resized
+     * and the toolbar shows start instead of capture controls. The phone used to request projection
+     * consent and start capturing from this action directly, so the idle stage never existed.
+     */
     private fun startRecording(editor: ScreenshotCaptureOverlay, region: Rect) {
-        if (screenshot !== editor || busy || ocrInFlight || scrolling != null || recorder != null) return
+        if (screenshot !== editor || busy || ocrInFlight || scrolling != null || recorder != null ||
+            recordingSetup != null || recordingControl != null) return
         val image = frame ?: return
         if (region.width() < 16 || region.height() < 16) {
             editor.setScrollCaptureActive(false, "录制区域太小")
             return
         }
         val options = recordingPreferences.load()
+        val width = image.width
+        val height = image.height
         busy = true
-        editor.setScrollCaptureActive(true)
+        // Upstream opens the recording area on the next event-loop turn after tearing down the
+        // capture UI (`screenshotrecordingworkflow.h`: QTimer::singleShot(0, …)); this keeps the
+        // overlay's own click handler from removing the view that is still dispatching the tap.
+        main.post {
+            if (!connected) {
+                busy = false
+                return@post
+            }
+            enterRecordingSetup(Rect(region), width, height, options)
+        }
+    }
+
+    private fun enterRecordingSetup(region: Rect, screenWidth: Int, screenHeight: Int,
+                                    options: ScreenRecordingOptions) {
+        android.util.Log.i("VoxFix", "RECORDING_SETUP_ENTER $region ${screenWidth}x$screenHeight")
+        closeSession()
+        busy = true
+        removeHandle()
+        recordingRegion = region
+        recordingScreen = screenWidth to screenHeight
+        recordingOptions = options
+        showRecordingSetup(region, options)
+        watchRecordingRotation()
+    }
+
+    /** User pressed start: consent is a platform requirement, everything after it mirrors upstream. */
+    private fun requestRecordingStart() {
+        val region = recordingRegion ?: return
+        val screen = recordingScreen ?: return
+        val options = recordingOptions ?: return
+        if (recorder != null) return
+        setRecordingSetupAttached(false)
         ScreenshotProjection.request(this, "录屏", { projection, stop ->
-            beginRecording(projection, stop, Rect(region), image.width, image.height, options)
+            beginRecording(projection, stop, Rect(region), screen.first, screen.second, options)
         }, { message ->
-            busy = false
-            if (screenshot === editor) editor.setScrollCaptureActive(false, message)
-            else Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            if (recordingDebugAuto) {
+                cancelRecordingSetup(message)
+            } else {
+                busy = true
+                setRecordingSetupAttached(true)
+                Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            }
         }, microphone = options.microphone)
     }
 
     private fun beginRecording(projection: android.media.projection.MediaProjection, stopProjection: () -> Unit,
                                region: Rect, screenWidth: Int, screenHeight: Int, options: ScreenRecordingOptions) {
-        closeSession()
         busy = true
-        showRecordingControl(region, options)
+        removeRecordingSetup()
+        showRecordingArea(region, ScreenRecordingAreaView.State.COUNTDOWN)
+        setRecordingSetupAttached(true)
+        val control = recordingControl
         val launch = {
             if (recordingRotation >= 0 && windows.defaultDisplay?.rotation != recordingRotation) {
                 runCatching(stopProjection)
@@ -326,15 +382,18 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
                 launchRecorder(projection, stopProjection, region, screenWidth, screenHeight, options)
             }
         }
-        if (options.startDelaySeconds > 0) {
-            recordingControl?.startCountdown(options.startDelaySeconds, launch) {
+        if (options.startDelaySeconds > 0 && control != null) {
+            control.startCountdown(options.startDelaySeconds, {
+                control.start(options.microphone, true)
+                launch()
+            }) {
                 runCatching(stopProjection)
                 busy = false
                 removeRecordingControl()
                 showHandle()
             }
         } else {
-            recordingControl?.start(options.microphone, true)
+            control?.start(options.microphone, true)
             launch()
         }
     }
@@ -422,14 +481,139 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         recordingArea = null
     }
 
-    private fun showRecordingControl(region: Rect, options: ScreenRecordingOptions) {
-        if (recordingControl != null) return
+    private fun showRecordingSetup(region: Rect, options: ScreenRecordingOptions) {
+        if (recordingSetup != null || recordingControl != null) return
+        val screen = recordingScreen ?: return
+        val bounds = ScreenRecordingRegion(0, 0, screen.first, screen.second)
+        val framed = ScreenRecordingRegionEdit.clamp(
+            ScreenRecordingRegion.of(region), bounds, dp(ScreenRecordingSetupView.MINIMUM_DP)
+        )
+        recordingRegion = framed.toRect()
         recordingBarWarned = false
         recordingBarManual = false
-        showRecordingArea(region, ScreenRecordingAreaView.State.COUNTDOWN)
+        val box = setupWindowBounds(framed.toRect(), screen)
+        val view = ScreenRecordingSetupView(this, framed, bounds)
+        view.place(framed, box[0], box[1])
+        view.onRegionChanged = { next -> applySetupRegion(next) }
+        val params = WindowManager.LayoutParams(
+            box[2], box[3], WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            android.graphics.PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = android.view.Gravity.TOP or android.view.Gravity.START
+            x = box[0]
+            y = box[1]
+            setFitInsetsTypes(0)
+            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+        }
+        recordingSetupParams = params
+        recordingSetup = view
+        recordingSetupAttached = false
+        showRecordingControl(options)
+        // The idle bar needs a region to dock against; the area view only exists once recording
+        // starts, so the setup frame owns that geometry until then.
+        recordingControl?.showSetup(options.microphone, true)
+        val attached = setRecordingSetupAttached(true)
+        if (!attached) {
+            android.util.Log.w("VoxFix", "RECORDING_SETUP_NOT_ATTACHED")
+            // The overlay window was refused; leaving busy set would block every later capture.
+            removeRecordingControl()
+            busy = false
+            if (!ScreenTextSettingsActivity.enabled(this)) removeHandle() else showHandle()
+            Toast.makeText(this, "无法显示录屏设置", Toast.LENGTH_SHORT).show()
+            return
+        }
+        recordingControl?.post {
+            val control = recordingControl
+            val controlParams = recordingControlParams
+            if (control != null && controlParams != null) placeRecordingControl(control, controlParams)
+        }
+    }
+
+    private fun setupWindowBounds(region: Rect, screen: Pair<Int, Int>): IntArray {
+        val margin = dp(ScreenRecordingSetupView.MARGIN_DP)
+        val left = (region.left - margin).coerceAtLeast(0)
+        val top = (region.top - margin).coerceAtLeast(0)
+        val right = (region.right + margin).coerceAtMost(screen.first)
+        val bottom = (region.bottom + margin).coerceAtMost(screen.second)
+        return intArrayOf(left, top, (right - left).coerceAtLeast(1), (bottom - top).coerceAtLeast(1))
+    }
+
+    /** Frame moved or resized in the setup stage: re-anchor its window and the control bar. */
+    private fun applySetupRegion(next: ScreenRecordingRegion) {
+        val view = recordingSetup ?: return
+        val screen = recordingScreen ?: return
+        val bounds = ScreenRecordingRegion(0, 0, screen.first, screen.second)
+        val framed = ScreenRecordingRegionEdit.clamp(next, bounds, dp(ScreenRecordingSetupView.MINIMUM_DP))
+        recordingRegion = framed.toRect()
+        val box = setupWindowBounds(framed.toRect(), screen)
+        view.place(framed, box[0], box[1])
+        recordingSetupParams?.let { params ->
+            params.x = box[0]
+            params.y = box[1]
+            params.width = box[2]
+            params.height = box[3]
+            if (recordingSetupAttached) runCatching { windows.updateViewLayout(view, params) }
+        }
+        recordingControl?.let { control ->
+            recordingControlParams?.let { params -> placeRecordingControl(control, params) }
+        }
+    }
+
+    /** Idle-stage teardown: no recording was started. */
+    private fun cancelRecordingSetup(message: String? = null) {
+        removeRecordingControl()
+        busy = false
+        if (!ScreenTextSettingsActivity.enabled(this)) removeHandle() else showHandle()
+        message?.let { Toast.makeText(this, it, Toast.LENGTH_SHORT).show() }
+    }
+
+    private fun removeRecordingSetup() {
+        setRecordingSetupAttached(false)
+        recordingSetup = null
+        recordingSetupParams = null
+    }
+
+    /**
+     * The projection consent is a system activity; an accessibility overlay above it would cover
+     * its buttons, so the setup windows step aside and come back if the user declines.
+     */
+    private fun setRecordingSetupAttached(attached: Boolean): Boolean {
+        if (attached == recordingSetupAttached) return true
+        recordingSetupAttached = attached
+        val view = recordingSetup
+        val params = recordingSetupParams
+        val control = recordingControl
+        val controlParams = recordingControlParams
+        if (attached) {
+            val viewAdded = if (view != null && params != null)
+                runCatching { windows.addView(view, params) }
+                    .onFailure { android.util.Log.w("VoxFix", "RECORDING_SETUP_ATTACH_FAILED", it) }
+                    .isSuccess else true
+            val barAdded = if (control != null && controlParams != null)
+                runCatching { windows.addView(control, controlParams) }
+                    .onFailure { android.util.Log.w("VoxFix", "RECORDING_BAR_ATTACH_FAILED", it) }
+                    .isSuccess else true
+            if (control != null && controlParams != null && barAdded) control.post {
+                if (recordingControl === control) placeRecordingControl(control, controlParams)
+            }
+            return viewAdded && barAdded
+        } else {
+            if (view != null) runCatching { windows.removeView(view) }
+            if (control != null) runCatching { windows.removeView(control) }
+            return true
+        }
+    }
+
+    private fun showRecordingControl(options: ScreenRecordingOptions) {
+        if (recordingControl != null) return
         val control = ScreenRecordingControl(this)
         control.onStop = { recorder?.stop() }
         control.onCancel = { recorder?.cancel() }
+        control.onStart = { requestRecordingStart() }
+        control.onClose = { cancelRecordingSetup("已关闭录屏设置") }
         control.onTogglePause = { paused ->
             if (paused) recorder?.pause() else recorder?.resume()
             updateRecordingArea(if (paused) ScreenRecordingAreaView.State.PAUSED
@@ -437,8 +621,9 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         }
         control.setOptions(options)
         control.onOptionsChanged = { updated ->
+            recordingOptions = updated
             recordingPreferences.save(updated)
-            Toast.makeText(this, "已记住，下次录屏生效", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "已应用", Toast.LENGTH_SHORT).show()
         }
         control.onOpenFolder = {
             if (!ScreenRecordingLibrary.openFolder(this))
@@ -459,7 +644,12 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         )
         params.gravity = android.view.Gravity.TOP or android.view.Gravity.START
         control.onLayoutChanged = {
-            if (recordingControl === control) placeRecordingControl(control, params, region)
+            // The settings panel changes the bar height; re-place after the new measure pass so
+            // the expanded panel stays on screen instead of hanging off the bottom edge.
+            control.post {
+                val current = recordingControlParams
+                if (recordingControl === control && current != null) placeRecordingControl(control, current)
+            }
         }
         control.onDrag = { dx, dy ->
             if (recordingControl === control) {
@@ -472,22 +662,16 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
                 runCatching { windows.updateViewLayout(control, params) }
             }
         }
-        val added = runCatching { windows.addView(control, params) }.isSuccess
-        if (!added) {
-            recorder?.cancel()
-            Toast.makeText(this, "无法显示录屏控制条", Toast.LENGTH_SHORT).show()
-            return
-        }
         recordingControl = control
-        control.post { placeRecordingControl(control, params, region) }
-        watchRecordingRotation()
+        recordingControlParams = params
     }
 
-    private fun placeRecordingControl(control: ScreenRecordingControl, params: WindowManager.LayoutParams, region: Rect) {
+    private fun placeRecordingControl(control: ScreenRecordingControl, params: WindowManager.LayoutParams) {
+        val region = recordingRegion ?: return
         val metrics = resources.displayMetrics
         val barWidth = control.width.takeIf { it > 0 } ?: control.measuredWidth
         val barHeight = control.height.takeIf { it > 0 } ?: control.measuredHeight
-        val gap = (8 * metrics.density).toInt()
+        val gap = dp(8)
         if (recordingBarManual) {
             // The user placed the bar; only keep it on screen when the settings row grows.
             params.x = params.x.coerceIn(0, (metrics.widthPixels - barWidth).coerceAtLeast(0))
@@ -499,7 +683,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             if (y < gap) y = (metrics.heightPixels - barHeight - gap).coerceAtLeast(gap)
             params.y = y
         }
-        runCatching { windows.updateViewLayout(control, params) }
+        if (recordingSetupAttached) runCatching { windows.updateViewLayout(control, params) }
         if (!recordingBarWarned && Rect(params.x, params.y, params.x + barWidth, params.y + barHeight).intersect(Rect(region))) {
             recordingBarWarned = true
             Toast.makeText(this, "录屏控制条在录制区域内，会被录进画面，可按住左侧拖动移开", Toast.LENGTH_LONG).show()
@@ -512,10 +696,18 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             runCatching { windows.removeView(it) }
         }
         recordingControl = null
+        recordingControlParams = null
         recordingSaved = null
+        removeRecordingSetup()
         removeRecordingArea()
+        recordingRegion = null
+        recordingOptions = null
+        recordingScreen = null
+        recordingDebugAuto = false
         stopWatchingRecordingRotation()
     }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density + 0.5f).toInt()
 
     private fun watchRecordingRotation() {
         stopWatchingRecordingRotation()
@@ -526,13 +718,20 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             override fun onDisplayAdded(displayId: Int) {}
             override fun onDisplayRemoved(displayId: Int) {}
             override fun onDisplayChanged(displayId: Int) {
-                if (displayId != Display.DEFAULT_DISPLAY || recorder == null) return
+                if (displayId != Display.DEFAULT_DISPLAY) return
+                if (recorder == null && recordingSetup == null) return
                 @Suppress("DEPRECATION")
                 val rotation = windows.defaultDisplay?.rotation ?: return
                 if (rotation == recordingRotation) return
                 recordingRotation = rotation
-                Toast.makeText(this@ScreenTextService, "屏幕已旋转，录屏结束并保存", Toast.LENGTH_SHORT).show()
-                recorder?.stop()
+                if (recorder != null) {
+                    Toast.makeText(this@ScreenTextService, "屏幕已旋转，录屏结束并保存", Toast.LENGTH_SHORT).show()
+                    recorder?.stop()
+                } else {
+                    // The frame is in screen pixels; a rotation would leave it covering the wrong
+                    // content, and the projection cannot be re-cropped mid-session.
+                    cancelRecordingSetup("屏幕已旋转，请重新选择录制区域")
+                }
             }
         }
         recordingDisplay = listener

@@ -25,6 +25,10 @@ import android.widget.TextView
 internal class ScreenRecordingControl(context: Context) : LinearLayout(context) {
     var onStop: (() -> Unit)? = null
     var onCancel: (() -> Unit)? = null
+    /** Idle stage only: user pressed start; the service still has to obtain projection consent. */
+    var onStart: (() -> Unit)? = null
+    /** Idle stage only: user closed the setup without recording. */
+    var onClose: (() -> Unit)? = null
     var onTogglePause: ((Boolean) -> Unit)? = null
     var onOpenSaved: (() -> Unit)? = null
     var onOpenFolder: (() -> Unit)? = null
@@ -36,8 +40,16 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
 
     private val handler = Handler(Looper.getMainLooper())
     private val bar = LinearLayout(context)
-    private val panel = LinearLayout(context)
+    /**
+     * Upstream keeps the export settings on one horizontal row
+     * (`createRecordingExportSettingsToolbar` builds a `QHBoxLayout`); the phone used to stack six
+     * labelled rows, which covered almost half the screen. Chips scroll horizontally instead.
+     */
+    private val panel = android.widget.HorizontalScrollView(context)
+    private val panelRow = LinearLayout(context)
     private val duration = TextView(context)
+    private val start = button("开始", accent = true)
+    private val close = button("关闭")
     private val pause = button("暂停")
     private val stop = button("完成", accent = true)
     private val cancel = button("取消")
@@ -64,6 +76,7 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         layoutParams = LayoutParams(dp(14), LayoutParams.MATCH_PARENT).apply { marginEnd = dp(4) }
     }
     private val optionRows = mutableListOf<TextView>()
+    private val optionLabels = mutableListOf<String>()
 
     private var startedAt = 0L
     private var pausedAt = 0L
@@ -89,12 +102,14 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
             setStroke(dp(1), 0x40FFFFFF)
         }
         bar.orientation = HORIZONTAL
-        bar.gravity = Gravity.CENTER_VERTICAL
+        bar.gravity = Gravity.CENTER_VERTICAL or Gravity.CENTER_HORIZONTAL
         bar.setPadding(dp(10), dp(6), dp(10), dp(6))
         dot.layoutParams = LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(6) }
         dot.background = GradientDrawable().apply { cornerRadius = dp(4).toFloat(); setColor(0xFFE53935.toInt()) }
         bar.addView(grip)
         bar.addView(dot)
+        start.contentDescription = "开始录制"
+        bar.addView(start)
         duration.setTextColor(Color.WHITE)
         duration.textSize = 14f
         duration.typeface = android.graphics.Typeface.MONOSPACE
@@ -106,8 +121,12 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         bar.addView(pause)
         bar.addView(stop)
         bar.addView(cancel)
+        close.contentDescription = "关闭录屏设置"
+        bar.addView(close)
         bar.addView(microphone)
         bar.addView(settings)
+        start.setOnClickListener { if (!counting) onStart?.invoke() }
+        close.setOnClickListener { if (!counting) onClose?.invoke() }
         pause.contentDescription = "暂停录制"
         stop.contentDescription = "停止并保存录屏"
         cancel.contentDescription = "取消录屏"
@@ -118,13 +137,52 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         cancel.setOnClickListener { if (!finished) onCancel?.invoke() }
         microphone.setOnClickListener { toggleMicrophone() }
         settings.setOnClickListener { toggleSettings() }
-        addView(bar)
+        addView(bar, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
 
-        panel.orientation = VERTICAL
-        panel.setPadding(dp(12), 0, dp(12), dp(8))
         panel.visibility = GONE
         addView(panel)
         buildSettings()
+        showSetupVisibility()
+    }
+
+    /**
+     * Idle stage: the frame is still adjustable and the export settings are editable, matching
+     * upstream `updateRecordingExportSettingsControls()` (`editable = state == Idle && !busy`).
+     * Without this stage the settings button could never be reached, because the phone used to
+     * start capturing the moment the toolbar record action was confirmed.
+     */
+    fun showSetup(microphoneOn: Boolean, microphoneAvailable: Boolean) {
+        startedAt = 0
+        paused = false
+        pausedTotal = 0
+        finished = false
+        counting = false
+        pausedAt = 0
+        dot.background = GradientDrawable().apply {
+            cornerRadius = dp(4).toFloat()
+            setColor(ScreenRecordingSetupView.IDLE_COLOR)
+        }
+        duration.text = "00:00:00"
+        duration.contentDescription = "录制时长"
+        start.text = "开始"
+        start.contentDescription = "开始录制"
+        pause.visibility = GONE
+        stop.visibility = GONE
+        cancel.visibility = GONE
+        start.visibility = VISIBLE
+        close.visibility = VISIBLE
+        microphone.visibility = VISIBLE
+        settings.visibility = VISIBLE
+        settings.isEnabled = true
+        settings.alpha = 1f
+        setMicrophone(microphoneOn, microphoneAvailable)
+        handler.removeCallbacks(tick)
+    }
+
+    private fun showSetupVisibility() {
+        // Built hidden: the first frame the bar shows is decided by showSetup() or start().
+        start.visibility = GONE
+        close.visibility = GONE
     }
 
     fun setOptions(value: ScreenRecordingOptions) {
@@ -138,6 +196,17 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         pausedTotal = 0
         finished = false
         counting = false
+        start.visibility = GONE
+        close.visibility = GONE
+        pause.visibility = VISIBLE
+        stop.visibility = VISIBLE
+        cancel.visibility = VISIBLE
+        duration.text = "00:00:00"
+        dot.background = GradientDrawable().apply {
+            cornerRadius = dp(4).toFloat()
+            setColor(0xFFE53935.toInt())
+        }
+        dot.alpha = 1f
         setMicrophone(microphoneOn, microphoneAvailable)
         settings.isEnabled = false
         settings.alpha = 0.4f
@@ -151,10 +220,13 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         counting = true
         finished = false
         var remaining = seconds
+        start.visibility = GONE
+        close.visibility = GONE
         pause.visibility = GONE
         stop.visibility = GONE
         microphone.visibility = GONE
         settings.visibility = GONE
+        cancel.visibility = VISIBLE
         closeSettings()
         cancel.text = "取消"
         duration.text = "${seconds}s"
@@ -223,6 +295,8 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         handler.removeCallbacks(tick)
         duration.text = "已保存"
         duration.contentDescription = "已保存 $path"
+        start.visibility = GONE
+        close.visibility = GONE
         pause.visibility = GONE
         cancel.visibility = GONE
         microphone.visibility = GONE
@@ -241,6 +315,8 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         handler.removeCallbacks(tick)
         duration.text = message
         duration.contentDescription = message
+        start.visibility = GONE
+        close.visibility = GONE
         pause.visibility = GONE
         microphone.visibility = GONE
         stop.visibility = GONE
@@ -328,66 +404,64 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
     // ---- export settings row (upstream: format, clarity, frame rate, quality, audio, delay) ----
 
     private fun buildSettings() {
+        panel.setPadding(dp(12), 0, dp(12), dp(6))
+        panel.isHorizontalScrollBarEnabled = false
+        panel.contentDescription = "录制设置，可左右滚动"
+        // The window is wrap-content: an unconstrained scroll view would make it wider than the
+        // display and put the trailing chips out of reach.
+        val maxWidth = (resources.displayMetrics.widthPixels - dp(24)).coerceAtLeast(dp(160))
+        panel.layoutParams = LayoutParams(maxWidth, LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(2)
+        }
+        panelRow.orientation = HORIZONTAL
+        panelRow.gravity = Gravity.CENTER_VERTICAL
         val rows = listOf(
             Triple("格式", { options.format.label }) { cycleFormat() },
             Triple("清晰度", { options.clarity.label }) { cycleClarity() },
             Triple("帧率", { "${options.frameRate} fps" }) { cycleFrameRate() },
             Triple("质量", { "${options.quality}" }) { cycleQuality() },
-            Triple("声音", { if (options.microphone) "麦克风" else "系统声音" }) { cycleAudio() },
+            Triple("声音", { if (options.microphone) "麦克风" else if (options.systemAudio) "系统声音" else "静音" }) { cycleAudio() },
             Triple("延迟", { if (options.startDelaySeconds == 0) "关闭" else "${options.startDelaySeconds} 秒" }) { cycleDelay() }
         )
-        for ((label, value, action) in rows) {
-            val row = LinearLayout(context).apply {
-                orientation = HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(6), 0, dp(6))
-            }
-            val name = TextView(context).apply {
-                text = label
-                textSize = 13f
-                setTextColor(0x99FFFFFF.toInt())
-                width = dp(56)
-            }
-            val current = TextView(context).apply {
-                textSize = 13f
-                setTextColor(Color.WHITE)
-                gravity = Gravity.CENTER_VERTICAL
-                minHeight = dp(28)
-                setPadding(dp(8), dp(4), dp(8), dp(4))
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(7).toFloat()
-                    setColor(0x26FFFFFF)
-                }
-                isClickable = true
-                isFocusable = true
-                contentDescription = label
+        optionLabels.clear()
+        for ((label, _, action) in rows) {
+            val current = chip(label).apply {
+                // The label is only announced once; the visible chip carries label + value so a
+                // single row reads without separate column headers.
                 setOnClickListener { action(); refreshSettings(); onOptionsChanged?.invoke(options) }
             }
-            row.addView(name)
-            row.addView(current, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
-            panel.addView(row)
+            panelRow.addView(current)
             optionRows.add(current)
+            optionLabels.add(label)
         }
-        val folder = TextView(context).apply {
-            text = "打开录制文件夹"
-            textSize = 13f
+        panelRow.addView(chip("文件夹").apply {
             setTextColor(0xCCFFFFFF.toInt())
-            gravity = Gravity.CENTER
-            minHeight = dp(32)
-            setPadding(dp(8), dp(6), dp(8), dp(6))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(7).toFloat()
-                setColor(0x26FFFFFF)
-            }
-            isClickable = true
-            isFocusable = true
-            contentDescription = "打开录制文件夹"
             setOnClickListener { onOpenFolder?.invoke() }
-        }
-        panel.addView(folder, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(4)
         })
+        panel.addView(panelRow, android.widget.FrameLayout.LayoutParams(
+            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+        ))
         refreshSettings()
+    }
+
+    private fun chip(label: String): TextView = TextView(context).apply {
+        text = label
+        textSize = 12f
+        setTextColor(Color.WHITE)
+        gravity = Gravity.CENTER
+        isSingleLine = true
+        minHeight = dp(30)
+        setPadding(dp(9), dp(4), dp(9), dp(4))
+        background = GradientDrawable().apply {
+            cornerRadius = dp(7).toFloat()
+            setColor(0x26FFFFFF)
+        }
+        isClickable = true
+        isFocusable = true
+        contentDescription = label
+        layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+            marginEnd = dp(6)
+        }
     }
 
     private fun refreshSettings() {
@@ -399,7 +473,11 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
             if (options.microphone) "麦克风" else if (options.systemAudio) "系统声音" else "静音",
             if (options.startDelaySeconds == 0) "关闭" else "${options.startDelaySeconds} 秒"
         )
-        optionRows.forEachIndexed { index, view -> values.getOrNull(index)?.let { view.text = it } }
+        optionRows.forEachIndexed { index, view ->
+            val value = values.getOrNull(index) ?: return@forEachIndexed
+            view.text = "${optionLabels.getOrNull(index) ?: ""} $value"
+            view.contentDescription = "${optionLabels.getOrNull(index) ?: ""} $value"
+        }
     }
 
     private fun toggleSettings() {
