@@ -142,9 +142,10 @@ internal class ScreenshotDrawingRenderer(private var image: Bitmap, private val 
                 max(stroke.points.first().x,stroke.points.last().x),max(stroke.points.first().y,stroke.points.last().y))
             val clip=crop ?: Rect(0,0,image.width,image.height)
             val radius=stroke.style.cornerRadius*stroke.width/stroke.style.width.coerceAtLeast(1)
-            val band=ScreenshotShapeRendering.strokeContains(stroke.style.shape,shape,p,stroke.width,tolerance,clip,radius)
+            val radii=ScreenshotShapeRendering.scaledRadii(stroke.style,stroke.width,shape)
+            val band=ScreenshotShapeRendering.strokeContains(stroke.style.shape,shape,p,stroke.width,tolerance,clip,radius,radii)
             if(outline) return band
-            return ScreenshotShapeRendering.contains(stroke.style.shape,shape,p,clip,radius) || band
+            return ScreenshotShapeRendering.contains(stroke.style.shape,shape,p,clip,radius,radii) || band
         }
         if(stroke.tool==ScreenshotDrawingTool.LINE) {
             val clip=crop ?: Rect(0,0,image.width,image.height)

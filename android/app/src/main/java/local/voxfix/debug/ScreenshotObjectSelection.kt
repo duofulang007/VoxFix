@@ -30,13 +30,14 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
     private var handle=-1
     private var resizeHandle: ScreenshotResizeHandle?=null
     private var segment: ScreenshotLinearHandles.Segment?=null
+    private var corner=-1
     private var elbowRoute: ScreenshotElbowSegment.Route?=null
     private var moving=false
     private var additive=false
     /** Snap guide lines from the latest move/resize preview (empty when snapping is off). */
     var snapGuides: List<ScreenshotObjectSnapping.SnapGuide> = emptyList()
         private set
-    private enum class Mode { NONE, MARQUEE, MOVE, RESIZE, ROTATE, POINT, SEGMENT }
+    private enum class Mode { NONE, MARQUEE, MOVE, RESIZE, ROTATE, POINT, SEGMENT, CORNER }
 
     fun select(index: Int?) {
         selectIndices(index?.let(::setOf) ?: emptySet())
@@ -99,6 +100,24 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
         if(stroke.points.size<2) return emptyList()
         return renderer.worldPoints(stroke)
     }
+    /** The rectangle's own geometry without stroke outset, like upstream rect.width/height. */
+    private fun rectGeo(stroke: ScreenshotDrawingStroke): RectF? {
+        if(stroke.tool!=ScreenshotDrawingTool.RECTANGLE || stroke.style.shape!=ScreenshotRectangleShape.RECTANGLE) return null
+        val xs=stroke.points.map{it.x}; val ys=stroke.points.map{it.y}
+        val box=RectF(xs.min(),ys.min(),xs.max(),ys.max())
+        return if(box.width()<=0f || box.height()<=0f) null else box
+    }
+    /** Corner-radius handles sit inside the frame (`corner_radius_handle_local_point`). */
+    private fun cornerHandleHit(stroke: ScreenshotDrawingStroke,point: ScreenshotDrawingPoint): Int {
+        val box=rectGeo(stroke) ?: return -1
+        val rectCenter=ScreenshotDrawingPoint(box.centerX(),box.centerY())
+        for(c in 0..3) {
+            val h=ScreenshotCornerRadii.handlePoint(box.width(),box.height(),unit(),c,stroke.style.cornerRadii,stroke.style.cornerRadius)
+            val world=ScreenshotObjectTransform.rotate(ScreenshotDrawingPoint(rectCenter.x+h.x,rectCenter.y+h.y),rectCenter,stroke.rotation)
+            if(near(point,world,6*unit())) return c
+        }
+        return -1
+    }
     fun press(point: ScreenshotDrawingPoint,shift: Boolean,candidates: List<Int>) {
         cancel(); baseIds=ids; down=point; pointer=point; additive=shift
         if(shift && candidates.isNotEmpty()) {
@@ -115,10 +134,12 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
             val points=if(strokes.size==1) pointHandles(strokes.values.single()) else emptyList()
             handle=single?.let { ScreenshotLinearHandles.pointHit(it,points,point,unit()) } ?: -1
             segment=single?.let { ScreenshotLinearHandles.segmentHit(it,points,point,unit()) }
+            corner=if(strokes.size==1) cornerHandleHit(strokes.values.single(),point) else -1
             val frameVisible=ScreenshotLinearHandles.frameVisible(strokes.values)
             mode=when {
                 handle>=0 -> Mode.POINT
                 segment!=null -> Mode.SEGMENT
+                corner>=0 -> Mode.CORNER
                 single!=null && single.tool in setOf(ScreenshotDrawingTool.LINE,ScreenshotDrawingTool.ARROW) && renderer.hit(single,point,4*unit(),null,false) -> Mode.MOVE
                 frameVisible && near(rotationPoint(bounds,angle,framePadding(strokes)),point,6*unit()) -> Mode.ROTATE
                 else -> {
@@ -215,6 +236,16 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
                 }
             }
             Mode.RESIZE -> resizeStrokes(point,shift,alt,true)
+            Mode.CORNER -> {
+                // preview_rect_for_corner_radius: Shift drags all four corners together.
+                val stroke=original.values.single()
+                val box=rectGeo(stroke)!!
+                val local=ScreenshotObjectTransform.rotate(point,ScreenshotDrawingPoint(box.centerX(),box.centerY()),-stroke.rotation)
+                val value=ScreenshotCornerRadii.dragRadius(box.width(),box.height(),unit(),corner,
+                    stroke.style.cornerRadii,stroke.style.cornerRadius,local,shift)
+                val radii=if(shift) List(4){value} else ScreenshotCornerRadii.set(stroke.style.cornerRadii,corner,value)
+                original.mapValues { (_,s) -> s.copy(style=s.style.copy(cornerRadii=radii)) }
+            }
             else -> emptyMap()
         }
         // Resizing or rotating a shape moves the elements an arrow is pinned to, so those
@@ -394,7 +425,7 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
         reset()
     }
     fun cancel() { if(mode==Mode.MARQUEE) ids=baseIds; reset() }
-    private fun reset() { preview=emptyMap(); original=emptyMap(); liveBox=null; mode=Mode.NONE; handle=-1; resizeHandle=null; segment=null; elbowRoute=null; moving=false; snapGuides=emptyList() }
+    private fun reset() { preview=emptyMap(); original=emptyMap(); liveBox=null; mode=Mode.NONE; handle=-1; resizeHandle=null; segment=null; corner=-1; elbowRoute=null; moving=false; snapGuides=emptyList() }
     fun draw(canvas: Canvas) {
         val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=0xFF4096FF.toInt(); strokeWidth=unit(); style=Paint.Style.STROKE }
         drawSnapGuides(canvas)
@@ -425,6 +456,21 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
                 canvas.drawRoundRect(p.x-4*unit(),p.y-4*unit(),p.x+4*unit(),p.y+4*unit(),2*unit(),2*unit(),paint)
                 paint.style=Paint.Style.STROKE; paint.color=0xFF4096FF.toInt()
                 canvas.drawRoundRect(p.x-4*unit(),p.y-4*unit(),p.x+4*unit(),p.y+4*unit(),2*unit(),2*unit(),paint)
+            }
+            // Corner-radius handles for a selected rectangle (`selection_corner_handle`).
+            strokes.values.singleOrNull()?.let { single ->
+                val geo=rectGeo(single)
+                if(geo!=null) {
+                    val rectCenter=ScreenshotDrawingPoint(frame.centerX(),frame.centerY())
+                    for(c in 0..3) {
+                        val h=ScreenshotCornerRadii.handlePoint(geo.width(),geo.height(),unit(),c,single.style.cornerRadii,single.style.cornerRadius)
+                        val p=ScreenshotObjectTransform.rotate(ScreenshotDrawingPoint(rectCenter.x+h.x,rectCenter.y+h.y),rectCenter,angle)
+                        paint.style=Paint.Style.FILL; paint.color=Color.WHITE
+                        canvas.drawRoundRect(p.x-4*unit(),p.y-4*unit(),p.x+4*unit(),p.y+4*unit(),2*unit(),2*unit(),paint)
+                        paint.style=Paint.Style.STROKE; paint.color=0xFF4096FF.toInt()
+                        canvas.drawRoundRect(p.x-4*unit(),p.y-4*unit(),p.x+4*unit(),p.y+4*unit(),2*unit(),2*unit(),paint)
+                    }
+                }
             }
             val y=frame.top-framePadding(strokes)-20*unit()
             paint.style=Paint.Style.FILL; paint.color=Color.WHITE; canvas.drawCircle(frame.centerX(),y,4*unit(),paint)

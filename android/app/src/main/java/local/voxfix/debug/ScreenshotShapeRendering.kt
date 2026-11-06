@@ -15,9 +15,11 @@ internal object ScreenshotShapeRendering {
      * The shape outline inside [box]. Ellipse and diamond are inscribed in the same box as the
      * rectangle, which is what makes dragging feel identical until the user switches kind.
      */
-    fun path(shape: ScreenshotRectangleShape, box: RectF,cornerRadius: Float=0f): Path = Path().apply {
+    fun path(shape: ScreenshotRectangleShape, box: RectF,cornerRadius: Float=0f,cornerRadii: FloatArray?=null): Path = Path().apply {
         when (shape) {
-            ScreenshotRectangleShape.RECTANGLE -> if(cornerRadius>0) {
+            ScreenshotRectangleShape.RECTANGLE -> if(cornerRadii!=null) {
+                addRoundRect(box,cornerRadii,Path.Direction.CW)
+            } else if(cornerRadius>0) {
                 val radius=cornerRadius.coerceAtMost(minOf(box.width(),box.height())/2)
                 addRoundRect(box,radius,radius,Path.Direction.CW)
             } else addRect(box, Path.Direction.CW)
@@ -42,10 +44,19 @@ internal object ScreenshotShapeRendering {
         if(style.fillPattern==ScreenshotFillPattern.SOLID) { paint.style=Paint.Style.FILL; canvas.drawPath(path,paint); return }
         ScreenshotHatchRendering.draw(canvas,path,fillColor,style.fillPattern,style.width.toFloat(),unit,style.opacity,paint)
     }
+    /** Per-corner radii scaled exactly like the uniform one (`radius * strokeWidth / style.width`). */
+    fun scaledRadii(style: ScreenshotDrawingStyle,strokeWidth: Float,box: RectF): FloatArray? {
+        val radii=style.cornerRadii ?: return null
+        val scale=strokeWidth/style.width.coerceAtLeast(1)
+        val cap=minOf(box.width(),box.height())/2f
+        return FloatArray(8) { radii[it/2]*scale }.also { result ->
+            for(i in result.indices) result[i]=result[i].coerceIn(0f,cap)
+        }
+    }
     /** Fill first, then the patterned stroke; the paint is left as a stroke paint for the caller. */
     fun draw(canvas: Canvas, shape: ScreenshotRectangleShape, box: RectF, strokeColor: Int, strokeWidth: Float,
              style: ScreenshotDrawingStyle, paint: Paint) {
-        val path=path(shape,box,style.cornerRadius*strokeWidth/style.width.coerceAtLeast(1))
+        val path=path(shape,box,style.cornerRadius*strokeWidth/style.width.coerceAtLeast(1),scaledRadii(style,strokeWidth,box))
         paint.reset(); paint.isAntiAlias=true; paint.strokeCap=Paint.Cap.ROUND; paint.strokeJoin=Paint.Join.ROUND
         if(style.hasFill) fill(canvas,path,style,style.fillColor,strokeWidth/style.width.coerceAtLeast(1),paint)
         if(strokeWidth<=0f || Color.alpha(strokeColor)==0) return
@@ -57,17 +68,17 @@ internal object ScreenshotShapeRendering {
         canvas.drawPath(path,paint)
     }
     /** Half-open test used by eraser and selection: interior counts, the bounding-box corners do not. */
-    fun contains(shape: ScreenshotRectangleShape, box: RectF, point: ScreenshotDrawingPoint, clip: Rect,cornerRadius: Float=0f): Boolean {
-        val region=Region().apply { setPath(path(shape,box,cornerRadius),Region(clip)) }
+    fun contains(shape: ScreenshotRectangleShape, box: RectF, point: ScreenshotDrawingPoint, clip: Rect,cornerRadius: Float=0f,cornerRadii: FloatArray?=null): Boolean {
+        val region=Region().apply { setPath(path(shape,box,cornerRadius,cornerRadii),Region(clip)) }
         return region.contains(point.x.toInt(),point.y.toInt())
     }
     /** The visible outline band, widened by the caller's touch slop. */
     fun strokeContains(shape: ScreenshotRectangleShape, box: RectF, point: ScreenshotDrawingPoint,
-                       strokeWidth: Float, tolerance: Float, clip: Rect,cornerRadius: Float=0f): Boolean {
+                       strokeWidth: Float, tolerance: Float, clip: Rect,cornerRadius: Float=0f,cornerRadii: FloatArray?=null): Boolean {
         val band=Path()
         Paint().apply {
             style=Paint.Style.STROKE; this.strokeWidth=strokeWidth+tolerance*2; strokeJoin=Paint.Join.ROUND
-        }.getFillPath(path(shape,box,cornerRadius),band)
+        }.getFillPath(path(shape,box,cornerRadius,cornerRadii),band)
         val region=Region().apply { setPath(band,Region(clip)) }
         return region.contains(point.x.toInt(),point.y.toInt())
     }

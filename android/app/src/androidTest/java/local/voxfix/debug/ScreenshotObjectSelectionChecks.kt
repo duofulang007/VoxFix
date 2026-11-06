@@ -122,6 +122,37 @@ internal object ScreenshotObjectSelectionChecks {
                 check(layer.history.items.single().points.first()==point(40f,600f))
                 check(layer.history.items.single().points.takeLast(pen.points.size)==pen.points) { "start continuation reversed original" }
             } finally { layer.close() }
+
+            // T22 independent corner radii: one handle per corner, Shift drags all four together.
+            val rounded=rect(100f).copy(style=rect(100f).style.copy(cornerRadii=listOf(30f,0f,0f,0f)))
+            history.load(listOf(rounded)); selection.select(0)
+            val cut=Bitmap.createBitmap(600,900,Bitmap.Config.ARGB_8888).apply { eraseColor(Color.WHITE) }
+            try {
+                renderer.draw(Canvas(cut),listOf(rounded),Rect(0,0,600,900))
+                check(cut.getPixel(103,203)==Color.WHITE) { "TL 独立圆角没有切角" }
+                check(cut.getPixel(177,203)==Color.RED) { "TR 圆角不应为圆" }
+            } finally { cut.recycle() }
+            // TL handle: radius 30 of max 80 moves it in by inset=12+(36-12)*30/80=21 -> (121,221).
+            selection.press(point(121f,221f),false,emptyList())
+            selection.move(point(150f,250f),false,600,900)
+            check(history.items.single()==rounded) { "圆角预览提前入库" }
+            selection.release(point(150f,250f),false,600,900)
+            check(history.items.single().style.cornerRadii==listOf(80f,0f,0f,0f)) { "拖角只改一角：${history.items.single().style.cornerRadii}" }
+            history.undo(); check(history.items.single()==rounded) { "圆角拖动不是一次撤销" }
+            selection.press(point(121f,221f),false,emptyList())
+            selection.move(point(150f,250f),true,600,900)
+            selection.release(point(150f,250f),true,600,900)
+            check(history.items.single().style.cornerRadii==listOf(40f,40f,40f,40f)) { "Shift 未统一四角：${history.items.single().style.cornerRadii}" }
+            history.undo()
+            val encodedC=ScreenshotDocumentCodec.encode(ScreenshotDocument.full(600,900).copy(objects=listOf(rounded)))
+            check(ScreenshotDocumentCodec.decode(encodedC).objects.single().style.cornerRadii==listOf(30f,0f,0f,0f)) { "工程丢失独立圆角" }
+            val legacyC=JSONObject(encodedC)
+            legacyC.getJSONArray("objects").getJSONObject(0).getJSONObject("style").remove("cornerRadii")
+            check(ScreenshotDocumentCodec.decode(legacyC.toString()).objects.single().style.cornerRadii==null) { "旧工程不应有独立圆角" }
+            val badC=JSONObject(encodedC)
+            badC.getJSONArray("objects").getJSONObject(0).getJSONObject("style")
+                .put("cornerRadii",org.json.JSONArray().put(1.0).put(2.0).put(3.0).put(-1.0))
+            check(runCatching { ScreenshotDocumentCodec.decode(badC.toString()) }.isFailure) { "负圆角应拒绝解码" }
         } finally { renderer.close(); image.recycle() }
         rotatedEffects()
     }

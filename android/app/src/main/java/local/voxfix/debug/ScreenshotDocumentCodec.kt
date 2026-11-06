@@ -30,6 +30,8 @@ internal object ScreenshotDocumentCodec {
                 .put("outlineColor", stroke.style.outlineColor).put("outlineWidth", stroke.style.outlineWidth)
                 .put("fillColor", stroke.style.fillColor).put("hasFill", stroke.style.hasFill)
                 .put("cornerRadius", stroke.style.cornerRadius)
+                .also { style -> stroke.style.cornerRadii?.let { radii ->
+                    style.put("cornerRadii", JSONArray().apply { radii.forEach { r -> put(r.toDouble()) } }) } }
                 .put("strokePattern", stroke.style.strokePattern.name).put("fillPattern", stroke.style.fillPattern.name)
                 .put("shape", stroke.style.shape.name).put("curved", stroke.style.curved)
                 .put("arrowType", stroke.style.arrowType.name).put("arrowRatio", stroke.style.arrowRatio.toDouble())
@@ -299,6 +301,14 @@ internal object ScreenshotDocumentCodec {
             fillColor = row.optInt("fillColor", 0xFFFFFFFF.toInt()),
             hasFill = row.optBoolean("hasFill", false),
             cornerRadius = row.optInt("cornerRadius", 0).coerceIn(0, 83),
+            cornerRadii = row.optJSONArray("cornerRadii")?.let { radii ->
+                require(radii.length() == 4) { "cornerRadii 需要 4 个值" }
+                List(4) { corner ->
+                    val value = radii.optDouble(corner, Double.NaN)
+                    require(value.isFinite() && value >= 0.0) { "cornerRadii[$corner] 非法" }
+                    value.toFloat()
+                }
+            },
             strokePattern = runCatching { ScreenshotStrokePattern.valueOf(name("strokePattern", "SOLID")) }.getOrDefault(ScreenshotStrokePattern.SOLID),
             fillPattern = runCatching { ScreenshotFillPattern.valueOf(name("fillPattern", "SOLID")) }.getOrDefault(ScreenshotFillPattern.SOLID),
             shape = runCatching { ScreenshotRectangleShape.valueOf(name("shape", "RECTANGLE")) }.getOrDefault(ScreenshotRectangleShape.RECTANGLE),

@@ -29,6 +29,8 @@ data class ScreenshotDrawingStyle(
     val fontFamily: String = "sans-serif", val verticalAlign: Int = 0,
     val outlineColor: Int = 0xFF000000.toInt(), val outlineWidth: Int = 0,
     val fillColor: Int = 0xFFFFFFFF.toInt(), val hasFill: Boolean = false, val cornerRadius: Int = 0,
+    /** T22 independent corner radii (TL,TR,BR,BL, style units); null keeps the uniform [cornerRadius]. */
+    val cornerRadii: List<Float>? = null,
     val strokePattern: ScreenshotStrokePattern = ScreenshotStrokePattern.SOLID,
     val fillPattern: ScreenshotFillPattern = ScreenshotFillPattern.SOLID,
     val shape: ScreenshotRectangleShape = ScreenshotRectangleShape.RECTANGLE,
