@@ -59,9 +59,13 @@ internal class ScreenRecorder(
         val frameRate: Int,
         val bitrate: Int,
         val microphone: Boolean,
-        val systemAudio: Boolean
+        val systemAudio: Boolean,
+        val format: ScreenRecordingOptions.Format = ScreenRecordingOptions.Format.MP4,
+        val quality: Int = 80,
+        val loopAnimated: Boolean = true
     ) {
-        val audioRequested: Boolean get() = microphone || systemAudio
+        /** Animated images carry no audio upstream (`audioSupported = format == mp4`). */
+        val audioRequested: Boolean get() = format.hasAudio && (microphone || systemAudio)
     }
 
     fun interface Listener {
@@ -93,6 +97,9 @@ internal class ScreenRecorder(
     private var audioRecord: AudioRecord? = null
     private var audioThread: Thread? = null
     private var muxer: MediaMuxer? = null
+    private var animationWriter: ScreenAnimationWriter? = null
+    private var pixelBuffer: ByteBuffer? = null
+    private var lastAnimationPtsUs = -1L
 
     private val muxerLock = Any()
     private var videoFormat: MediaFormat? = null
@@ -200,23 +207,38 @@ internal class ScreenRecorder(
 
     private fun initialize(): String? {
         val file = File(File(appContext.cacheDir, "recordings").apply { mkdirs() },
-            ScreenRecordingGeometry.fileName(System.currentTimeMillis()))
+            ScreenRecordingGeometry.fileName(System.currentTimeMillis(), config.format.extension))
         outputFile = file
         crop = glCrop(config.crop, config.screenWidth, config.screenHeight)
 
-        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, config.outputWidth, config.outputHeight)
-        format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-        format.setInteger(MediaFormat.KEY_BIT_RATE, config.bitrate)
-        format.setInteger(MediaFormat.KEY_FRAME_RATE, config.frameRate)
-        format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-        format.setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
-        val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-        codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        val inputSurface = codec.createInputSurface()
-        codec.start()
-        videoCodec = codec
+        if (config.format.animated) {
+            val writer = ScreenAnimationWriter(
+                config.format, file, config.outputWidth, config.outputHeight,
+                config.loopAnimated, config.quality
+            )
+            writer.start()?.let { message ->
+                outputFile?.delete()
+                return message
+            }
+            animationWriter = writer
+            createEgl()
+        } else {
+            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, config.outputWidth, config.outputHeight)
+            format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+            format.setInteger(MediaFormat.KEY_BIT_RATE, config.bitrate)
+            format.setInteger(MediaFormat.KEY_FRAME_RATE, config.frameRate)
+            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            format.setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
+            val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            val inputSurface = codec.createInputSurface()
+            codec.start()
+            videoCodec = codec
+            createEgl(inputSurface)
+            inputSurface.release()
+            muxer = MediaMuxer(file.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        }
 
-        createEgl(inputSurface)
         createProgram()
         val texture = IntArray(1)
         GLES20.glGenTextures(1, texture, 0)
@@ -242,7 +264,6 @@ internal class ScreenRecorder(
         }
         projection.registerCallback(projectionCallback!!, handler)
 
-        muxer = MediaMuxer(file.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
         virtualDisplay = projection.createVirtualDisplay(
             "VoxFix 录屏", config.screenWidth, config.screenHeight,
             appContext.resources.displayMetrics.densityDpi,
@@ -254,11 +275,11 @@ internal class ScreenRecorder(
         val bufferWidth = virtualDisplay?.display?.width ?: config.screenWidth
         val bufferHeight = virtualDisplay?.display?.height ?: config.screenHeight
         android.util.Log.i("VoxFix", "SCREEN_RECORD_GEOMETRY request=${config.screenWidth}x${config.screenHeight} " +
-            "buffer=${bufferWidth}x${bufferHeight} region=${config.crop} output=${config.outputWidth}x${config.outputHeight}")
+            "buffer=${bufferWidth}x${bufferHeight} region=${config.crop} output=${config.outputWidth}x${config.outputHeight} " +
+            "format=${config.format.extension}")
         if (bufferWidth != config.screenWidth || bufferHeight != config.screenHeight) {
             crop = glCrop(config.crop, bufferWidth, bufferHeight)
         }
-        inputSurface.release()
 
         startNs = System.nanoTime()
         lastDrawnNs = 0L
@@ -267,7 +288,15 @@ internal class ScreenRecorder(
         return null
     }
 
-    private fun createEgl(inputSurface: Surface) {
+    private fun createEgl(inputSurface: Surface) = createEgl(inputSurface, config.outputWidth, config.outputHeight)
+
+    /**
+     * Animated formats have no encoder surface: frames are drawn into an off-screen pbuffer and
+     * read back with `glReadPixels`, so the same shader and crop stay in use for every format.
+     */
+    private fun createEgl() = createEgl(null, config.outputWidth, config.outputHeight)
+
+    private fun createEgl(inputSurface: Surface?, surfaceWidth: Int, surfaceHeight: Int) {
         eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
         check(eglDisplay != EGL14.EGL_NO_DISPLAY) { "无法初始化显示" }
         val version = IntArray(2)
@@ -275,6 +304,7 @@ internal class ScreenRecorder(
         val attributes = intArrayOf(
             EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8,
             EGL14.EGL_ALPHA_SIZE, 8, EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+            EGL14.EGL_SURFACE_TYPE, if (inputSurface == null) EGL14.EGL_PBUFFER_BIT else EGL14.EGL_WINDOW_BIT,
             EGL_RECORDABLE_ANDROID, 1, EGL14.EGL_NONE
         )
         val configs = arrayOfNulls<EGLConfig>(1)
@@ -285,8 +315,13 @@ internal class ScreenRecorder(
         eglContext = EGL14.eglCreateContext(eglDisplay, configs[0], EGL14.EGL_NO_CONTEXT,
             intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE), 0)
         check(eglContext != EGL14.EGL_NO_CONTEXT) { "无法创建录屏图形上下文" }
-        eglSurface = EGL14.eglCreateWindowSurface(eglDisplay, configs[0], inputSurface,
-            intArrayOf(EGL14.EGL_NONE), 0)
+        eglSurface = if (inputSurface != null) {
+            EGL14.eglCreateWindowSurface(eglDisplay, configs[0], inputSurface,
+                intArrayOf(EGL14.EGL_NONE), 0)
+        } else {
+            EGL14.eglCreatePbufferSurface(eglDisplay, configs[0],
+                intArrayOf(EGL14.EGL_WIDTH, surfaceWidth, EGL14.EGL_HEIGHT, surfaceHeight, EGL14.EGL_NONE), 0)
+        }
         check(eglSurface != EGL14.EGL_NO_SURFACE) { "无法创建录屏绘制面" }
         check(EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) { "无法启用录屏绘制面" }
     }
@@ -376,9 +411,49 @@ internal class ScreenRecorder(
         GLES20.glVertexAttribPointer(position, 2, GLES20.GL_FLOAT, false, 8, positionBuffer)
         GLES20.glVertexAttribPointer(texCoord, 2, GLES20.GL_FLOAT, false, 8, texCoordBuffer)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        if (animationWriter != null) {
+            captureAnimationFrame(ptsUs)
+            return
+        }
         EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, ptsUs * 1_000)
         if (!EGL14.eglSwapBuffers(eglDisplay, eglSurface)) return
         drainVideo(false)
+    }
+
+    /**
+     * Reads the drawn frame back and hands it to the animation writer.
+     *
+     * The delay is the real distance between captured frames, so a frame the writer could not keep
+     * up with widens the next delay instead of silently speeding the playback up.
+     */
+    private fun captureAnimationFrame(ptsUs: Long) {
+        val writer = animationWriter ?: return
+        val width = config.outputWidth
+        val height = config.outputHeight
+        val bytes = width * height * 4
+        val buffer = pixelBuffer ?: ByteBuffer.allocateDirect(bytes).order(ByteOrder.nativeOrder())
+            .also { pixelBuffer = it }
+        buffer.clear()
+        GLES20.glFinish()
+        GLES20.glReadPixels(0, 0, width, height, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buffer)
+        val pixels = IntArray(width * height)
+        val rowBytes = width * 4
+        for (y in 0 until height) {
+            // glReadPixels returns rows bottom-up; images are stored top-down.
+            val source = (height - 1 - y) * rowBytes
+            val target = y * width
+            for (x in 0 until width) {
+                val index = source + x * 4
+                val r = buffer.get(index).toInt() and 0xFF
+                val g = buffer.get(index + 1).toInt() and 0xFF
+                val b = buffer.get(index + 2).toInt() and 0xFF
+                pixels[target + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+            }
+        }
+        val delay = if (lastAnimationPtsUs < 0) 1_000 / config.frameRate.coerceIn(1, 60)
+        else ((ptsUs - lastAnimationPtsUs) / 1_000).coerceIn(10, 65_535).toInt()
+        lastAnimationPtsUs = ptsUs
+        writer.addFrame(pixels, delay)
     }
 
     private fun pausedNowNs(): Long = synchronized(stateLock) {
@@ -572,13 +647,16 @@ internal class ScreenRecorder(
         surfaceTexture = null
         try { videoCodec?.signalEndOfInputStream() } catch (_: Exception) { }
         drainVideo(true)
+        val animation = animationWriter
+        animationWriter = null
+        val animatedOk = animation?.finish() ?: false
         try { audioCodec?.stop() } catch (_: Exception) { }
         audioCodec?.release()
         audioCodec = null
         try { videoCodec?.stop() } catch (_: Exception) { }
         videoCodec?.release()
         videoCodec = null
-        val finished = synchronized(muxerLock) {
+        val finished = if (config.format.animated) animatedOk else synchronized(muxerLock) {
             var ok = false
             try {
                 if (muxerStarted) { muxer?.stop(); ok = true }
@@ -611,6 +689,9 @@ internal class ScreenRecorder(
 
     private fun releaseAll() {
         audioRunning = false
+        animationWriter?.abort()
+        animationWriter = null
+        pixelBuffer = null
         try { audioRecord?.stop() } catch (_: Exception) { }
         audioRecord?.release()
         audioRecord = null

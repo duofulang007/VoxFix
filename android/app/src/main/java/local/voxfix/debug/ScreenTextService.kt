@@ -92,6 +92,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
 
     override fun onServiceConnected() {
         connected = true
+        live = this
         TranslateRuntime.init(this)
         ScreenshotEditorHost.register(editorHost)
         preferences.registerOnSharedPreferenceChangeListener(this)
@@ -153,6 +154,10 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     override fun onDestroy() {
         recorder?.cancel()
         recorder = null
+        // The system can recreate this service while the projection consent dialog is open; drop
+        // the live-instance handle so late callbacks never post onto the shut-down worker below.
+        if (live === this) live = null
+        ScreenshotProjection.abandonUnlessUiOpen()
         removeRecordingControl()
         ScreenshotPins.closeAll()
         connected = false
@@ -351,22 +356,35 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         if (recorder != null) return
         setRecordingSetupAttached(false)
         ScreenshotProjection.request(this, "录屏", { projection, stop ->
-            beginRecording(projection, stop, Rect(region), screen.first, screen.second, options)
-        }, { message ->
-            if (recordingDebugAuto) {
-                cancelRecordingSetup(message)
+            // Consent can outlive this instance: the system recreates the accessibility service while
+            // the permission dialog is showing, so deliver to the instance that is alive now.
+            val service = live
+            if (service != null) {
+                service.beginRecording(projection, stop, Rect(region), screen.first, screen.second, options)
             } else {
-                busy = true
-                setRecordingSetupAttached(true)
-                Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                runCatching { stop() }
             }
-        }, microphone = options.microphone)
+        }, { message ->
+            val service = live
+            if (service == null) {
+                android.util.Log.w("VoxFix", "RECORDING_FAILED_GONE reason=$message")
+            } else if (service.recordingDebugAuto) {
+                service.cancelRecordingSetup(message)
+            } else {
+                service.busy = true
+                service.setRecordingSetupAttached(true)
+                Toast.makeText(service, message, Toast.LENGTH_SHORT).show()
+            }
+        }, microphone = options.audioEnabled && options.microphone)
     }
 
     private fun beginRecording(projection: android.media.projection.MediaProjection, stopProjection: () -> Unit,
                                region: Rect, screenWidth: Int, screenHeight: Int, options: ScreenRecordingOptions) {
         busy = true
         removeRecordingSetup()
+        // After a service rebuild the transport bar from the previous instance is gone; recreate it
+        // so a granted consent still leaves the user able to pause or stop.
+        if (recordingControl == null) showRecordingControl(options)
         showRecordingArea(region, ScreenRecordingAreaView.State.COUNTDOWN)
         setRecordingSetupAttached(true)
         val control = recordingControl
@@ -384,7 +402,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         }
         if (options.startDelaySeconds > 0 && control != null) {
             control.startCountdown(options.startDelaySeconds, {
-                control.start(options.microphone, true)
+                control.start(options.audioEnabled && options.microphone, options.format.hasAudio)
                 launch()
             }) {
                 runCatching(stopProjection)
@@ -393,38 +411,56 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
                 showHandle()
             }
         } else {
-            control?.start(options.microphone, true)
+            control?.start(options.audioEnabled && options.microphone, options.format.hasAudio)
             launch()
         }
     }
 
     private fun launchRecorder(projection: android.media.projection.MediaProjection, stopProjection: () -> Unit,
                                region: Rect, screenWidth: Int, screenHeight: Int, options: ScreenRecordingOptions) {
-        val (width, height) = ScreenRecordingGeometry.outputSize(region.width(), region.height(), options.clarity)
+        val (width, height) = ScreenRecordingGeometry.outputSize(region.width(), region.height(), options.effectiveClarity)
+        android.util.Log.i("VoxFix", "RECORDING_LAUNCH format=${options.format.extension} size=${width}x$height " +
+            "fps=${options.effectiveFrameRate} loop=${options.loopAnimated}")
         val config = ScreenRecorder.Config(
             crop = region, screenWidth = screenWidth, screenHeight = screenHeight,
             outputWidth = width, outputHeight = height,
-            frameRate = options.frameRate,
-            bitrate = ScreenRecordingGeometry.bitrate(width, height, options.frameRate, options.quality),
-            microphone = options.microphone,
-            systemAudio = options.systemAudio && !options.microphone
+            frameRate = options.effectiveFrameRate,
+            bitrate = ScreenRecordingGeometry.bitrate(width, height, options.effectiveFrameRate, options.quality),
+            microphone = options.audioEnabled && options.microphone,
+            systemAudio = options.audioEnabled && options.systemAudio && !options.microphone,
+            format = options.format,
+            quality = options.quality,
+            loopAnimated = options.loopAnimated
         )
         val active = ScreenRecorder(this, projection, config) { file, duration, message ->
             main.post { finishRecording(file, duration, message, stopProjection) }
         }
         recorder = active
-        screenshotWorker.execute {
-            val error = active.start()
-            main.post {
-                if (error != null) {
-                    recorder = null
-                    busy = false
-                    runCatching(stopProjection)
-                    Toast.makeText(this, error, Toast.LENGTH_LONG).show()
-                    removeRecordingControl()
-                    showHandle()
+        val submitted = runCatching {
+            screenshotWorker.execute {
+                val error = active.start()
+                main.post {
+                    if (error != null) {
+                        recorder = null
+                        busy = false
+                        runCatching(stopProjection)
+                        Toast.makeText(this, error, Toast.LENGTH_LONG).show()
+                        removeRecordingControl()
+                        showHandle()
+                    }
                 }
             }
+        }.isSuccess
+        if (!submitted) {
+            // The worker is shut down when the service is destroyed; failing here keeps a late
+            // consent result from taking the process down with it.
+            recorder = null
+            busy = false
+            runCatching { active.cancel() }
+            runCatching(stopProjection)
+            android.util.Log.w("VoxFix", "SCREEN_RECORD_WORKER_GONE")
+            removeRecordingControl()
+            showHandle()
         }
     }
 
@@ -514,7 +550,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         showRecordingControl(options)
         // The idle bar needs a region to dock against; the area view only exists once recording
         // starts, so the setup frame owns that geometry until then.
-        recordingControl?.showSetup(options.microphone, true)
+        recordingControl?.showSetup(options.audioEnabled && options.microphone, options.format.hasAudio)
         val attached = setRecordingSetupAttached(true)
         if (!attached) {
             android.util.Log.w("VoxFix", "RECORDING_SETUP_NOT_ATTACHED")
@@ -564,6 +600,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
 
     /** Idle-stage teardown: no recording was started. */
     private fun cancelRecordingSetup(message: String? = null) {
+        android.util.Log.i("VoxFix", "RECORDING_SETUP_CANCELLED reason=${message ?: "none"}")
         removeRecordingControl()
         busy = false
         if (!ScreenTextSettingsActivity.enabled(this)) removeHandle() else showHandle()
@@ -961,5 +998,11 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
                 }
             } catch (error: Exception) { if (composite !== image) composite.recycle(); throw error }
         } catch (error: Exception) { busy = false; screenshot?.failure(error.message ?: "截图保存失败，请重试") }
+    }
+
+    private companion object {
+        /** Newest bound instance; the system may replace it while a system dialog is in front. */
+        @Volatile
+        var live: ScreenTextService? = null
     }
 }

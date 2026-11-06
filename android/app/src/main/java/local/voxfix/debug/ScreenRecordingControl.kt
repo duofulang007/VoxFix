@@ -77,6 +77,7 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
     }
     private val optionRows = mutableListOf<TextView>()
     private val optionLabels = mutableListOf<String>()
+    private val optionValues = mutableListOf<() -> String>()
 
     private var startedAt = 0L
     private var pausedAt = 0L
@@ -187,7 +188,7 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
 
     fun setOptions(value: ScreenRecordingOptions) {
         options = value
-        refreshSettings()
+        rebuildSettings()
     }
 
     fun start(microphoneOn: Boolean, microphoneAvailable: Boolean) {
@@ -336,7 +337,7 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
     }
 
     private fun toggleMicrophone() {
-        if (finished || counting) return
+        if (finished || counting || !options.format.hasAudio) return
         options = options.copy(microphone = !options.microphone, systemAudio = options.microphone)
         setMicrophone(options.microphone, true)
         refreshSettings()
@@ -415,33 +416,55 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         }
         panelRow.orientation = HORIZONTAL
         panelRow.gravity = Gravity.CENTER_VERTICAL
-        val rows = listOf(
-            Triple("格式", { options.format.label }) { cycleFormat() },
-            Triple("清晰度", { options.clarity.label }) { cycleClarity() },
-            Triple("帧率", { "${options.frameRate} fps" }) { cycleFrameRate() },
-            Triple("质量", { "${options.quality}" }) { cycleQuality() },
-            Triple("声音", { if (options.microphone) "麦克风" else if (options.systemAudio) "系统声音" else "静音" }) { cycleAudio() },
-            Triple("延迟", { if (options.startDelaySeconds == 0) "关闭" else "${options.startDelaySeconds} 秒" }) { cycleDelay() }
-        )
+        panelRow.removeAllViews()
+        optionRows.clear()
         optionLabels.clear()
-        for ((label, _, action) in rows) {
+        optionValues.clear()
+        val rows = ArrayList<Triple<String, () -> String, () -> Unit>>()
+        rows.add(Triple("格式", { options.format.label }, { cycleFormat() }))
+        rows.add(Triple("清晰度", { options.effectiveClarity.label }, { cycleClarity() }))
+        rows.add(Triple("帧率", { "${options.effectiveFrameRate} fps" }, { cycleFrameRate() }))
+        // GIF and APNG have no quality knob upstream; only MP4 (bitrate) and WebP (VP8 quality) use it.
+        if (!options.format.animated || options.format == ScreenRecordingOptions.Format.WEBP) {
+            rows.add(Triple("质量", { "${options.quality}" }, { cycleQuality() }))
+        }
+        if (options.format.hasAudio) {
+            rows.add(Triple("声音", {
+                if (options.microphone) "麦克风" else if (options.systemAudio) "系统声音" else "静音"
+            }, { cycleAudio() }))
+        }
+        if (options.format.animated) {
+            rows.add(Triple("循环", { if (options.loopAnimated) "开" else "关" }, { cycleLoop() }))
+        }
+        rows.add(Triple("延迟", {
+            if (options.startDelaySeconds == 0) "关闭" else "${options.startDelaySeconds} 秒"
+        }, { cycleDelay() }))
+        for ((label, value, action) in rows) {
             val current = chip(label).apply {
                 // The label is only announced once; the visible chip carries label + value so a
                 // single row reads without separate column headers.
-                setOnClickListener { action(); refreshSettings(); onOptionsChanged?.invoke(options) }
+                setOnClickListener { action(); rebuildSettings(); onOptionsChanged?.invoke(options) }
             }
             panelRow.addView(current)
             optionRows.add(current)
             optionLabels.add(label)
+            optionValues.add(value)
         }
         panelRow.addView(chip("文件夹").apply {
             setTextColor(0xCCFFFFFF.toInt())
             setOnClickListener { onOpenFolder?.invoke() }
         })
+        panel.removeAllViews()
         panel.addView(panelRow, android.widget.FrameLayout.LayoutParams(
             android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
         ))
         refreshSettings()
+    }
+
+    /** Animated formats drop the audio track, so the microphone button has to follow the format. */
+    private fun rebuildSettings() {
+        setMicrophone(options.microphone && options.format.hasAudio, options.format.hasAudio)
+        buildSettings()
     }
 
     private fun chip(label: String): TextView = TextView(context).apply {
@@ -465,18 +488,11 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
     }
 
     private fun refreshSettings() {
-        val values = listOf(
-            options.format.label,
-            options.clarity.label,
-            "${options.frameRate} fps",
-            "${options.quality}",
-            if (options.microphone) "麦克风" else if (options.systemAudio) "系统声音" else "静音",
-            if (options.startDelaySeconds == 0) "关闭" else "${options.startDelaySeconds} 秒"
-        )
         optionRows.forEachIndexed { index, view ->
-            val value = values.getOrNull(index) ?: return@forEachIndexed
-            view.text = "${optionLabels.getOrNull(index) ?: ""} $value"
-            view.contentDescription = "${optionLabels.getOrNull(index) ?: ""} $value"
+            val value = optionValues.getOrNull(index)?.invoke() ?: return@forEachIndexed
+            val label = optionLabels.getOrNull(index) ?: ""
+            view.text = "$label $value"
+            view.contentDescription = "$label $value"
         }
     }
 
@@ -495,25 +511,34 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
     }
 
     private fun cycleFormat() {
-        // Animated formats are still pending on Android; cycling stays inside MP4 until they land.
-        options = options.copy(format = ScreenRecordingOptions.Format.MP4)
+        val values = ScreenRecordingOptions.Format.values()
+        options = options.copy(format = values[(options.format.ordinal + 1) % values.size])
+        if (!options.format.hasAudio) options = options.copy(microphone = false, systemAudio = false)
     }
 
     private fun cycleClarity() {
-        val values = ScreenRecordingOptions.Clarity.values()
-        options = options.copy(clarity = values[(options.clarity.ordinal + 1) % values.size])
+        val values = options.clarityOptions
+        val current = if (options.format.animated) options.animatedClarity else options.clarity
+        val next = values[(values.indexOf(current).coerceAtLeast(0) + 1) % values.size]
+        options = if (options.format.animated) options.copy(animatedClarity = next) else options.copy(clarity = next)
     }
 
     private fun cycleFrameRate() {
-        val values = listOf(15, 24, 30, 60)
-        val index = values.indexOf(options.frameRate).takeIf { it >= 0 } ?: 2
-        options = options.copy(frameRate = values[(index + 1) % values.size])
+        val values = options.frameRateOptions
+        val current = options.effectiveFrameRate
+        val index = values.indexOf(current).takeIf { it >= 0 } ?: 0
+        val next = values[(index + 1) % values.size]
+        options = if (options.format.animated) options.copy(animatedFrameRate = next) else options.copy(frameRate = next)
     }
 
     private fun cycleQuality() {
         val values = listOf(40, 60, 80, 100)
         val index = values.indexOf(options.quality).takeIf { it >= 0 } ?: 2
         options = options.copy(quality = values[(index + 1) % values.size])
+    }
+
+    private fun cycleLoop() {
+        options = options.copy(loopAnimated = !options.loopAnimated)
     }
 
     private fun cycleAudio() {

@@ -13,23 +13,38 @@ import java.io.File
  * Publishes a finished recording.
  *
  * Snow Shot writes straight into a recording folder and can copy the file to the clipboard.
- * Android has no file clipboard entry, so the phone build inserts into `Movies/VoxFix` (visible in
- * the gallery) and falls back to the app-specific movies folder when MediaStore refuses.
+ * Android has no file clipboard entry, so the phone build inserts into `Movies/VoxFix` (MP4) or
+ * `Pictures/VoxFix` (GIF / APNG / WebP) and falls back to the app-specific folder when MediaStore
+ * refuses.
  */
 internal object ScreenRecordingLibrary {
     data class Saved(val uri: Uri?, val displayPath: String)
 
+    private data class Target(val video: Boolean, val mime: String, val directory: String)
+
+    private fun targetOf(file: File): Target = when (file.extension.lowercase()) {
+        "gif" -> Target(false, "image/gif", Environment.DIRECTORY_PICTURES)
+        "apng" -> Target(false, "image/apng", Environment.DIRECTORY_PICTURES)
+        "webp" -> Target(false, "image/webp", Environment.DIRECTORY_PICTURES)
+        else -> Target(true, "video/mp4", Environment.DIRECTORY_MOVIES)
+    }
+
+    private fun mimeOf(file: File): String = targetOf(file).mime
+
     fun save(context: Context, source: File): Saved? {
         if (!source.isFile || source.length() <= 0) return null
+        val target = targetOf(source)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val resolver = context.contentResolver
+            val collection = if (target.video) MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
             val values = ContentValues().apply {
-                put(MediaStore.Video.Media.DISPLAY_NAME, source.name)
-                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-                put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/VoxFix")
-                put(MediaStore.Video.Media.IS_PENDING, 1)
+                put(MediaStore.MediaColumns.DISPLAY_NAME, source.name)
+                put(MediaStore.MediaColumns.MIME_TYPE, target.mime)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "${target.directory}/VoxFix")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
-            val uri = runCatching { resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values) }.getOrNull()
+            val uri = runCatching { resolver.insert(collection, values) }.getOrNull()
             if (uri != null) {
                 val copied = runCatching {
                     resolver.openOutputStream(uri).use { output ->
@@ -39,7 +54,7 @@ internal object ScreenRecordingLibrary {
                 }.isSuccess
                 if (copied) {
                     values.clear()
-                    values.put(MediaStore.Video.Media.IS_PENDING, 0)
+                    values.put(MediaStore.MediaColumns.IS_PENDING, 0)
                     runCatching { resolver.update(uri, values, null, null) }
                     source.delete()
                     return Saved(uri, "相册/VoxFix/${source.name}")
@@ -47,22 +62,25 @@ internal object ScreenRecordingLibrary {
                 runCatching { resolver.delete(uri, null, null) }
             }
         }
-        val directory = File(context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir, "VoxFix")
+        val root = if (target.video) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES
+        val directory = File(context.getExternalFilesDir(root) ?: context.filesDir, "VoxFix")
         if (!directory.isDirectory && !directory.mkdirs()) return null
-        val target = File(directory, source.name)
-        val moved = runCatching { source.renameTo(target) || (source.copyTo(target, overwrite = true).length() > 0) }
+        val destination = File(directory, source.name)
+        val moved = runCatching { source.renameTo(destination) || (source.copyTo(destination, overwrite = true).length() > 0) }
             .getOrDefault(false)
         if (!moved) return null
         source.delete()
-        return Saved(null, target.absolutePath)
+        return Saved(null, destination.absolutePath)
     }
 
     fun open(context: Context, uri: Uri?, path: String?): Boolean = try {
+        val file = path?.let { File(it) }
+        val mime = file?.let { mimeOf(it) } ?: "video/mp4"
         val intent = if (uri != null) {
-            Intent(Intent.ACTION_VIEW).setDataAndType(uri, "video/mp4")
+            Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         } else {
-            Intent(Intent.ACTION_VIEW).setDataAndType(Uri.fromFile(File(checkNotNull(path))), "video/mp4")
+            Intent(Intent.ACTION_VIEW).setDataAndType(Uri.fromFile(checkNotNull(file)), mime)
         }
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
@@ -76,7 +94,8 @@ internal object ScreenRecordingLibrary {
      *
      * Viewing the MediaStore video collection resolved to a chooser of video players on the K60
      * (Tencent Video, NetEase Music, …), which is not a folder view at all. Open the system gallery
-     * first — that is where `Movies/VoxFix` shows up — and keep the collection view as a fallback.
+     * first — that is where `Movies/VoxFix` and `Pictures/VoxFix` show up — and keep the collection
+     * view as a fallback.
      */
     fun openFolder(context: Context): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

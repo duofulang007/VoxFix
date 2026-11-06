@@ -34,7 +34,13 @@ internal object ScreenshotProjection {
 
     fun request(context: Context, title: String, ready: (MediaProjection, () -> Unit) -> Unit,
                 failed: (String) -> Unit, microphone: Boolean = false): Int {
-        check(pending == null)
+        // A request can outlive the service instance that asked for it (the accessibility service
+        // is rebuilt by the system). Dropping the stale one keeps a late consent from being
+        // delivered into a destroyed service and from crashing the caller.
+        pending?.let { stale ->
+            pending = null
+            runCatching { stale.stop?.invoke() }
+        }
         val id = ++next
         pending = Request(id, title, microphone, ready, failed)
         try {
@@ -45,6 +51,24 @@ internal object ScreenshotProjection {
             throw error
         }
         return id
+    }
+
+    /**
+     * The owning service is being destroyed.
+     *
+     * While the consent UI is still open the request is kept: the system may recreate the service
+     * before the grant arrives, and the callback now routes to whichever instance is alive. Only a
+     * request that can no longer be delivered is dropped.
+     */
+    fun abandonUnlessUiOpen() {
+        val request = pending ?: return
+        if (!request.uiClosed) {
+            android.util.Log.i("VoxFix", "PROJECTION_KEPT id=${request.id}")
+            return
+        }
+        android.util.Log.i("VoxFix", "PROJECTION_ABANDON id=${request.id}")
+        pending = null
+        runCatching { request.stop?.invoke() }
     }
 
     fun title(id: Int) = pending?.takeIf { it.id == id }?.title
@@ -58,13 +82,18 @@ internal object ScreenshotProjection {
 
     fun connect(id: Int, projection: MediaProjection, stop: () -> Unit) {
         val request = pending?.takeIf { it.id == id }
-        if (request == null) { stop(); return }
+        if (request == null) {
+            android.util.Log.w("VoxFix", "PROJECTION_CONNECT_STALE id=$id pending=${pending?.id}")
+            stop(); return
+        }
         request.projection = projection
         request.stop = stop
         deliver(request)
     }
 
     private fun deliver(request: Request) {
+        android.util.Log.i("VoxFix", "PROJECTION_DELIVER id=${request.id} closed=${request.uiClosed} " +
+            "projection=${request.projection != null} stop=${request.stop != null}")
         if (!request.uiClosed) return
         val projection = request.projection ?: return
         val stop = request.stop ?: return

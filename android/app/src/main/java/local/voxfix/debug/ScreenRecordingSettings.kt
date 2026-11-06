@@ -20,10 +20,25 @@ internal data class ScreenRecordingOptions(
     val quality: Int = 80,
     val microphone: Boolean = false,
     val systemAudio: Boolean = true,
-    val startDelaySeconds: Int = 0
+    val startDelaySeconds: Int = 0,
+    // Upstream keeps separate export settings for animated images (`animated_image_clarity`,
+    // `animated_image_frame_rate`, `loop_animated_images`): 720p, 10 fps and looping on by default.
+    val animatedClarity: Clarity = Clarity.HD_720,
+    val animatedFrameRate: Int = 10,
+    val loopAnimated: Boolean = true
 ) {
     enum class Format(val extension: String, val hasAudio: Boolean, val label: String) {
-        MP4("mp4", true, "MP4"), GIF("gif", false, "GIF"), APNG("apng", false, "APNG"), WEBP("webp", false, "WebP")
+        MP4("mp4", true, "MP4"), GIF("gif", false, "GIF"), APNG("apng", false, "APNG"), WEBP("webp", false, "WebP");
+
+        val mime: String
+            get() = when (this) {
+                MP4 -> "video/mp4"
+                GIF -> "image/gif"
+                APNG -> "image/apng"
+                WEBP -> "image/webp"
+            }
+
+        val animated: Boolean get() = this != MP4
     }
 
     enum class Clarity(val maxWidth: Int, val maxHeight: Int, val label: String) {
@@ -31,7 +46,24 @@ internal data class ScreenRecordingOptions(
         HD_720(1280, 720, "720P"), SD_480(854, 480, "480P")
     }
 
+    /** Upstream only exposes 1080p / 720p / 480p for animated images. */
+    val clarityOptions: List<Clarity>
+        get() = if (format.animated) AnimatedClarities else Clarity.values().toList()
+
+    val frameRateOptions: List<Int>
+        get() = if (format.animated) AnimatedFrameRates else VideoFrameRates
+
+    val effectiveClarity: Clarity get() = if (format.animated) animatedClarity else clarity
+
+    val effectiveFrameRate: Int get() = if (format.animated) animatedFrameRate else frameRate
+
     val audioEnabled: Boolean get() = format.hasAudio && (microphone || systemAudio)
+
+    companion object {
+        val AnimatedClarities = listOf(Clarity.FULL_HD, Clarity.HD_720, Clarity.SD_480)
+        val AnimatedFrameRates = listOf(5, 10, 15, 24)
+        val VideoFrameRates = listOf(15, 24, 30, 60)
+    }
 }
 
 internal object ScreenRecordingGeometry {
@@ -94,10 +126,10 @@ internal object ScreenRecordingGeometry {
         return "%02d:%02d:%02d".format(total / 3600, total % 3600 / 60, total % 60)
     }
 
-    fun fileName(timestamp: Long): String {
+    fun fileName(timestamp: Long, extension: String = "mp4"): String {
         val stamp = java.text.SimpleDateFormat("yyyy-MM-dd HH-mm-ss", java.util.Locale.CHINA)
             .format(java.util.Date(timestamp))
-        return "VoxFix 录屏 $stamp.mp4"
+        return "VoxFix 录屏 $stamp.$extension"
     }
 
     /**
@@ -137,7 +169,14 @@ internal class ScreenRecordingPreferences(context: Context) {
             quality = prefs.getInt("quality", defaults.quality).coerceIn(0, 100),
             microphone = prefs.getBoolean("microphone", defaults.microphone),
             systemAudio = prefs.getBoolean("systemAudio", defaults.systemAudio),
-            startDelaySeconds = prefs.getInt("startDelay", defaults.startDelaySeconds).coerceIn(0, 30)
+            startDelaySeconds = prefs.getInt("startDelay", defaults.startDelaySeconds).coerceIn(0, 30),
+            animatedClarity = runCatching {
+                ScreenRecordingOptions.Clarity.valueOf(prefs.getString("animatedClarity", null) ?: defaults.animatedClarity.name)
+            }.getOrDefault(defaults.animatedClarity).takeIf { it in ScreenRecordingOptions.AnimatedClarities }
+                ?: defaults.animatedClarity,
+            animatedFrameRate = prefs.getInt("animatedFrameRate", defaults.animatedFrameRate)
+                .coerceIn(1, 24),
+            loopAnimated = prefs.getBoolean("loopAnimated", defaults.loopAnimated)
         )
     }
 
@@ -150,6 +189,9 @@ internal class ScreenRecordingPreferences(context: Context) {
             .putBoolean("microphone", options.microphone)
             .putBoolean("systemAudio", options.systemAudio)
             .putInt("startDelay", options.startDelaySeconds)
+            .putString("animatedClarity", options.animatedClarity.name)
+            .putInt("animatedFrameRate", options.animatedFrameRate)
+            .putBoolean("loopAnimated", options.loopAnimated)
             .apply()
     }
 }
