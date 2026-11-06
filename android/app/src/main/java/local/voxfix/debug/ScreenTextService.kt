@@ -612,14 +612,16 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         recordingAnnotationParams = params
     }
 
-    /** 标注层是否接收触摸：绘制时可点（笔画入镜），其余时间穿透回下面的应用。 */
+    /** 标注层是否接收触摸与焦点：绘制时可点可输入（样式面板的取值框需要 IME），其余时间穿透。 */
     private fun setAnnotationDrawing(active: Boolean) {
         val view = recordingAnnotation ?: return
         val params = recordingAnnotationParams ?: return
         view.setDrawing(active)
         params.flags = if (active)
-            params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-        else params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            params.flags and (WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE).inv()
+        else params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
         runCatching { windows.updateViewLayout(view, params) }
         recordingControl?.setAnnotationEnabled(active)
         android.util.Log.i("VoxFix", "RECORDING_ANNOTATION active=$active")

@@ -92,6 +92,11 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
         private set
     /** Endpoint hints help continue a stroke while editing; the recording overlay turns them off. */
     internal var showPenFeedback=true
+    /**
+     * The eyedropper samples the screenshot base; over a live recording the base is transparent, so
+     * the annotation layer turns it off and the palette hides the button instead of faking a colour.
+     */
+    internal var colorSamplingEnabled=true
     var tool: ScreenshotDrawingTool?=null
         set(value) {
             if(field==value) return

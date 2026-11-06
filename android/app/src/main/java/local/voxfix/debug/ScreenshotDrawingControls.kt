@@ -51,7 +51,8 @@ internal class ScreenshotDrawingControls(context: Context,private val drawing: S
         button=chip(label,description=if(label=="颜色") "自定义绘图颜色" else label) {
             val base=style
             drawing.beginStylePreview()
-            ScreenshotColorPicker.show(button,label,value,none,{ drawing.previewStyle(block(base,it),*(if(none) (if(it==null) arrayOf(HAS_FILL) else arrayOf(property,HAS_FILL)) else arrayOf(property))) },drawing::finishStylePreview,sample=drawing::pickColor)
+            ScreenshotColorPicker.show(button,label,value,none,{ drawing.previewStyle(block(base,it),*(if(none) (if(it==null) arrayOf(HAS_FILL) else arrayOf(property,HAS_FILL)) else arrayOf(property))) },drawing::finishStylePreview,
+                sample = drawing.takeIf { it.colorSamplingEnabled }?.let { d -> d::pickColor })
         }
         button.stateDescription=if(mixed(property) || (none && mixed(HAS_FILL))) "Mixed" else null
         return button

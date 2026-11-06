@@ -60,6 +60,7 @@ internal object ScreenshotColorPicker {
         val context = anchor.context
         fun dp(n: Int) = (n * context.resources.displayMetrics.density).toInt()
         val panel = ScreenshotColorPanel(context, initial, { preview(if (allowNone && Color.alpha(it) == 0) null else it) }, pattern, patternPreview)
+        panel.sampleAvailable = sample != null
         panel.contentDescription = "$title 调色板"
         val popup = PopupWindow(panel, minOf(dp(232), context.resources.displayMetrics.widthPixels - dp(16)), -2, true).apply {
             elevation = dp(8).toFloat(); setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT)); isOutsideTouchable = true

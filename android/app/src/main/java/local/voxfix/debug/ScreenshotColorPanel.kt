@@ -35,6 +35,12 @@ internal class ScreenshotColorPanel(context: Context, initial: Int, private val 
     val color: Int get() = Color.HSVToColor(alpha, hsv)
     var onCancel: () -> Unit = {}
     var onSample: () -> Unit = {}
+    /** No sampler host (e.g. annotating a live recording) → hide the eyedropper, never fake a colour. */
+    var sampleAvailable = true
+        set(value) {
+            field = value
+            sampler.visibility = if (value) VISIBLE else GONE
+        }
     private var syncing = false
     private var dirtyAlpha = false
     private var dirtyChannels = false
