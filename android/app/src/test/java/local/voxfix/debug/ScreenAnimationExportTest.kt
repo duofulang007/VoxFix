@@ -128,6 +128,90 @@ class ScreenAnimationExportTest {
         assertEquals(4, decoded.frames[0].delayCentiseconds)
     }
 
+    /**
+     * Stable palette: FFmpeg's `gifflags = offsetting | transdiff` writes only the changed rectangle
+     * and turns unchanged pixels inside it into the reserved transparent index.
+     */
+    @Test
+    fun gifWritesOnlyTheChangedRectangleForAStablePalette() {
+        val width = 8
+        val height = 6
+        val quantizer = GifPaletteQuantizer()
+        val base = IntArray(width * height) { if (it % 2 == 0) 0xFF0000 else 0x00FF00 }
+        val changed = base.copyOf()
+        // Invert a 2x2 block: every pixel inside changes, the palette itself does not.
+        for (y in 2..3) for (x in 3..4) {
+            val at = y * width + x
+            changed[at] = if (base[at] == 0xFF0000) 0x00FF00 else 0xFF0000
+        }
+        val first = quantizer.convert(base, width, height)
+        val second = quantizer.convert(changed, width, height)
+        assertArrayEquals("palette must stay stable for the delta path", first.palette, second.palette)
+
+        val output = ByteArrayOutputStream()
+        val encoder = GifEncoder(output, width, height, loop = true)
+        encoder.writeHeader()
+        encoder.writeFrame(first, 100)
+        encoder.writeFrame(second, 100)
+        encoder.finish()
+
+        val decoded = GifReader(output.toByteArray()).read()
+        assertEquals(2, decoded.frames.size)
+        val full = decoded.frames[0]
+        assertEquals(0, full.left)
+        assertEquals(0, full.top)
+        assertEquals(width, full.width)
+        assertEquals(height, full.height)
+        assertFalse(full.transparent)
+        assertArrayEquals(first.indices, full.indices)
+
+        val delta = decoded.frames[1]
+        assertEquals(3, delta.left)
+        assertEquals(2, delta.top)
+        assertEquals(2, delta.width)
+        assertEquals(2, delta.height)
+        assertTrue("changed pixels must be transparent-coded", delta.transparent)
+        for (y in 0 until 2) for (x in 0 until 2) {
+            val expected = second.indices[(2 + y) * width + 3 + x]
+            assertEquals("pixel ($x,$y) must carry the new index", expected, delta.indices[y * 2 + x])
+        }
+    }
+
+    @Test
+    fun gifCollapsesUnchangedFramesToOneTransparentPixel() {
+        val width = 16
+        val height = 12
+        val quantizer = GifPaletteQuantizer()
+        val pixels = IntArray(width * height) { if (it % 3 == 0) 0x336699 else 0xFFFFFF }
+        val first = quantizer.convert(pixels, width, height)
+        val again = quantizer.convert(pixels, width, height)
+
+        val output = ByteArrayOutputStream()
+        val encoder = GifEncoder(output, width, height, loop = true)
+        encoder.writeHeader()
+        encoder.writeFrame(first, 100)
+        encoder.writeFrame(again, 100)
+        encoder.finish()
+
+        val bytes = output.toByteArray()
+        val decoded = GifReader(bytes).read()
+        assertEquals(2, decoded.frames.size)
+        val still = decoded.frames[1]
+        assertEquals(1, still.width)
+        assertEquals(1, still.height)
+        assertTrue(still.transparent)
+        assertEquals(255, still.indices[0].toInt() and 0xFF)
+        // One full frame plus one transparent pixel must stay well under two full frames.
+        val oneFrame = ByteArrayOutputStream()
+        GifEncoder(oneFrame, width, height, loop = true).let {
+            it.writeHeader()
+            it.writeFrame(first, 100)
+            it.finish()
+        }
+        assertTrue("still frame must not cost a full image",
+            bytes.size < oneFrame.size() + 1_024)
+    }
+
     // ---- APNG ----------------------------------------------------------------------------------
 
     @Test
@@ -276,7 +360,15 @@ class ScreenAnimationExportTest {
         return buffer.array()
     }
 
-    private class GifFrame(val indices: ByteArray, val delayCentiseconds: Int)
+    private class GifFrame(
+        val left: Int,
+        val top: Int,
+        val width: Int,
+        val height: Int,
+        val indices: ByteArray,
+        val delayCentiseconds: Int,
+        val transparent: Boolean
+    )
 
     private class GifDecoded(
         val width: Int,
@@ -295,7 +387,10 @@ class ScreenAnimationExportTest {
             position = 6
             val width = readShort()
             val height = readShort()
+            val packed = bytes[position].toInt() and 0xFF
             position += 3 // packed, background, aspect
+            // The writer emits a 256-entry global colour table on the first frame.
+            if (packed and 0x80 != 0) position += 3 * (1 shl ((packed and 0x07) + 1))
             var loops = false
             val frames = ArrayList<GifFrame>()
             while (position < bytes.size) {
@@ -307,6 +402,8 @@ class ScreenAnimationExportTest {
                         position++
                         if (label == 0xF9) {
                             val size = bytes[position].toInt() and 0xFF
+                            val flags = bytes[position + 1].toInt() and 0xFF
+                            pendingTransparent = flags and 0x01 != 0
                             val delay = (bytes[position + 2].toInt() and 0xFF) or
                                 ((bytes[position + 3].toInt() and 0xFF) shl 8)
                             // Size byte + `size` data bytes + the zero-length block terminator.
@@ -324,7 +421,8 @@ class ScreenAnimationExportTest {
                     }
                     0x2C -> {
                         position++
-                        position += 4 // left, top
+                        val left = readShort()
+                        val top = readShort()
                         val frameWidth = readShort()
                         val frameHeight = readShort()
                         val packed = bytes[position].toInt() and 0xFF
@@ -336,8 +434,10 @@ class ScreenAnimationExportTest {
                         position++
                         val data = readSubBlocks()
                         val indices = decodeLzw(data, minimumCodeSize, frameWidth * frameHeight)
-                        frames.add(GifFrame(indices, pendingDelay))
+                        frames.add(GifFrame(left, top, frameWidth, frameHeight, indices,
+                            pendingDelay, pendingTransparent))
                         pendingDelay = 0
+                        pendingTransparent = false
                     }
                     else -> error("未知 GIF 块 0x${Integer.toHexString(marker)} @ $position")
                 }
@@ -346,6 +446,7 @@ class ScreenAnimationExportTest {
         }
 
         private var pendingDelay = 0
+        private var pendingTransparent = false
 
         private fun readShort(): Int {
             val value = (bytes[position].toInt() and 0xFF) or ((bytes[position + 1].toInt() and 0xFF) shl 8)

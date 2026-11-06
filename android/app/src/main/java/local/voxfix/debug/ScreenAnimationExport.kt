@@ -29,6 +29,8 @@ import java.util.zip.Deflater
 
 private const val BINS = 32 * 32 * 32
 private const val PALETTE_COLORS = 255 // one entry stays free, matching the upstream reserve
+/** The reserved transparent entry (`palette[255] = 0` upstream); never produced as a colour. */
+private const val GIF_TRANSPARENT_INDEX = 255
 private const val PALETTE_RMS_LIMIT = 8L
 private const val BIN_RMS_LIMIT = 32L
 private const val BAYER_SCALE = 3
@@ -248,7 +250,22 @@ internal class GifPaletteQuantizer {
 
 // ---- GIF container ------------------------------------------------------------------------------
 
-/** Minimal GIF89a writer: local colour table per frame, no inter-frame delta optimisation. */
+/**
+ * Minimal GIF89a writer with the two frame optimisations FFmpeg's encoder enables by default.
+ *
+ * Snow Shot writes GIF through FFmpeg from a PAL8 frame whose entry 255 is reserved as the
+ * transparent colour, and turns `gifflags = offsetting | transdiff` off whenever the palette changed
+ * since the previous frame (`gif_palette.rs::GifDeltaState`). This writer mirrors that state machine
+ * (FFmpeg `libavcodec/gif.c`: `gif_crop_opaque`, `honor_transparency`):
+ *
+ * - the first frame's palette becomes the global colour table; a frame whose palette differs from
+ *   the previous frame is written in full and carries a local table;
+ * - a frame that keeps the previous palette is cropped to the bounding box of changed pixels, and
+ *   unchanged pixels inside that box are written as the transparent index.
+ *
+ * A still screen therefore costs one 1×1 transparent frame instead of a full image, which is where
+ * most of the size of a screen recording goes.
+ */
 internal class GifEncoder(
     private val out: OutputStream,
     private val width: Int,
@@ -256,14 +273,61 @@ internal class GifEncoder(
     private val loop: Boolean
 ) {
     private var frames = 0
+    private var headerWritten = false
+    private var globalPalette: IntArray? = null
+    private var previousIndices: ByteArray? = null
+    private var previousPalette: IntArray? = null
 
+    /** The header owns the global colour table, so it can only be written once a palette is known. */
     fun writeHeader() {
+        headerWritten = false
+    }
+
+    fun writeFrame(frame: GifFrame, delayMs: Int) {
+        val palette = frame.palette.copyOf()
+        if (!headerWritten) writeHeaderBlock(palette)
+        // FFmpeg compares indices for the delta, so the optimisation is only valid while the colour
+        // table behind those indices is the same one.
+        val delta = previousPalette?.contentEquals(palette) == true &&
+            previousIndices?.size == frame.indices.size
+        var left = 0
+        var top = 0
+        var areaWidth = width
+        var areaHeight = height
+        var payload = frame.indices
+        if (delta) {
+            val box = changedBox(frame.indices, previousIndices!!)
+            left = box[0]
+            top = box[1]
+            areaWidth = box[2]
+            areaHeight = box[3]
+            payload = transparentUnchanged(frame.indices, previousIndices!!, box)
+        }
+        writeControl(delayMs, transparent = delta)
+        writeImage(left, top, areaWidth, areaHeight,
+            if (palette.contentEquals(globalPalette)) null else palette)
+        writeLzw(payload)
+        previousIndices = frame.indices.copyOf()
+        previousPalette = palette
+        frames++
+    }
+
+    fun finish() {
+        // A recording stopped before the first frame still has to leave a readable file.
+        if (!headerWritten) writeHeaderBlock(null)
+        out.write(0x3B)
+        out.flush()
+    }
+
+    private fun writeHeaderBlock(palette: IntArray?) {
         out.write("GIF89a".toByteArray(Charsets.ISO_8859_1))
         writeShort(width)
         writeShort(height)
-        out.write(0x70) // no global colour table, 8-bit colour resolution
-        out.write(0x00) // background colour index
+        // Global colour table present (0x80) with 256 entries; colour resolution bits 0x70.
+        out.write(if (palette == null) 0x70 else 0xF0 or 0x07)
+        out.write(GIF_TRANSPARENT_INDEX) // background colour = the reserved transparent entry
         out.write(0x00) // pixel aspect ratio
+        if (palette != null) writeColorTable(palette)
         if (loop) {
             out.write(0x21)
             out.write(0xFF)
@@ -274,39 +338,89 @@ internal class GifEncoder(
             writeShort(0) // 0 = repeat forever
             out.write(0x00)
         }
+        globalPalette = palette?.copyOf()
+        headerWritten = true
     }
 
-    fun writeFrame(frame: GifFrame, delayMs: Int) {
+    /** Graphic control extension: disposal "do not dispose", optional transparent index. */
+    private fun writeControl(delayMs: Int, transparent: Boolean) {
         val delay = ((delayMs + 5) / 10).coerceIn(1, 65_535)
-        // Graphic control extension: disposal "do not dispose", no transparency.
         out.write(0x21)
         out.write(0xF9)
         out.write(0x04)
-        out.write(0x04)
+        out.write(0x04 or if (transparent) 0x01 else 0x00)
         writeShort(delay)
+        out.write(GIF_TRANSPARENT_INDEX)
         out.write(0x00)
-        out.write(0x00)
-        // Image descriptor with a 256-entry local colour table.
+    }
+
+    private fun writeImage(left: Int, top: Int, areaWidth: Int, areaHeight: Int, localPalette: IntArray?) {
         out.write(0x2C)
-        writeShort(0)
-        writeShort(0)
-        writeShort(width)
-        writeShort(height)
-        out.write(0x87)
-        val table = IntArray(256)
-        for (i in 0 until 256) table[i] = frame.palette.getOrElse(i) { 0 }
-        for (entry in table) {
+        writeShort(left)
+        writeShort(top)
+        writeShort(areaWidth)
+        writeShort(areaHeight)
+        if (localPalette == null) {
+            out.write(0x00)
+        } else {
+            out.write(0x87) // local colour table, 256 entries
+            writeColorTable(localPalette)
+        }
+    }
+
+    private fun writeColorTable(palette: IntArray) {
+        for (index in 0 until 256) {
+            val entry = palette.getOrElse(index) { 0 }
             out.write(entry shr 16 and 0xFF)
             out.write(entry shr 8 and 0xFF)
             out.write(entry and 0xFF)
         }
-        writeLzw(frame.indices)
-        frames++
     }
 
-    fun finish() {
-        out.write(0x3B)
-        out.flush()
+    /**
+     * Upstream `gif_crop_opaque`: drop equal rows from the top and bottom first, then equal columns
+     * inside the surviving row range. A frame identical to the previous one collapses to one pixel.
+     */
+    private fun changedBox(current: ByteArray, reference: ByteArray): IntArray {
+        var yStart = 0
+        var yEnd = height - 1
+        while (yStart < yEnd && sameRow(current, reference, yStart)) yStart++
+        while (yEnd > yStart && sameRow(current, reference, yEnd)) yEnd--
+        var xStart = 0
+        var xEnd = width - 1
+        while (xStart < xEnd && sameColumn(current, reference, xStart, yStart, yEnd)) xStart++
+        while (xEnd > xStart && sameColumn(current, reference, xEnd, yStart, yEnd)) xEnd--
+        return intArrayOf(xStart, yStart, xEnd - xStart + 1, yEnd - yStart + 1)
+    }
+
+    private fun sameRow(a: ByteArray, b: ByteArray, y: Int): Boolean {
+        val base = y * width
+        for (x in 0 until width) if (a[base + x] != b[base + x]) return false
+        return true
+    }
+
+    private fun sameColumn(a: ByteArray, b: ByteArray, x: Int, from: Int, to: Int): Boolean {
+        for (y in from..to) if (a[y * width + x] != b[y * width + x]) return false
+        return true
+    }
+
+    /** `GF_TRANSDIFF`: pixels equal to the previous frame become the transparent index. */
+    private fun transparentUnchanged(current: ByteArray, reference: ByteArray, box: IntArray): ByteArray {
+        val left = box[0]
+        val top = box[1]
+        val areaWidth = box[2]
+        val areaHeight = box[3]
+        val payload = ByteArray(areaWidth * areaHeight)
+        for (y in 0 until areaHeight) {
+            val row = (top + y) * width + left
+            val target = y * areaWidth
+            for (x in 0 until areaWidth) {
+                val index = current[row + x]
+                payload[target + x] =
+                    if (index == reference[row + x]) GIF_TRANSPARENT_INDEX.toByte() else index
+            }
+        }
+        return payload
     }
 
     val frameCount: Int get() = frames
