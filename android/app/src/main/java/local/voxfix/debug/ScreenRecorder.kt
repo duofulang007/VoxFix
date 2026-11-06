@@ -236,6 +236,17 @@ internal class ScreenRecorder(
             appContext.resources.displayMetrics.densityDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, surface, null, handler
         )
+        // Some ROMs hand back a mirrored display whose buffer differs from the requested size
+        // (for example without the navigation bar). Normalising against the real size keeps the crop
+        // aligned with the on-screen border; the log line is the evidence used in the T28 record.
+        val bufferWidth = virtualDisplay?.display?.width ?: config.screenWidth
+        val bufferHeight = virtualDisplay?.display?.height ?: config.screenHeight
+        android.util.Log.i("VoxFix", "SCREEN_RECORD_GEOMETRY request=${config.screenWidth}x${config.screenHeight} " +
+            "buffer=${bufferWidth}x${bufferHeight} region=${config.crop} output=${config.outputWidth}x${config.outputHeight}")
+        if (bufferWidth != config.screenWidth || bufferHeight != config.screenHeight) {
+            crop = ScreenRecordingGeometry.cropFraction(config.crop.left, config.crop.top,
+                config.crop.right, config.crop.bottom, bufferWidth, bufferHeight, insetPx = 2)
+        }
         inputSurface.release()
 
         startNs = System.nanoTime()
