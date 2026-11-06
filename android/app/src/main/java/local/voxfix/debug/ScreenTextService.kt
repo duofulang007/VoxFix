@@ -52,7 +52,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     }
     private val screenState = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == Intent.ACTION_SCREEN_OFF) { recorder?.stop(); ScreenshotPins.closeAll(); closeSession(); removeHandle(); TranslateRuntime.releaseNow() } else showHandle()
+            if (intent?.action == Intent.ACTION_SCREEN_OFF) { liveRecorder?.stop(); ScreenshotPins.closeAll(); closeSession(); removeHandle(); TranslateRuntime.releaseNow() } else showHandle()
         }
     }
     private val debuggable get() = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -65,8 +65,9 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     private val debugRecord = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != DEBUG_RECORD) return
-            if (intent.getStringExtra("action") == "stop") { recorder?.stop(); return }
-            if (recorder != null || busy || recordingSetup != null) {
+            if (intent.getStringExtra("action") == "stop") { liveRecorder?.stop(); return }
+            clearStaleRecordingBusy()
+            if (liveRecorder != null || busy || recordingSetup != null) {
                 android.util.Log.i("VoxFix", "RECORDING_SETUP_SKIPPED busy=$busy setup=${recordingSetup != null}")
                 return
             }
@@ -93,6 +94,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     override fun onServiceConnected() {
         connected = true
         live = this
+        adoptRunningRecording()
         TranslateRuntime.init(this)
         ScreenshotEditorHost.register(editorHost)
         preferences.registerOnSharedPreferenceChangeListener(this)
@@ -152,7 +154,10 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         return false
     }
     override fun onDestroy() {
-        recorder?.cancel()
+        // The system can rebuild this service mid-recording. Cancelling there threw the capture away
+        // (the file was deleted with no trace), so finalise instead: the user keeps what was recorded.
+        if (liveRecorder != null) android.util.Log.i("VoxFix", "RECORDING_FINALISED_ON_DESTROY")
+        liveRecorder?.stop()
         recorder = null
         // The system can recreate this service while the projection consent dialog is open; drop
         // the live-instance handle so late callbacks never post onto the shut-down worker below.
@@ -312,7 +317,8 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
      * consent and start capturing from this action directly, so the idle stage never existed.
      */
     private fun startRecording(editor: ScreenshotCaptureOverlay, region: Rect) {
-        if (screenshot !== editor || busy || ocrInFlight || scrolling != null || recorder != null ||
+        clearStaleRecordingBusy()
+        if (screenshot !== editor || busy || ocrInFlight || scrolling != null || liveRecorder != null ||
             recordingSetup != null || recordingControl != null) return
         val image = frame ?: return
         if (region.width() < 16 || region.height() < 16) {
@@ -353,7 +359,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         val region = recordingRegion ?: return
         val screen = recordingScreen ?: return
         val options = recordingOptions ?: return
-        if (recorder != null) return
+        if (liveRecorder != null) return
         setRecordingSetupAttached(false)
         ScreenshotProjection.request(this, "录屏", { projection, stop ->
             // Consent can outlive this instance: the system recreates the accessibility service while
@@ -436,12 +442,18 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             main.post { finishRecording(file, duration, message, stopProjection) }
         }
         recorder = active
+        sharedRecorder = active
+        sharedRegion = region
+        sharedScreen = screenWidth to screenHeight
+        sharedOptions = options
+        sharedStartedAtMs = android.os.SystemClock.elapsedRealtime()
         val submitted = runCatching {
             screenshotWorker.execute {
                 val error = active.start()
                 main.post {
                     if (error != null) {
                         recorder = null
+                        sharedRecorder = null
                         busy = false
                         runCatching(stopProjection)
                         Toast.makeText(this, error, Toast.LENGTH_LONG).show()
@@ -455,6 +467,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             // The worker is shut down when the service is destroyed; failing here keeps a late
             // consent result from taking the process down with it.
             recorder = null
+            sharedRecorder = null
             busy = false
             runCatching { active.cancel() }
             runCatching(stopProjection)
@@ -466,6 +479,10 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
 
     private fun finishRecording(file: java.io.File?, duration: Long, message: String?, stopProjection: () -> Unit) {
         recorder = null
+        sharedRecorder = null
+        sharedRegion = null
+        sharedScreen = null
+        sharedOptions = null
         busy = false
         runCatching(stopProjection)
         stopWatchingRecordingRotation()
@@ -599,6 +616,45 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     }
 
     /** Idle-stage teardown: no recording was started. */
+    /**
+     * Re-attaches the bar and border to a recording that outlived its service instance.
+     *
+     * The system rebuilds this service on rotation and around system dialogs; without adoption the
+     * recorder kept running with no visible controls and no rotation watch.
+     */
+    private fun adoptRunningRecording() {
+        val running = sharedRecorder ?: return
+        if (running.isFinishing()) return
+        if (recordingControl != null) return
+        val region = sharedRegion ?: return
+        val options = sharedOptions ?: return
+        android.util.Log.i("VoxFix", "RECORDING_ADOPTED $region")
+        recordingRegion = region
+        recordingScreen = sharedScreen ?: recordingScreen
+        recordingOptions = options
+        busy = true
+        showRecordingArea(region, ScreenRecordingAreaView.State.RECORDING)
+        showRecordingControl(options)
+        val elapsed = (android.os.SystemClock.elapsedRealtime() - sharedStartedAtMs).coerceAtLeast(0)
+        recordingControl?.start(options.audioEnabled && options.microphone, options.format.hasAudio, elapsed)
+        watchRecordingRotation()
+        main.post { recordingControl?.let { control ->
+            recordingControlParams?.let { params -> placeRecordingControl(control, params) }
+        } }
+    }
+
+    /**
+     * A consent result that never comes back leaves [busy] set with no window at all, which makes
+     * every later recording attempt bail out silently. Recover when nothing is actually live.
+     */
+    private fun clearStaleRecordingBusy() {
+        if (!busy) return
+        if (recordingSetup != null || recordingControl != null || liveRecorder != null) return
+        if (screenshot != null || scrolling != null || ocrInFlight) return
+        android.util.Log.w("VoxFix", "RECORDING_BUSY_STALE_RESET")
+        busy = false
+    }
+
     private fun cancelRecordingSetup(message: String? = null) {
         android.util.Log.i("VoxFix", "RECORDING_SETUP_CANCELLED reason=${message ?: "none"}")
         removeRecordingControl()
@@ -647,12 +703,12 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     private fun showRecordingControl(options: ScreenRecordingOptions) {
         if (recordingControl != null) return
         val control = ScreenRecordingControl(this)
-        control.onStop = { recorder?.stop() }
-        control.onCancel = { recorder?.cancel() }
+        control.onStop = { liveRecorder?.stop() }
+        control.onCancel = { liveRecorder?.cancel() }
         control.onStart = { requestRecordingStart() }
         control.onClose = { cancelRecordingSetup("已关闭录屏设置") }
         control.onTogglePause = { paused ->
-            if (paused) recorder?.pause() else recorder?.resume()
+            if (paused) liveRecorder?.pause() else liveRecorder?.resume()
             updateRecordingArea(if (paused) ScreenRecordingAreaView.State.PAUSED
             else ScreenRecordingAreaView.State.RECORDING)
         }
@@ -756,14 +812,14 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             override fun onDisplayRemoved(displayId: Int) {}
             override fun onDisplayChanged(displayId: Int) {
                 if (displayId != Display.DEFAULT_DISPLAY) return
-                if (recorder == null && recordingSetup == null) return
+                if (liveRecorder == null && recordingSetup == null) return
                 @Suppress("DEPRECATION")
                 val rotation = windows.defaultDisplay?.rotation ?: return
                 if (rotation == recordingRotation) return
                 recordingRotation = rotation
-                if (recorder != null) {
+                if (liveRecorder != null) {
                     Toast.makeText(this@ScreenTextService, "屏幕已旋转，录屏结束并保存", Toast.LENGTH_SHORT).show()
-                    recorder?.stop()
+                    liveRecorder?.stop()
                 } else {
                     // The frame is in screen pixels; a rotation would leave it covering the wrong
                     // content, and the projection cannot be re-cropped mid-session.
@@ -1004,5 +1060,26 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         /** Newest bound instance; the system may replace it while a system dialog is in front. */
         @Volatile
         var live: ScreenTextService? = null
+
+        /**
+         * The recording that is actually running.
+         *
+         * It outlives the service instance that started it: the system recreates the accessibility
+         * service (rotation, system dialogs), and an instance-local field left the recorder running
+         * with no bar and no rotation watch — an unstoppable capture.
+         */
+        @Volatile
+        var sharedRecorder: ScreenRecorder? = null
+        @Volatile
+        var sharedRegion: Rect? = null
+        @Volatile
+        var sharedScreen: Pair<Int, Int>? = null
+        @Volatile
+        var sharedOptions: ScreenRecordingOptions? = null
+        @Volatile
+        var sharedStartedAtMs: Long = 0
     }
+
+    /** Instance field first, then the process-wide one. */
+    private val liveRecorder: ScreenRecorder? get() = recorder ?: sharedRecorder
 }

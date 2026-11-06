@@ -424,7 +424,9 @@ internal class ApngEncoder(
         out.setLength(0)
         out.write(PNG_SIGNATURE)
         val header = ByteBuffer.allocate(13).order(ByteOrder.BIG_ENDIAN)
-        header.putInt(width).putInt(height).put(8).put(6).put(0).put(0).put(0)
+        // Colour type 2 (truecolour): a screen recording is opaque, and dropping the alpha byte
+        // removes a quarter of the bytes that would otherwise go through deflate every frame.
+        header.putInt(width).putInt(height).put(8).put(2).put(0).put(0).put(0)
         writeChunk("IHDR", header.array())
         // Animation control: frame count is patched in finish().
         val control = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putInt(0).putInt(if (loop) 0 else 1)
@@ -470,19 +472,56 @@ internal class ApngEncoder(
 
     val frameCount: Int get() = frames
 
+    /**
+     * Filters every row (None / Sub / Up, chosen by the sum of absolute deviations) before deflating.
+     *
+     * Screen content repeats rows and runs, so `Up` turns most of a frame into zeros; without it the
+     * writer managed only ~4 fps and produced a six-megabyte nine-second recording.
+     */
     private fun compressFrame(argb: IntArray): ByteArray {
-        val raw = ByteArray(height * (width * 4 + 1))
+        val stride = width * 3
+        val raw = ByteArray(height * (stride + 1))
+        var row = ByteArray(stride)
+        var previous = ByteArray(stride)
+        val none = ByteArray(stride)
+        val sub = ByteArray(stride)
+        val up = ByteArray(stride)
         var offset = 0
         for (y in 0 until height) {
-            raw[offset++] = 0 // filter: none
-            val row = y * width
+            val base = y * width
             for (x in 0 until width) {
-                val pixel = argb[row + x]
-                raw[offset++] = (pixel shr 16 and 0xFF).toByte()
-                raw[offset++] = (pixel shr 8 and 0xFF).toByte()
-                raw[offset++] = (pixel and 0xFF).toByte()
-                raw[offset++] = 0xFF.toByte()
+                val pixel = argb[base + x]
+                row[x * 3] = (pixel shr 16 and 0xFF).toByte()
+                row[x * 3 + 1] = (pixel shr 8 and 0xFF).toByte()
+                row[x * 3 + 2] = (pixel and 0xFF).toByte()
             }
+            var scoreNone = 0L
+            var scoreSub = 0L
+            var scoreUp = 0L
+            for (i in 0 until stride) {
+                val value = row[i].toInt() and 0xFF
+                none[i] = value.toByte()
+                val left = if (i >= 3) row[i - 3].toInt() and 0xFF else 0
+                sub[i] = (value - left).toByte()
+                val above = previous[i].toInt() and 0xFF
+                up[i] = (value - above).toByte()
+                scoreNone += Math.abs(value)
+                scoreSub += Math.abs(sub[i].toInt())
+                scoreUp += Math.abs(up[i].toInt())
+            }
+            // Ties go to `Up`: a repeated row then costs a run of zeros.
+            val chosen = when {
+                scoreUp <= scoreNone && scoreUp <= scoreSub -> 2 to up
+                scoreSub <= scoreNone -> 1 to sub
+                else -> 0 to none
+            }
+            raw[offset++] = chosen.first.toByte()
+            System.arraycopy(chosen.second, 0, raw, offset, stride)
+            offset += stride
+            // Swap instead of copying: a 720p frame is ~2.6 MB per row buffer.
+            val swap = previous
+            previous = row
+            row = swap
         }
         val deflater = Deflater(Deflater.BEST_SPEED)
         try {

@@ -191,8 +191,8 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         rebuildSettings()
     }
 
-    fun start(microphoneOn: Boolean, microphoneAvailable: Boolean) {
-        startedAt = SystemClock.elapsedRealtime()
+    fun start(microphoneOn: Boolean, microphoneAvailable: Boolean, elapsedMs: Long = 0) {
+        startedAt = SystemClock.elapsedRealtime() - elapsedMs
         paused = false
         pausedTotal = 0
         finished = false

@@ -168,9 +168,14 @@ class ScreenshotProjectionActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        if (isFinishing) {
-            if (accepted) Handler(Looper.getMainLooper()).post { ScreenshotProjection.closeUi(id) }
-            else ScreenshotProjection.fail(id, "屏幕采集已取消")
+        if (isChangingConfigurations) return
+        // Some ROMs tear this activity down without the system dialog returning a result (the
+        // accessibility service is recreated at the same moment). Failing here regardless of
+        // `isFinishing` is what keeps the caller from waiting on a grant that will never arrive.
+        if (accepted) {
+            if (isFinishing) Handler(Looper.getMainLooper()).post { ScreenshotProjection.closeUi(id) }
+        } else {
+            ScreenshotProjection.fail(id, "屏幕采集已取消")
         }
     }
 }

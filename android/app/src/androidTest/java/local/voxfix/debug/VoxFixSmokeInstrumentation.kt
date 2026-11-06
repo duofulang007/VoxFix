@@ -45,6 +45,9 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
             if (modelCompare == "screenshot-recording-format") {
                 output.putString("result", ScreenshotRecordingChecks.format(this)); finish(Activity.RESULT_OK,output); return
             }
+            if (modelCompare == "screenshot-recording-latest") {
+                output.putString("result", ScreenshotRecordingChecks.latest(this)); finish(Activity.RESULT_OK,output); return
+            }
             if (modelCompare == "screenshot-recording-pipeline") {
                 output.putString("result", ScreenshotRecordingChecks.pipeline(this)); finish(Activity.RESULT_OK,output); return
             }

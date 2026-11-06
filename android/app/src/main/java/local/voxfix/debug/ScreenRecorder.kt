@@ -100,6 +100,8 @@ internal class ScreenRecorder(
     private var animationWriter: ScreenAnimationWriter? = null
     private var pixelBuffer: ByteBuffer? = null
     private var lastAnimationPtsUs = -1L
+    private var readbackTotalNs = 0L
+    private var readbackFrames = 0
 
     private val muxerLock = Any()
     private var videoFormat: MediaFormat? = null
@@ -125,6 +127,9 @@ internal class ScreenRecorder(
     private var crop = FloatArray(4)
 
     fun isStarted(): Boolean = startNs != 0L
+
+    /** True once stop/cancel has begun; a rebuilt service must not adopt a dying recorder. */
+    fun isFinishing(): Boolean = stopping || finalized
 
     /** Initialises the pipeline. Returns null on success, otherwise a user-facing message. */
     fun start(): String? {
@@ -285,6 +290,10 @@ internal class ScreenRecorder(
         lastDrawnNs = 0L
 
         if (config.audioRequested) startAudio()
+        if (animationWriter != null) {
+            nextAnimationTickMs = android.os.SystemClock.uptimeMillis() + frameIntervalMs()
+            handler.postAtTime(animationTick, nextAnimationTickMs)
+        }
         return null
     }
 
@@ -388,12 +397,24 @@ internal class ScreenRecorder(
             texture.updateTexImage()
             texture.getTransformMatrix(texMatrix)
         } catch (_: Exception) { return }
+        // Animation formats need a constant frame rate, not one frame per screen update: a still
+        // screen produces no SurfaceTexture callbacks at all (measured 4 fps of a requested 10).
+        // Their frames are emitted by [animationTick] instead.
+        if (animationWriter != null) return
         val now = System.nanoTime()
         if (paused) { lastDrawnNs = now; return }
         val interval = 1_000_000_000L / config.frameRate.coerceIn(5, 60)
         if (lastDrawnNs != 0L && now - lastDrawnNs < interval) return
         lastDrawnNs = now
         val ptsUs = ScreenRecordingGeometry.presentationTimeUs(now, startNs, pausedNowNs())
+        drawFrame()
+        EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, ptsUs * 1_000)
+        if (!EGL14.eglSwapBuffers(eglDisplay, eglSurface)) return
+        drainVideo(false)
+    }
+
+    /** Draws the current OES frame into the EGL surface with the recording crop applied. */
+    private fun drawFrame() {
         GLES20.glViewport(0, 0, config.outputWidth, config.outputHeight)
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
@@ -411,14 +432,39 @@ internal class ScreenRecorder(
         GLES20.glVertexAttribPointer(position, 2, GLES20.GL_FLOAT, false, 8, positionBuffer)
         GLES20.glVertexAttribPointer(texCoord, 2, GLES20.GL_FLOAT, false, 8, texCoordBuffer)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-        if (animationWriter != null) {
-            captureAnimationFrame(ptsUs)
-            return
-        }
-        EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, ptsUs * 1_000)
-        if (!EGL14.eglSwapBuffers(eglDisplay, eglSurface)) return
-        drainVideo(false)
     }
+
+    /**
+     * Emits one animation frame per interval, repeating the last captured texture when the screen is
+     * idle. Upstream records at a constant fps, so this is also the faithful behaviour.
+     */
+    private var nextAnimationTickMs = 0L
+
+    private val animationTick = object : Runnable {
+        override fun run() {
+            if (stopping) return
+            if (animationWriter == null) return
+            try {
+                if (!paused) {
+                    val ptsUs = ScreenRecordingGeometry.presentationTimeUs(
+                        System.nanoTime(), startNs, pausedNowNs())
+                    drawFrame()
+                    captureAnimationFrame(ptsUs)
+                }
+            } catch (error: Throwable) {
+                android.util.Log.w("VoxFix", "SCREEN_RECORD_ANIMATION_TICK_FAILED", error)
+            }
+            // Fixed cadence, not "work + interval": waiting after the 40 ms readback and 25 ms encode
+            // turned a requested 10 fps into 6. If a tick genuinely overruns, skip ahead rather than
+            // firing a burst to catch up.
+            val now = android.os.SystemClock.uptimeMillis()
+            nextAnimationTickMs += frameIntervalMs()
+            if (nextAnimationTickMs < now) nextAnimationTickMs = now + frameIntervalMs()
+            handler.postAtTime(this, nextAnimationTickMs)
+        }
+    }
+
+    private fun frameIntervalMs(): Long = (1_000L / config.frameRate.coerceIn(1, 60)).coerceAtLeast(16)
 
     /**
      * Reads the drawn frame back and hands it to the animation writer.
@@ -428,6 +474,7 @@ internal class ScreenRecorder(
      */
     private fun captureAnimationFrame(ptsUs: Long) {
         val writer = animationWriter ?: return
+        val readbackStarted = System.nanoTime()
         val width = config.outputWidth
         val height = config.outputHeight
         val bytes = width * height * 4
@@ -450,10 +497,17 @@ internal class ScreenRecorder(
                 pixels[target + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
             }
         }
+        readbackTotalNs += System.nanoTime() - readbackStarted
+        readbackFrames++
+        if (readbackFrames % 20 == 0) {
+            android.util.Log.i("VoxFix", "ANIMATION_READBACK frames=$readbackFrames " +
+                "avgMs=${readbackTotalNs / readbackFrames / 1_000_000}")
+        }
         val delay = if (lastAnimationPtsUs < 0) 1_000 / config.frameRate.coerceIn(1, 60)
         else ((ptsUs - lastAnimationPtsUs) / 1_000).coerceIn(10, 65_535).toInt()
-        lastAnimationPtsUs = ptsUs
-        writer.addFrame(pixels, delay)
+        // The timestamp only advances for frames the writer actually took, so a dropped frame turns
+        // into a longer delay on the next one instead of shortening the animation.
+        if (writer.addFrame(pixels, delay)) lastAnimationPtsUs = ptsUs
     }
 
     private fun pausedNowNs(): Long = synchronized(stateLock) {
@@ -632,6 +686,7 @@ internal class ScreenRecorder(
     private fun finalizeRecording(cancel: Boolean) {
         if (finalized) return
         finalized = true
+        handler.removeCallbacks(animationTick)
         val file = outputFile
         val duration = durationMs()
         audioRunning = false
@@ -689,6 +744,7 @@ internal class ScreenRecorder(
 
     private fun releaseAll() {
         audioRunning = false
+        if (::handler.isInitialized) handler.removeCallbacks(animationTick)
         animationWriter?.abort()
         animationWriter = null
         pixelBuffer = null

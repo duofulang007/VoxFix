@@ -204,6 +204,69 @@ internal object ScreenshotRecordingChecks {
     }
 
     /**
+     * Decodes the newest `Pictures/VoxFix` animated recording with the platform decoder.
+     *
+     * The container tests use synthetic frames; this one proves the file a real recording produced is
+     * readable, and reports the frame count parsed from the container itself.
+     */
+    fun latest(test: Instrumentation): String {
+        val context = test.targetContext
+        val uri = context.contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.SIZE),
+            "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
+            arrayOf("${android.os.Environment.DIRECTORY_PICTURES}/VoxFix%"),
+            "${MediaStore.MediaColumns.DATE_ADDED} DESC")?.use { cursor ->
+            if (!cursor.moveToFirst()) null
+            else Triple(android.content.ContentUris.withAppendedId(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cursor.getLong(0)), cursor.getString(1),
+                cursor.getLong(2))
+        } ?: error("Pictures/VoxFix 里没有动画成品")
+        val name = uri.second
+        val local = File(context.cacheDir, name)
+        context.contentResolver.openInputStream(uri.first)?.use { input ->
+            local.outputStream().use { output -> input.copyTo(output) }
+        } ?: error("无法读取成品")
+        val bytes = local.readBytes()
+        val info = animatedInfo(local)
+        val frames = when {
+            // GIF: graphic control extension, always written as 21 F9 04 by the encoder.
+            name.endsWith(".gif") -> countTag(bytes, byteArrayOf(0x21, 0xF9.toByte(), 0x04))
+            name.endsWith(".apng") -> countAscii(bytes, "fcTL")
+            else -> countAscii(bytes, "ANMF")
+        }
+        check(frames > 0) { "$name 里没有动画帧" }
+        check(info.contains("size=")) { "$name 解码失败：$info" }
+        local.delete()
+        return "SCREENSHOT_RECORDING_LATEST_PASS:$name:bytes=${uri.third}:frames=$frames:$info"
+    }
+
+    private fun countTag(bytes: ByteArray, tag: ByteArray): Int {
+        var found = 0
+        var index = 0
+        while (index + tag.size <= bytes.size) {
+            var match = true
+            for (i in tag.indices) if (bytes[index + i] != tag[i]) { match = false; break }
+            if (match) found++
+            index++
+        }
+        return found
+    }
+
+    private fun countAscii(bytes: ByteArray, tag: String): Int {
+        val pattern = tag.toByteArray(Charsets.US_ASCII)
+        var found = 0
+        var index = 0
+        while (index + pattern.size <= bytes.size) {
+            var match = true
+            for (i in pattern.indices) if (bytes[index + i] != pattern[i]) { match = false; break }
+            if (match) found++
+            index++
+        }
+        return found
+    }
+
+    /**
      * The animated recording pipeline without MediaProjection: an EGL pbuffer, a real `glReadPixels`
      * readback with the row flip, and the writer thread. MediaProjection consent cannot be granted
      * from instrumentation, so this is the automated half; the consent flow stays on the manual list.

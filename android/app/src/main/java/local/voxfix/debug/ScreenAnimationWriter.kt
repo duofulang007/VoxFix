@@ -37,6 +37,8 @@ internal class ScreenAnimationWriter(
     private var webp: WebpAnimationWriter? = null
     private var quantizer: GifPaletteQuantizer? = null
     private var bitmap: Bitmap? = null
+    private var encodedTotalNs = 0L
+    private var encodedFrames = 0
 
     private lateinit var thread: Thread
 
@@ -128,7 +130,14 @@ internal class ScreenAnimationWriter(
                     frame to delay
                 }
                 if (frame != null) {
+                    val started = System.nanoTime()
                     write(frame, delay)
+                    encodedTotalNs += System.nanoTime() - started
+                    encodedFrames++
+                    if (encodedFrames % 20 == 0) {
+                        android.util.Log.i("VoxFix", "ANIMATION_ENCODE frames=$encodedFrames " +
+                            "avgMs=${encodedTotalNs / encodedFrames / 1_000_000} format=${format.extension}")
+                    }
                     continue
                 }
                 if (closing) break
