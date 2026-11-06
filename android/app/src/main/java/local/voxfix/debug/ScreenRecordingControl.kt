@@ -37,6 +37,9 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
     var onReleased: (() -> Unit)? = null
     /** Screen-space drag deltas from the grip, so the bar can be moved off the recorded content. */
     var onDrag: ((Float, Float) -> Unit)? = null
+    /** 标注：上游把绘制工具接在录制选区窗口上，手机侧由服务切一层标注覆盖窗。 */
+    var onToggleAnnotation: ((Boolean) -> Unit)? = null
+    private var annotationActive = false
 
     private val handler = Handler(Looper.getMainLooper())
     private val bar = LinearLayout(context)
@@ -64,6 +67,20 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         background = buttonBackground(false, false)
         isClickable = true
         isFocusable = true
+        layoutParams = LayoutParams(dp(36), dp(32)).apply { marginStart = dp(4) }
+    }
+    /** 标注开关：录制中可把画面切成绘制层（上游工具栏的绘制工具组）。 */
+    private val annotation = android.widget.ImageView(context).apply {
+        setImageResource(R.drawable.snow_pen)
+        setColorFilter(Color.WHITE, android.graphics.PorterDuff.Mode.SRC_IN)
+        contentDescription = "标注"
+        tooltipText = contentDescription
+        scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+        setPadding(dp(7), dp(7), dp(7), dp(7))
+        background = buttonBackground(false, false)
+        isClickable = true
+        isFocusable = true
+        visibility = GONE
         layoutParams = LayoutParams(dp(36), dp(32)).apply { marginStart = dp(4) }
     }
     private val dot = View(context)
@@ -125,6 +142,7 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         close.contentDescription = "关闭录屏设置"
         bar.addView(close)
         bar.addView(microphone)
+        bar.addView(annotation)
         bar.addView(settings)
         start.setOnClickListener { if (!counting) onStart?.invoke() }
         close.setOnClickListener { if (!counting) onClose?.invoke() }
@@ -138,6 +156,7 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         cancel.setOnClickListener { if (!finished) onCancel?.invoke() }
         microphone.setOnClickListener { toggleMicrophone() }
         settings.setOnClickListener { toggleSettings() }
+        annotation.setOnClickListener { toggleAnnotation() }
         addView(bar, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
 
         panel.visibility = GONE
@@ -174,10 +193,32 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         close.visibility = VISIBLE
         microphone.visibility = VISIBLE
         settings.visibility = VISIBLE
+        annotation.visibility = GONE
+        annotationActive = false
         settings.isEnabled = true
         settings.alpha = 1f
         setMicrophone(microphoneOn, microphoneAvailable)
         handler.removeCallbacks(tick)
+    }
+
+    /** 标注开关：只在真正录制时可点；设置阶段、倒计时与结束后都隐藏。 */
+    private fun toggleAnnotation() {
+        if (finished || counting || startedAt == 0L) return
+        annotationActive = !annotationActive
+        paintAnnotation()
+        onToggleAnnotation?.invoke(annotationActive)
+    }
+
+    private fun paintAnnotation() {
+        annotation.background = buttonBackground(annotationActive, false)
+        annotation.contentDescription = if (annotationActive) "退出标注" else "标注"
+        annotation.tooltipText = annotation.contentDescription
+    }
+
+    /** 供服务侧调用：debug 广播或状态恢复时同步标注层的开关。 */
+    fun setAnnotationEnabled(enabled: Boolean) {
+        annotationActive = enabled
+        paintAnnotation()
     }
 
     private fun showSetupVisibility() {
@@ -202,6 +243,9 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         pause.visibility = VISIBLE
         stop.visibility = VISIBLE
         cancel.visibility = VISIBLE
+        annotationActive = false
+        annotation.visibility = VISIBLE
+        paintAnnotation()
         duration.text = "00:00:00"
         dot.background = GradientDrawable().apply {
             cornerRadius = dp(4).toFloat()
@@ -227,6 +271,8 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         stop.visibility = GONE
         microphone.visibility = GONE
         settings.visibility = GONE
+        annotation.visibility = GONE
+        annotationActive = false
         cancel.visibility = VISIBLE
         closeSettings()
         cancel.text = "取消"
@@ -302,6 +348,8 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         cancel.visibility = GONE
         microphone.visibility = GONE
         settings.visibility = GONE
+        annotation.visibility = GONE
+        annotationActive = false
         closeSettings()
         stop.text = "查看"
         stop.contentDescription = "查看录屏"
@@ -322,6 +370,8 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         microphone.visibility = GONE
         stop.visibility = GONE
         settings.visibility = GONE
+        annotation.visibility = GONE
+        annotationActive = false
         closeSettings()
         cancel.text = "关闭"
         cancel.contentDescription = "关闭录屏提示"

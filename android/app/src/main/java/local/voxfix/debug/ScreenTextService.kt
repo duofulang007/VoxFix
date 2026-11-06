@@ -66,6 +66,14 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != DEBUG_RECORD) return
             if (intent.getStringExtra("action") == "stop") { liveRecorder?.stop(); return }
+            if (intent.getStringExtra("action") == "annotate") {
+                // Debug-only path so the annotation layer can be exercised without hunting the bar.
+                val params = recordingAnnotationParams
+                val touchable = params != null &&
+                    params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE == 0
+                setAnnotationDrawing(!touchable)
+                return
+            }
             clearStaleRecordingBusy()
             if (liveRecorder != null || busy || recordingSetup != null) {
                 android.util.Log.i("VoxFix", "RECORDING_SETUP_SKIPPED busy=$busy setup=${recordingSetup != null}")
@@ -300,6 +308,8 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     private var recordingControl: ScreenRecordingControl? = null
     private var recordingControlParams: WindowManager.LayoutParams? = null
     private var recordingArea: ScreenRecordingAreaView? = null
+    private var recordingAnnotation: ScreenRecordingAnnotation? = null
+    private var recordingAnnotationParams: WindowManager.LayoutParams? = null
     private var recordingSetup: ScreenRecordingSetupView? = null
     private var recordingSetupParams: WindowManager.LayoutParams? = null
     private var recordingSetupAttached = false
@@ -369,6 +379,9 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         recordingRegion = region
         recordingScreen = screenWidth to screenHeight
         recordingOptions = options
+        // Created before the setup frame and the bar: overlay windows stack in add order, so the
+        // annotation canvas must go in first to leave the controls on top while drawing.
+        showRecordingAnnotation()
         showRecordingSetup(region, options)
         watchRecordingRotation()
     }
@@ -412,6 +425,8 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         if (recordingControl == null) showRecordingControl(options)
         showRecordingArea(region, ScreenRecordingAreaView.State.COUNTDOWN)
         setRecordingSetupAttached(true)
+        // 标注层只在真正录制时存在：设置阶段与倒计时里没有它。
+        showRecordingAnnotation()
         // The setup stage armed the watch on the instance that owned it; consent can rebuild this
         // service, so arm it again on the instance that now owns the capture.
         watchRecordingRotation()
@@ -510,6 +525,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         runCatching(stopProjection)
         stopWatchingRecordingRotation()
         removeRecordingArea()
+        removeRecordingAnnotation()
         if (file == null) {
             recordingControl?.showFailure(message ?: "录屏已取消")
             message?.let { Toast.makeText(this, it, Toast.LENGTH_SHORT).show() }
@@ -558,10 +574,64 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     private fun updateRecordingArea(state: ScreenRecordingAreaView.State) {
         recordingArea?.setState(state)
     }
-
     private fun removeRecordingArea() {
         recordingArea?.let { runCatching { windows.removeView(it) } }
         recordingArea = null
+    }
+
+    /**
+     * 录制中标注层：上游 `recordingDrawingMode` 把绘制工具接在选区窗口的画布上。
+     *
+     * 手机侧单独一层全屏透明覆盖窗（默认穿透），绘制时切为可触摸；笔画落在覆盖层上，被 MediaProjection
+     * 一起录进视频。工具条画在这层顶部，Android 没有窗口级“排除出录制”，所以它可见时会入镜。
+     */
+    private fun showRecordingAnnotation() {
+        if (recordingAnnotation != null) return
+        val screen = recordingScreen
+            ?: (resources.displayMetrics.widthPixels to resources.displayMetrics.heightPixels)
+        val view = ScreenRecordingAnnotation(this, screen.first, screen.second)
+        view.onExitRequested = { setAnnotationDrawing(false) }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            android.graphics.PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = android.view.Gravity.TOP or android.view.Gravity.START
+            setFitInsetsTypes(0)
+            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+        }
+        if (runCatching { windows.addView(view, params) }.isFailure) {
+            runCatching { view.release() }
+            return
+        }
+        recordingAnnotation = view
+        recordingAnnotationParams = params
+    }
+
+    /** 标注层是否接收触摸：绘制时可点（笔画入镜），其余时间穿透回下面的应用。 */
+    private fun setAnnotationDrawing(active: Boolean) {
+        val view = recordingAnnotation ?: return
+        val params = recordingAnnotationParams ?: return
+        view.setDrawing(active)
+        params.flags = if (active)
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        else params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        runCatching { windows.updateViewLayout(view, params) }
+        recordingControl?.setAnnotationEnabled(active)
+        android.util.Log.i("VoxFix", "RECORDING_ANNOTATION active=$active")
+    }
+
+    private fun removeRecordingAnnotation() {
+        recordingAnnotation?.let { view ->
+            runCatching { windows.removeView(view) }
+            runCatching { view.release() }
+        }
+        recordingAnnotation = null
+        recordingAnnotationParams = null
     }
 
     private fun showRecordingSetup(region: Rect, options: ScreenRecordingOptions) {
@@ -766,6 +836,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             if (saved == null || !ScreenRecordingLibrary.open(this, saved.uri, saved.displayPath))
                 Toast.makeText(this, "找不到录屏文件", Toast.LENGTH_SHORT).show()
         }
+        control.onToggleAnnotation = { active -> setAnnotationDrawing(active) }
         control.onReleased = { removeRecordingControl() }
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
@@ -832,6 +903,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         recordingSaved = null
         removeRecordingSetup()
         removeRecordingArea()
+        removeRecordingAnnotation()
         recordingRegion = null
         recordingOptions = null
         recordingScreen = null

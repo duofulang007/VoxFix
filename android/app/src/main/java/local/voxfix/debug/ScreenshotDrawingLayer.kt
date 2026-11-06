@@ -90,6 +90,8 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
     private val areaStyles=mutableMapOf<Pair<ScreenshotDrawingTool,ScreenshotAreaMode>,ScreenshotDrawingStyle>()
     var style=ScreenshotDrawingStyle()
         private set
+    /** Endpoint hints help continue a stroke while editing; the recording overlay turns them off. */
+    internal var showPenFeedback=true
     var tool: ScreenshotDrawingTool?=null
         set(value) {
             if(field==value) return
@@ -327,7 +329,7 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
         if(tool==ScreenshotDrawingTool.SELECT) selection.draw(canvas)
         if(autoFilterActive) autoFilterSession?.draw(canvas, unit, ::postInvalidateOnAnimation)
         canvas.restore()
-        if(tool==ScreenshotDrawingTool.PEN && (pending==null || continuation!=null))
+        if(tool==ScreenshotDrawingTool.PEN && showPenFeedback && (pending==null || continuation!=null))
             penFeedback.draw(canvas,if(pending==null) history.items.flatMap { ScreenshotPenContinuation.endpoints(it,renderer) } else emptyList())
     }
     override fun onDetachedFromWindow() {
