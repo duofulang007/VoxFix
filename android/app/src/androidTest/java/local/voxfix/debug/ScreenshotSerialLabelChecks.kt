@@ -111,6 +111,13 @@ internal object ScreenshotSerialLabelChecks {
             layer.applyStyle(layer.style.copy(serialShape=ScreenshotSerialShape.CIRCLE))
             val circleControls=ScreenshotDrawingControls(context,layer,{ _,_,_-> },false)
             check(!find(circleControls,"选择字体")!!.isEnabled && find(circleControls,"字号 ${ScreenshotFontSize.format(layer.style.fontSize)}")!!.isEnabled)
+            // Upstream disables (not hides) the number editor for the bare circle; at this point the number is 0.
+            val circleNumber=find(circleControls,"序号 0，可滚轮调整")
+            check(circleNumber!=null && !circleNumber!!.isEnabled) { "无数字圆的编号输入应禁用可见" }
+            find(circleControls,"空心圆")!!.performClick()
+            val restoredControls=ScreenshotDrawingControls(context,layer,{ _,_,_-> },false)
+            val restoredNumber=find(restoredControls,"序号 0，可滚轮调整")
+            check(restoredNumber!=null && restoredNumber!!.isEnabled) { "切回带数字类型后编号输入未恢复" }
             find(circleControls,"绘图颜色 红色")!!.performClick(); check(layer.style.color==0xFFF5222D.toInt())
             find(circleControls,"背景填充 浅蓝")!!.performClick(); check(layer.style.hasFill && layer.style.fillColor==0xFFBAE0FF.toInt())
 

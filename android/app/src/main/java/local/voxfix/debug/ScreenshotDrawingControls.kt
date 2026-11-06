@@ -207,8 +207,15 @@ internal class ScreenshotDrawingControls(context: Context,private val drawing: S
                 })
                 val number=drawing.inspectedObject?.number ?: drawing.nextNumber
                 val numberReadout=if(drawing.mixedNumber) "-" else number.toString()
-                if(mixed(SERIAL_SHAPE) || style.serialShape!=ScreenshotSerialShape.CIRCLE)
-                    row(listOf(wheel(chip("序号 $numberReadout",description="序号 $numberReadout，可滚轮调整") { edit("序号",number.toString()) { value -> value.toLongOrNull()?.let(drawing::setNumber) } },drawing::stepNumber)))
+                // Upstream keeps the number line-edit visible but disabled for the bare circle
+                // (`updateSerialNumberStyleControls`: supportsNumber -> setEnabled(false)).
+                val supportsNumber=mixed(SERIAL_SHAPE) || style.serialShape!=ScreenshotSerialShape.CIRCLE
+                val numberChip=chip("序号 $numberReadout",description="序号 $numberReadout，可滚轮调整") {
+                    edit("序号",number.toString()) { value -> value.toLongOrNull()?.let(drawing::setNumber) }
+                }
+                if(supportsNumber) wheel(numberChip,drawing::stepNumber)
+                else { numberChip.isEnabled=false; numberChip.alpha=.4f }
+                row(listOf(numberChip))
                 if(drawing.selectedIndices.size==1) row(listOf(chip(if(drawing.selected!!.boundTextId==0L) "创建关联文字" else "编辑关联文字") { drawing.editSerialText() }))
             } else if(drawing.selectedIndices.size==1) row(listOf(chip("编辑文字") { drawing.editSelectedText() }))
             run {
