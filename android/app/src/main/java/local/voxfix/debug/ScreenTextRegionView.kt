@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PointF
@@ -257,11 +258,22 @@ internal class ScreenTextRegionView(
         }
         if (rect.isEmpty) return
         val blue = 0xff4096ff.toInt()
-        paint.style = Paint.Style.STROKE; paint.strokeWidth = 2 * density; paint.color = blue
-        if (parts.size > 1) for (part in parts) canvas.drawRect(
-            part.left * width.toFloat() / imageWidth,part.top * height.toFloat() / imageHeight,
-            part.right * width.toFloat() / imageWidth,part.bottom * height.toFloat() / imageHeight,paint)
-        else if (confirmedPath == null) canvas.drawRect(rect, paint)
+        if (smartPreview != null && confirmedPath == null && parts.size <= 1) {
+            // Exploration preview: tinted fill plus a dashed outline, so it reads as "about to pick
+            // this" instead of the solid frame used for a committed selection.
+            paint.style = Paint.Style.FILL; paint.color = 0x2E4096FF
+            canvas.drawRect(rect, paint)
+            paint.style = Paint.Style.STROKE; paint.strokeWidth = 3 * density; paint.color = blue
+            paint.pathEffect = DashPathEffect(floatArrayOf(10 * density, 6 * density), 0f)
+            canvas.drawRect(rect, paint)
+            paint.pathEffect = null
+        } else {
+            paint.style = Paint.Style.STROKE; paint.strokeWidth = 2 * density; paint.color = blue
+            if (parts.size > 1) for (part in parts) canvas.drawRect(
+                part.left * width.toFloat() / imageWidth,part.top * height.toFloat() / imageHeight,
+                part.right * width.toFloat() / imageWidth,part.bottom * height.toFloat() / imageHeight,paint)
+            else if (confirmedPath == null) canvas.drawRect(rect, paint)
+        }
         smartPointer?.let {
             drawSmartLoupe(canvas, it)
             return
@@ -284,12 +296,29 @@ internal class ScreenTextRegionView(
             ScreenshotDocRect(bounds.left, bounds.top, bounds.right, bounds.bottom)
         }
         smartIndex = ScreenshotSmartSelection.targetIndex(smartPath, current, point.x.toInt(), point.y.toInt(), smartWindowMode)
-        val hit = smartPath.getOrNull(smartIndex)
-        smartPreview = hit?.let { RectF(it.left * width.toFloat() / imageWidth, it.top * height.toFloat() / imageHeight,
-            it.right * width.toFloat() / imageWidth, it.bottom * height.toFloat() / imageHeight) }
+        val hit = smartPath.getOrNull(smartIndex)?.let {
+            ScreenshotSmartSelection.padded(it, smartPadPixels, imageWidth, imageHeight)
+        }
+        val next = hit?.let {
+            RectF(it.left * width.toFloat() / imageWidth, it.top * height.toFloat() / imageHeight,
+                it.right * width.toFloat() / imageWidth, it.bottom * height.toFloat() / imageHeight)
+        }
+        // Hit-testing flickers between neighbouring nodes while the finger moves; keep the current
+        // preview until the new target differs by more than the pad.
+        val previous = smartPreview
+        val sticky = previous != null && next != null &&
+            abs(previous.left - next.left) <= smartPadPixels * width / imageWidth &&
+            abs(previous.top - next.top) <= smartPadPixels * height / imageHeight &&
+            abs(previous.right - next.right) <= smartPadPixels * width / imageWidth &&
+            abs(previous.bottom - next.bottom) <= smartPadPixels * height / imageHeight
+        if (!sticky) smartPreview = next
         smartPointer = if (hit == null) null else PointF(x, y)
         invalidate()
     }
+
+    /** Screen-space pad for smart hits: enough for glyph ascenders and the OCR crop. */
+    private val smartPadPixels: Int
+        get() = (6 * density * imageWidth / maxOf(1, width)).toInt().coerceAtLeast(2)
 
     private fun clearSmartPreview() {
         smartPath = emptyList()
@@ -397,7 +426,9 @@ internal class ScreenTextRegionView(
                     else if (abs(downY - rect.bottom) <= 20 * density) edges = edges or 8
                     if (edges == 0) edges = 16
                 } else if (!smartTracking) rect.set(downX, downY, downX, downY)
-                if (smartTracking && (edges == 0 || edges == 16)) previewSmart(downX, downY)
+                // No preview on touch-down: a drag must start as a plain frame. Exploration only
+                // begins after the finger rests past the long-press timeout (see ACTION_MOVE), and a
+                // tap commits through the tap path. Snapping on down made every drag look shifted.
                 invalidate()
             }
             MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> {
@@ -431,12 +462,19 @@ internal class ScreenTextRegionView(
                 val dx = x - downX; val dy = y - downY
                 if (smartTracking) {
                     val held = event.eventTime - pressAt >= ViewConfiguration.getLongPressTimeout()
-                    if (held || dx * dx + dy * dy < slop * slop) {
+                    // Once the finger travels past touch slop the gesture is a manual drag: keep it
+                    // manual even when the long-press timeout has already elapsed, otherwise a
+                    // normal (slow) drag is swallowed by smart exploration and the frame snaps to a
+                    // hit element instead of following the finger.
+                    if (dx * dx + dy * dy >= slop * slop) {
+                        clearSmartPreview()
+                        smartTracking = false
+                        moved = true
+                        if (before.isEmpty) { edges = 0; rect.set(downX, downY, downX, downY) }
+                    } else {
                         if (held) previewSmart(x, y)
                         return true
                     }
-                    clearSmartPreview()
-                    moved = true
                 }
                 if (abs(dx) > slop || abs(dy) > slop) moved = true
                 when (edges) {

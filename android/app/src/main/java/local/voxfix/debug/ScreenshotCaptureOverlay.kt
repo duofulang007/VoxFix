@@ -236,7 +236,11 @@ class ScreenshotCaptureOverlay(
 
     private fun commitSmartSelection(path: List<ScreenshotDocRect>, index: Int) {
         val hit = path.getOrNull(index) ?: return
-        selector.selectRegion(hit.toRect())
+        // Accessibility bounds and ML Kit line boxes hug the glyphs; grow the committed region by
+        // the same pad the preview shows so ascenders and the OCR crop are not clipped.
+        val pad = (6 * context.resources.displayMetrics.density * image.width / maxOf(1, root.width))
+            .toInt().coerceAtLeast(2)
+        selector.selectRegion(ScreenshotSmartSelection.padded(hit, pad, image.width, image.height).toRect())
         smartPath = path
         smartIndex = index
         syncSmartSelection()

@@ -20,6 +20,8 @@ import android.widget.Toast
 
 /** Screenshot-only extraction also sees text inside images beside ordinary UI labels. */
 private const val DEBUG_CAPTURE = "local.voxfix.debug.DEBUG_CAPTURE"
+/** Debug builds only: records a fixed region so crop geometry can be checked without tapping the toolbar. */
+private const val DEBUG_RECORD = "local.voxfix.debug.DEBUG_RECORD"
 
 class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPreferenceChangeListener {
     private val main = Handler(Looper.getMainLooper())
@@ -60,6 +62,28 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             if (intent?.action == DEBUG_CAPTURE) { android.util.Log.i("VoxFix","DEBUG_CAPTURE"); capture() }
         }
     }
+    private val debugRecord = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != DEBUG_RECORD) return
+            if (intent.getStringExtra("action") == "stop") { recorder?.stop(); return }
+            if (recorder != null || busy) return
+            val metrics = resources.displayMetrics
+            debugRecordingRegion = intent.getStringExtra("region")?.split(',')?.mapNotNull { it.toIntOrNull() }
+                ?.takeIf { it.size == 4 }
+                ?.let { Rect(it[0], it[1], it[2], it[3]) }
+                ?: Rect(60, 960, 1020, 1660)
+            val options = recordingPreferences.load()
+            busy = true
+            ScreenshotProjection.request(this@ScreenTextService, "录屏", { projection, stop ->
+                beginRecording(projection, stop, Rect(debugRecordingRegion), metrics.widthPixels,
+                    metrics.heightPixels, options)
+            }, { message ->
+                busy = false
+                Toast.makeText(this@ScreenTextService, message, Toast.LENGTH_SHORT).show()
+            }, microphone = options.microphone)
+        }
+    }
+    private var debugRecordingRegion = Rect()
     private val expire = Runnable {
         if (screenshot?.isEditing == true || screenshot?.isProjectEditor == true) keepSession() else retainText()
     }
@@ -74,9 +98,14 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(screenState, filter, RECEIVER_NOT_EXPORTED)
         else registerReceiver(screenState, filter)
         if (debuggable) {
-            val debugFilter = IntentFilter(DEBUG_CAPTURE)
-            if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(debugCapture, debugFilter, RECEIVER_EXPORTED)
-            else registerReceiver(debugCapture, debugFilter)
+            val debugFilter = IntentFilter(DEBUG_CAPTURE).apply { addAction(DEBUG_RECORD) }
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(debugCapture, debugFilter, RECEIVER_EXPORTED)
+                registerReceiver(debugRecord, debugFilter, RECEIVER_EXPORTED)
+            } else {
+                registerReceiver(debugCapture, debugFilter)
+                registerReceiver(debugRecord, debugFilter)
+            }
         }
         showHandle()
     }
@@ -131,7 +160,10 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         TranslateRuntime.cancel(); TranslateRuntime.releaseNow()
         preferences.unregisterOnSharedPreferenceChangeListener(this)
         runCatching { unregisterReceiver(screenState) }
-        if (debuggable) runCatching { unregisterReceiver(debugCapture) }
+        if (debuggable) {
+            runCatching { unregisterReceiver(debugCapture) }
+            runCatching { unregisterReceiver(debugRecord) }
+        }
         closeSession(); removeHandle(); main.removeCallbacksAndMessages(null)
         screenshotWorker.shutdown()
         super.onDestroy()

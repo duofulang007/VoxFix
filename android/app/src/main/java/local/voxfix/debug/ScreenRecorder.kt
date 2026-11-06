@@ -184,13 +184,25 @@ internal class ScreenRecorder(
         handler.post { finalizeRecording(cancel) }
     }
 
+    /**
+     * Selection in GL texture coordinates.
+     *
+     * `cropFraction` returns a top-down rectangle in screen pixels. An external OES texture is
+     * sampled bottom-up, so the vertical origin must be mirrored; without this the crop window
+     * lands at `screenHeight - bottom` instead of `top` (measured on K60: 737 instead of 969).
+     */
+    private fun glCrop(region: Rect, screenWidth: Int, screenHeight: Int): FloatArray {
+        val fraction = ScreenRecordingGeometry.cropFraction(
+            region.left, region.top, region.right, region.bottom, screenWidth, screenHeight, insetPx = 2)
+        fraction[1] = 1f - fraction[1] - fraction[3]
+        return fraction
+    }
+
     private fun initialize(): String? {
         val file = File(File(appContext.cacheDir, "recordings").apply { mkdirs() },
             ScreenRecordingGeometry.fileName(System.currentTimeMillis()))
         outputFile = file
-        crop = ScreenRecordingGeometry.cropFraction(config.crop.left, config.crop.top,
-            config.crop.right, config.crop.bottom, config.screenWidth, config.screenHeight,
-            insetPx = 2)
+        crop = glCrop(config.crop, config.screenWidth, config.screenHeight)
 
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, config.outputWidth, config.outputHeight)
         format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
@@ -244,8 +256,7 @@ internal class ScreenRecorder(
         android.util.Log.i("VoxFix", "SCREEN_RECORD_GEOMETRY request=${config.screenWidth}x${config.screenHeight} " +
             "buffer=${bufferWidth}x${bufferHeight} region=${config.crop} output=${config.outputWidth}x${config.outputHeight}")
         if (bufferWidth != config.screenWidth || bufferHeight != config.screenHeight) {
-            crop = ScreenRecordingGeometry.cropFraction(config.crop.left, config.crop.top,
-                config.crop.right, config.crop.bottom, bufferWidth, bufferHeight, insetPx = 2)
+            crop = glCrop(config.crop, bufferWidth, bufferHeight)
         }
         inputSurface.release()
 

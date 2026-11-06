@@ -101,5 +101,20 @@ internal class ScreenshotSmartSelection(
         }
 
         private fun Rect.toDocumentRect() = ScreenshotDocRect(left, top, right, bottom)
+
+        /**
+         * Grows a hit rect by [pad] image pixels.
+         *
+         * Hit paths come from accessibility bounds and ML Kit line boxes, which hug the glyphs. Using
+         * them verbatim as the selection clips ascenders and makes the follow-up OCR miss characters,
+         * so both the preview and the committed region use this padded rect.
+         */
+        fun padded(rect: ScreenshotDocRect, pad: Int, width: Int, height: Int): ScreenshotDocRect =
+            ScreenshotDocRect(
+                (rect.left - pad).coerceIn(0, width),
+                (rect.top - pad).coerceIn(0, height),
+                (rect.right + pad).coerceIn(0, width),
+                (rect.bottom + pad).coerceIn(0, height)
+            )
     }
 }
