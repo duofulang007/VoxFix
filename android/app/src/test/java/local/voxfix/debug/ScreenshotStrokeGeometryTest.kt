@@ -167,4 +167,56 @@ class ScreenshotStrokeGeometryTest {
             GeoPoint(5.0, 5.0), GeoPoint(10.0, 10.0), GeoPoint(10.0, 10.0), GeoPoint(20.0, 5.0))
         assertNull(controls)
     }
+
+    /** Same sampling form as the original `free_draw_hit_test` (16 steps per cubic). */
+    private fun sample(start: GeoPoint, controls: Pair<GeoPoint, GeoPoint>, end: GeoPoint): List<GeoPoint> {
+        val points = mutableListOf<GeoPoint>()
+        for (step in 1..16) {
+            val t = step / 16.0
+            val mt = 1.0 - t
+            points.add(GeoPoint(
+                mt * mt * mt * start.x + 3.0 * mt * mt * t * controls.first.x + 3.0 * mt * t * t * controls.second.x + t * t * t * end.x,
+                mt * mt * mt * start.y + 3.0 * mt * mt * t * controls.first.y + 3.0 * mt * t * t * controls.second.y + t * t * t * end.y))
+        }
+        return points
+    }
+
+    @Test fun smoothHitFollowsTheRenderedCurveNotTheChords() {
+        val a = ScreenshotDrawingPoint(0f, 0f)
+        val b = ScreenshotDrawingPoint(200f, 0f)
+        val c = ScreenshotDrawingPoint(100f, 120f)
+        val points = listOf(a, b, c)
+        val vertices = listOf(GeoPoint(0.0, 0.0), GeoPoint(200.0, 0.0), GeoPoint(100.0, 120.0))
+        val reflect = { anchor: GeoPoint, neighbor: GeoPoint -> GeoPoint(anchor.x * 2 - neighbor.x, anchor.y * 2 - neighbor.y) }
+        // Neighbour rules mirror buildPath: open ends reflect, so the first cubic bulges toward c.
+        val edge0 = ScreenshotStrokeGeometry.centripetalControls(
+            reflect(vertices[0], vertices[1]), vertices[0], vertices[1], vertices[2])!!
+        val edge1 = ScreenshotStrokeGeometry.centripetalControls(
+            vertices[0], vertices[1], vertices[2], reflect(vertices[2], vertices[1]))!!
+        val edge2Closed = ScreenshotStrokeGeometry.centripetalControls(
+            vertices[1], vertices[2], vertices[0], vertices[1])!!
+        val curve = sample(vertices[0], edge0, vertices[1]) + sample(vertices[1], edge1, vertices[2])
+
+        fun distanceToCurve(p: GeoPoint) =
+            (curve + sample(vertices[2], edge2Closed, vertices[0])).minOf {
+                ScreenshotStrokeGeometry.distance(p, it)
+            }
+
+        // A probe sitting on the first cubic's mid sample answers; the bare chord under it misses.
+        val onCurve = sample(vertices[0], edge0, vertices[1]).first()
+        val limit = 0.5f + 2f * 0.5f
+        assertTrue(ScreenshotStrokeGeometry.hitTestSmooth(points, false,
+            ScreenshotDrawingPoint(onCurve.x.toFloat(), onCurve.y.toFloat()), 0.5f, 2f))
+        val chordMid = GeoPoint(100.0, 0.0)
+        assertTrue(distanceToCurve(chordMid) > limit)
+        assertFalse(ScreenshotStrokeGeometry.hitTestSmooth(points, false,
+            ScreenshotDrawingPoint(100f, 0f), 0.5f, 2f))
+        // The closed stroke also walks the last->first edge, which the open stroke lacks.
+        val closingMid = sample(vertices[2], edge2Closed, vertices[0]).first { it.y > 40.0 && it.y < 80.0 }
+        assertTrue(distanceToCurve(closingMid) <= limit / 2 + 0.5)
+        assertTrue(ScreenshotStrokeGeometry.hitTestSmooth(points, true,
+            ScreenshotDrawingPoint(closingMid.x.toFloat(), closingMid.y.toFloat()), 0.5f, 2f))
+        assertFalse(ScreenshotStrokeGeometry.hitTestSmooth(points, false,
+            ScreenshotDrawingPoint(closingMid.x.toFloat(), closingMid.y.toFloat()), 0.5f, 2f))
+    }
 }

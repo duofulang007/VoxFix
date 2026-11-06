@@ -194,6 +194,70 @@ internal object ScreenshotStrokeGeometry {
     internal fun toGeo(points: List<ScreenshotDrawingPoint>) = points.map { GeoPoint(it.x.toDouble(), it.y.toDouble()) }
 
     internal fun fromGeo(points: List<GeoPoint>) = points.map { ScreenshotDrawingPoint(it.x.toFloat(), it.y.toFloat()) }
+
+    /**
+     * Upstream `free_draw_bounds`: the canvas bounds come from the laid-out path commands, not the
+     * stored vertices, so a curve's overshoot outside the vertex hull widens the object box.
+     */
+    fun smoothBounds(points: List<ScreenshotDrawingPoint>, closed: Boolean): FloatArray {
+        if(points.isEmpty()) return floatArrayOf(0f,0f,0f,0f)
+        val vertices=points.map { GeoPoint(it.x.toDouble(), it.y.toDouble()) }
+        var left=vertices[0].x; var top=vertices[0].y; var right=left; var bottom=top
+        fun take(x: Double,y: Double) {
+            if(x<left) left=x; if(x>right) right=x; if(y<top) top=y; if(y>bottom) bottom=y
+        }
+        val count=vertices.size
+        val edges=if(closed) count else count-1
+        for(edge in 0 until edges) {
+            val start=vertices[edge]
+            val end=vertices[(edge+1)%count]
+            take(end.x,end.y)
+            val controls=if(count>=2)
+                centripetalControls(neighborBefore(vertices,edge,closed),start,end,neighborAfter(vertices,edge,closed)) else null
+            if(controls!=null) for(step in 1..15) {
+                val t=step/16.0; val mt=1.0-t
+                take(mt*mt*mt*start.x+3.0*mt*mt*t*controls.first.x+3.0*mt*t*t*controls.second.x+t*t*t*end.x,
+                    mt*mt*mt*start.y+3.0*mt*mt*t*controls.first.y+3.0*mt*t*t*controls.second.y+t*t*t*end.y)
+            }
+        }
+        return floatArrayOf(left.toFloat(),top.toFloat(),right.toFloat(),bottom.toFloat())
+    }
+
+    /**
+     * Upstream `free_draw_hit_test`: walk the laid-out path commands — every Catmull-Rom cubic
+     * sampled at 16 steps, straight segments as-is — and answer on `tolerance + stroke_width * 0.5`.
+     * Mirrors [buildPath] edge for edge, so hit follows the rendered curve instead of the stored
+     * polyline chords.
+     */
+    fun hitTestSmooth(points: List<ScreenshotDrawingPoint>, closed: Boolean,
+        p: ScreenshotDrawingPoint, tolerance: Float, strokeWidth: Float): Boolean {
+        if(points.isEmpty()) return false
+        val vertices=points.map { GeoPoint(it.x.toDouble(), it.y.toDouble()) }
+        val point=GeoPoint(p.x.toDouble(),p.y.toDouble())
+        val limit=tolerance.toDouble()+strokeWidth*0.5
+        val count=vertices.size
+        val edges=if(closed) count else count-1
+        for(edge in 0 until edges) {
+            val start=vertices[edge]
+            val end=vertices[(edge+1)%count]
+            val controls=if(count>=2)
+                centripetalControls(neighborBefore(vertices,edge,closed),start,end,neighborAfter(vertices,edge,closed)) else null
+            if(controls==null) {
+                if(distanceToSegment(point,start,end)<=limit) return true
+            } else {
+                var previous=start
+                for(step in 1..16) {
+                    val t=step/16.0; val mt=1.0-t
+                    val sample=GeoPoint(
+                        mt*mt*mt*start.x+3.0*mt*mt*t*controls.first.x+3.0*mt*t*t*controls.second.x+t*t*t*end.x,
+                        mt*mt*mt*start.y+3.0*mt*mt*t*controls.first.y+3.0*mt*t*t*controls.second.y+t*t*t*end.y)
+                    if(distanceToSegment(point,previous,sample)<=limit) return true
+                    previous=sample
+                }
+            }
+        }
+        return false
+    }
 }
 
 /**

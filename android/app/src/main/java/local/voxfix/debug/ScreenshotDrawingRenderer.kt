@@ -107,6 +107,11 @@ internal class ScreenshotDrawingRenderer(private var image: Bitmap, private val 
             val radius=stroke.style.fontSize*fontUnit()*stroke.fontScale*.85f
             return RectF(first.x-radius,first.y-radius,first.x+radius,first.y+radius)
         }
+        if(stroke.tool==ScreenshotDrawingTool.PEN && stroke.smooth) {
+            // Upstream free_draw_bounds measures the laid-out curve, not the vertex hull.
+            val curve=ScreenshotStrokeGeometry.smoothBounds(stroke.points,ScreenshotPenRendering.closed(stroke))
+            return RectF(curve[0]-stroke.width/2,curve[1]-stroke.width/2,curve[2]+stroke.width/2,curve[3]+stroke.width/2)
+        }
         val points=if(stroke.tool==ScreenshotDrawingTool.ARROW) stroke.points+
             ScreenshotArrowRendering.boundsPoints(stroke.points,stroke.style.startHead,true,stroke.width,stroke.style.arrowRatio)+
             ScreenshotArrowRendering.boundsPoints(stroke.points,stroke.style.endHead,false,stroke.width,stroke.style.arrowRatio) else stroke.points
@@ -171,6 +176,9 @@ internal class ScreenshotDrawingRenderer(private var image: Bitmap, private val 
                 if(area.contains(p.x.toInt(),p.y.toInt())) return true
             }
             if(stroke.points.size==1) return hypot(p.x-stroke.points[0].x,p.y-stroke.points[0].y)<=tolerance+stroke.width/2
+            // Upstream free_draw_hit_test samples the laid-out curve, not the stored chords.
+            if(stroke.tool==ScreenshotDrawingTool.PEN && stroke.smooth)
+                return ScreenshotStrokeGeometry.hitTestSmooth(stroke.points,ScreenshotPenRendering.closed(stroke),p,tolerance,stroke.width)
             val segments=stroke.points.zipWithNext().toMutableList()
             if(stroke.tool==ScreenshotDrawingTool.ARROW &&
                 (ScreenshotArrowRendering.hitTest(stroke.points,stroke.style.startHead,true,stroke.width,stroke.style.arrowRatio,p,tolerance) ||

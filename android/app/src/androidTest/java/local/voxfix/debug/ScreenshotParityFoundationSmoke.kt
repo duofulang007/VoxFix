@@ -110,6 +110,15 @@ object ScreenshotParityFoundationSmoke {
                 }
                 check(renderer.hit(closed,ScreenshotDrawingPoint(160f,160f),2f)) { "填充内部不能选中" }
                 val noStroke=render(stroke.copy(color=Color.TRANSPARENT)); check(noStroke.getPixel(40,40)==Color.WHITE); noStroke.recycle()
+                // Upstream free_draw_hit_test samples the laid-out curve (T08); chords no longer answer.
+                val smooth=stroke.copy(points=listOf(ScreenshotDrawingPoint(20f,240f),ScreenshotDrawingPoint(300f,240f),ScreenshotDrawingPoint(160f,60f)),smooth=true)
+                val geo=listOf(ScreenshotStrokeGeometry.GeoPoint(20.0,240.0),ScreenshotStrokeGeometry.GeoPoint(300.0,240.0),ScreenshotStrokeGeometry.GeoPoint(160.0,60.0))
+                val edge0=ScreenshotStrokeGeometry.centripetalControls(ScreenshotStrokeGeometry.GeoPoint(-260.0,240.0),geo[0],geo[1],geo[2])!!
+                fun cubic(t: Double): ScreenshotDrawingPoint { val mt=1.0-t
+                    return ScreenshotDrawingPoint(((mt*mt*mt*geo[0].x)+(3.0*mt*mt*t*edge0.first.x)+(3.0*mt*t*t*edge0.second.x)+(t*t*t*geo[1].x)).toFloat(),
+                        ((mt*mt*mt*geo[0].y)+(3.0*mt*mt*t*edge0.first.y)+(3.0*mt*t*t*edge0.second.y)+(t*t*t*geo[1].y)).toFloat()) }
+                check(renderer.hit(smooth,cubic(0.5),0.5f)) { "平滑笔画未按曲线命中" }
+                check(!renderer.hit(smooth,ScreenshotDrawingPoint(160f,240f),0.5f)) { "平滑笔画仍按折线弦命中" }
             } finally { renderer.close() }
             drawing.history.add(stroke)
             val document=ScreenshotDocument.full(320,320).copy(objects=drawing.history.items)
