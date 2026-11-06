@@ -466,14 +466,14 @@ internal class ScreenTextRegionView(
                 if (smartTracking) {
                     // Once exploration has started it stays exploratory until the finger lifts;
                     // moving during exploration re-targets the preview instead of falling back to a
-                    // manual frame. A drag that starts before the long-press timeout is manual for
-                    // the rest of the gesture.
+                    // manual frame. A drag that crosses the touch slop BEFORE the long-press timeout
+                    // is manual for the rest of the gesture; a finger that rested past the timeout
+                    // explores even when its first move jumps beyond the slop in a single event
+                    // (hold-still-then-drag, restored after the gesture rewrite broke it).
                     if (exploring) { previewSmart(x, y); return true }
                     val held = event.eventTime - pressAt >= ViewConfiguration.getLongPressTimeout()
-                    if (dx * dx + dy * dy < slop * slop) {
-                        if (held) { exploring = true; previewSmart(x, y) }
-                        return true
-                    }
+                    if (held) { exploring = true; previewSmart(x, y); return true }
+                    if (dx * dx + dy * dy < slop * slop) return true
                     clearSmartPreview()
                     moved = true
                     if (before.isEmpty) { edges = 0; rect.set(downX, downY, downX, downY) }

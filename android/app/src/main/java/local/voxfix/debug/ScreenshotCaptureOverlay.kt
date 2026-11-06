@@ -189,12 +189,10 @@ class ScreenshotCaptureOverlay(
         elevation = dp(4).toFloat()
         visibility = View.GONE
     }
-    private val smartTarget = smartButton(R.drawable.snow_select, "选择元素") {
-        selector.smartWindowMode = !selector.smartWindowMode
-        if (smartPath.isNotEmpty()) {
-            commitSmartSelection(smartPath, if (selector.smartWindowMode) smartPath.lastIndex else 0)
-        } else syncSmartSelection()
-    }
+    // Phone-side difference (user request 2026-11-06): the separate element/window toggle button
+    // was removed as redundant — a tap always picks the deepest element and 扩大一层 walks up to
+    // the window, so the bar only carries level navigation. Original toggles the two targets
+    // via a key/menu (screenshotintelligentselectionmodel toggleSelectionTarget).
     private val smartInner = smartButton(R.drawable.snow_region_reduce, "缩小一层") { commitSmartSelection(smartPath, smartIndex - 1) }
     private val smartOuter = smartButton(R.drawable.snow_region_add, "扩大一层") { commitSmartSelection(smartPath, smartIndex + 1) }
 
@@ -252,13 +250,10 @@ class ScreenshotCaptureOverlay(
             resultTool == null && drawing.tool == null && !moveMode && regionShape == ScreenshotRegionShape.RECTANGLE &&
             captureRegion == null
         selector.smartEnabled = visible
-        smartBar.visibility = if (visible) View.VISIBLE else View.GONE
-        smartTarget.setImageResource(if (selector.smartWindowMode) R.drawable.ic_screenshot_fullscreen else R.drawable.snow_select)
-        smartTarget.stateDescription = if (selector.smartWindowMode) "窗口" else "元素"
-        smartTarget.contentDescription = if (selector.smartWindowMode) "切换到元素选择" else "切换到窗口选择"
-        smartTarget.tooltipText = smartTarget.contentDescription
         smartInner.visibility = if (smartIndex > 0 && smartPath.size > 1) View.VISIBLE else View.GONE
         smartOuter.visibility = if (smartIndex < smartPath.lastIndex) View.VISIBLE else View.GONE
+        smartBar.visibility = if (visible &&
+            (smartInner.visibility == View.VISIBLE || smartOuter.visibility == View.VISIBLE)) View.VISIBLE else View.GONE
     }
     private val resultLayer = FrameLayout(context).apply { visibility = View.INVISIBLE }
     private fun surface(radius: Int) = GradientDrawable().apply { setColor(COLOR_PANEL); cornerRadius = dp(radius).toFloat() }
@@ -1390,11 +1385,14 @@ class ScreenshotCaptureOverlay(
                 manual.x.coerceIn(bars.left+dp(8),maxOf(bars.left+dp(8),width-bars.right-toolbarWidth-dp(8))),
                 manual.y.coerceIn(safeTop,maxOf(safeTop,safeBottom-toolbarHeight)))
         } else if(toolbarAnchorKey!=anchorKey) {
-            val reserve=dp(104)
+            // The bar hugs the selection (user request 2026-11-06): below its bottom edge when it
+            // fits, else directly above its top edge. The old 104dp detail-panel reserve pushed
+            // the bar far off a low or tall selection — up to the screen top — which read as a
+            // jump; the detail panel may now overlap the frozen image instead.
             val proposed=when {
-                bottom+toolbarHeight+dp(8)+reserve<=safeBottom -> bottom+dp(8)
-                top-toolbarHeight-dp(8)-reserve>=safeTop -> top-toolbarHeight-dp(8)-reserve
-                else -> safeBottom-toolbarHeight-reserve
+                bottom+toolbarHeight+dp(8)<=safeBottom -> bottom+dp(8)
+                top-toolbarHeight-dp(8)>=safeTop -> top-toolbarHeight-dp(8)
+                else -> safeBottom-toolbarHeight
             }
             val minX = bars.left+dp(8)
             val maxX = maxOf(minX,width-bars.right-toolbarWidth-dp(8))
@@ -1413,7 +1411,7 @@ class ScreenshotCaptureOverlay(
             }
             val panel = if (toolbar.visibility == View.VISIBLE)
                 ScreenshotDocRect(x, y, x+toolbarWidth, y+toolbarHeight) else null
-            val buttonCount = 1 + listOf(smartInner, smartOuter).count { it.visibility == View.VISIBLE }
+            val buttonCount = listOf(smartInner, smartOuter).count { it.visibility == View.VISIBLE }
             val dock = ScreenshotSmartSelection.dock(safe, selection, panel, dp(48)*buttonCount, dp(48), dp(8))
             smartBar.translationX = dock.left.toFloat()
             smartBar.translationY = dock.top.toFloat()

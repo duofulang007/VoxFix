@@ -181,10 +181,11 @@ internal class ScreenshotPinEditor(private val context: Context,private val imag
         val width=minOf(dp(320),root.width-dp(16)).coerceAtLeast(1)
         val x=geometry.left.coerceIn(dp(8),maxOf(dp(8),root.width-width-dp(8)))
         val barHeight=dp(88)
-        val reserve=dp(104)
-        val y=if(geometry.bottom+barHeight+dp(8)+reserve<=safeBottom) geometry.bottom+dp(8)
-            else if(geometry.top-barHeight-dp(8)-reserve>=safeTop) geometry.top-barHeight-dp(8)-reserve
-            else maxOf(safeTop,safeBottom-barHeight-reserve)
+        // Same adjacency rule as the capture toolbar (user request 2026-11-06): the bar hugs the
+        // pinned rect instead of being pushed up by a detail-panel reserve.
+        val y=if(geometry.bottom+barHeight+dp(8)<=safeBottom) geometry.bottom+dp(8)
+            else if(geometry.top-barHeight-dp(8)>=safeTop) geometry.top-barHeight-dp(8)
+            else maxOf(safeTop,safeBottom-barHeight)
         bar.layoutParams=FrameLayout.LayoutParams(width,barHeight).apply { leftMargin=x; topMargin=y }
         val styleHeight=minOf(dp(240),(safeBottom-y-barHeight-dp(8)).coerceAtLeast(1))
         styles.layoutParams=FrameLayout.LayoutParams(width,styleHeight).apply {
