@@ -118,6 +118,16 @@ internal object ScreenRecordingGeometry {
     fun pausedOffsetMicros(nowNs: Long, pauseStartNs: Long, accumulatedNs: Long): Long =
         accumulatedNs + (nowNs - pauseStartNs).coerceAtLeast(0)
 
+    /**
+     * True when the screen rotated away from the orientation the frame was drawn in.
+     *
+     * A capture region is fixed in screen pixels, so a rotation invalidates it: upstream keeps the
+     * recording area fixed and the projection cannot be re-cropped mid-session. Unknown rotations
+     * (-1) never count as a change, so a ROM that refuses to report one cannot cancel a session.
+     */
+    fun rotationSuperseded(baseline: Int, current: Int): Boolean =
+        baseline >= 0 && current >= 0 && current != baseline
+
     fun presentationTimeUs(nowNs: Long, startNs: Long, pausedNs: Long): Long =
         ((nowNs - startNs - pausedNs).coerceAtLeast(0)) / 1_000
 

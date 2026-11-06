@@ -61,6 +61,18 @@ class ScreenRecordingGeometryTest {
         assertEquals(0L, ScreenRecordingGeometry.presentationTimeUs(1_000_000_000, 2_000_000_000, 0))
     }
 
+    @Test fun rotationSupersedesTheCaptureFrameOnlyWhenKnown() {
+        // Portrait (0) → landscape (1): the frame is stale and the session must end.
+        assertTrue(ScreenRecordingGeometry.rotationSuperseded(0, 1))
+        assertTrue(ScreenRecordingGeometry.rotationSuperseded(1, 0))
+        // Same orientation, including the reverse-landscape pair: nothing to do.
+        assertEquals(false, ScreenRecordingGeometry.rotationSuperseded(0, 0))
+        assertEquals(false, ScreenRecordingGeometry.rotationSuperseded(3, 3))
+        // An unknown rotation on either side must not cancel a live capture.
+        assertEquals(false, ScreenRecordingGeometry.rotationSuperseded(-1, 1))
+        assertEquals(false, ScreenRecordingGeometry.rotationSuperseded(0, -1))
+    }
+
     @Test fun durationUsesHoursMinutesSeconds() {
         assertEquals("00:00:00", ScreenRecordingGeometry.formatDuration(0))
         assertEquals("00:00:09", ScreenRecordingGeometry.formatDuration(9_600))

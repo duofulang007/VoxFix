@@ -134,6 +134,10 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     }
     override fun onConfigurationChanged(config: Configuration) {
         super.onConfigurationChanged(config)
+        // The capture frame is fixed in screen pixels, so a rotation invalidates it (upstream keeps
+        // the area fixed too). This is the earliest signal; the poll in [watchRecordingRotation]
+        // covers ROMs that never deliver it.
+        checkRecordingRotation()
         ScreenshotPins.relayout()
         retainText(); removeHandle(); showHandle()
     }
@@ -311,6 +315,21 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     private var recordingDisplay: android.hardware.display.DisplayManager.DisplayListener? = null
 
     /**
+     * Rotation watch while the setup frame or a recording is live.
+     *
+     * `DisplayManager.DisplayListener` never fired on K60 — the display rotated to 2400×1080 and the
+     * capture kept running against a crop that no longer matched the screen. The listener is kept
+     * (it is the documented path and costs nothing) but the poll is what actually ends the session.
+     */
+    private val rotationPoll = object : Runnable {
+        override fun run() {
+            if (liveRecorder == null && recordingSetup == null) return
+            checkRecordingRotation()
+            if (liveRecorder != null || recordingSetup != null) main.postDelayed(this, ROTATION_POLL_MS)
+        }
+    }
+
+    /**
      * Upstream `startScreenshotRecording` (screenshotrecordingworkflow.h): the capture overlay is
      * closed and the recording area opens in `Idle`, where the frame can still be moved or resized
      * and the toolbar shows start instead of capture controls. The phone used to request projection
@@ -393,9 +412,13 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         if (recordingControl == null) showRecordingControl(options)
         showRecordingArea(region, ScreenRecordingAreaView.State.COUNTDOWN)
         setRecordingSetupAttached(true)
+        // The setup stage armed the watch on the instance that owned it; consent can rebuild this
+        // service, so arm it again on the instance that now owns the capture.
+        watchRecordingRotation()
         val control = recordingControl
         val launch = {
-            if (recordingRotation >= 0 && windows.defaultDisplay?.rotation != recordingRotation) {
+            val rotation = currentRotation()
+            if (ScreenRecordingGeometry.rotationSuperseded(recordingRotation, rotation)) {
                 runCatching(stopProjection)
                 busy = false
                 recordingControl?.showFailure("屏幕已旋转，请重新选择录制区域")
@@ -499,6 +522,13 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
                 recordingSaved = saved
                 recordingControl?.showSaved(saved.displayPath, saved.uri)
                 Toast.makeText(this, "已保存录屏 ${ScreenRecordingGeometry.formatDuration(duration)}", Toast.LENGTH_SHORT).show()
+            }
+        }
+        // A session ended by rotation leaves the bar in the old orientation's coordinates; re-place
+        // it so the saved-file row stays reachable.
+        recordingControl?.let { control ->
+            recordingControlParams?.let { params ->
+                control.post { if (recordingControl === control) placeRecordingControl(control, params) }
             }
         }
         showHandle()
@@ -628,6 +658,15 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         if (recordingControl != null) return
         val region = sharedRegion ?: return
         val options = sharedOptions ?: return
+        // A rotation while this instance was being rebuilt: the frame no longer matches the screen,
+        // so close the session instead of re-attaching a border to the wrong pixels.
+        val rotation = currentRotation()
+        if (ScreenRecordingGeometry.rotationSuperseded(sharedRotation, rotation)) {
+            android.util.Log.i("VoxFix", "RECORDING_ROTATION_END adopted=${sharedRotation}->${rotation}")
+            Toast.makeText(this, "屏幕已旋转，录屏结束并保存", Toast.LENGTH_SHORT).show()
+            running.stop()
+            return
+        }
         android.util.Log.i("VoxFix", "RECORDING_ADOPTED $region")
         recordingRegion = region
         recordingScreen = sharedScreen ?: recordingScreen
@@ -804,34 +843,64 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
 
     private fun watchRecordingRotation() {
         stopWatchingRecordingRotation()
-        val manager = getSystemService(android.hardware.display.DisplayManager::class.java) ?: return
-        @Suppress("DEPRECATION")
-        recordingRotation = windows.defaultDisplay?.rotation ?: -1
-        val listener = object : android.hardware.display.DisplayManager.DisplayListener {
-            override fun onDisplayAdded(displayId: Int) {}
-            override fun onDisplayRemoved(displayId: Int) {}
-            override fun onDisplayChanged(displayId: Int) {
-                if (displayId != Display.DEFAULT_DISPLAY) return
-                if (liveRecorder == null && recordingSetup == null) return
-                @Suppress("DEPRECATION")
-                val rotation = windows.defaultDisplay?.rotation ?: return
-                if (rotation == recordingRotation) return
-                recordingRotation = rotation
-                if (liveRecorder != null) {
-                    Toast.makeText(this@ScreenTextService, "屏幕已旋转，录屏结束并保存", Toast.LENGTH_SHORT).show()
-                    liveRecorder?.stop()
-                } else {
-                    // The frame is in screen pixels; a rotation would leave it covering the wrong
-                    // content, and the projection cannot be re-cropped mid-session.
-                    cancelRecordingSetup("屏幕已旋转，请重新选择录制区域")
+        if (recordingRotation < 0) {
+            // A rebuilt instance starts with no baseline; the process-wide one survives the rebuild
+            // and is the orientation the frame was actually drawn in.
+            recordingRotation = if (sharedRotation >= 0) sharedRotation else currentRotation()
+        }
+        if (sharedRotation < 0) sharedRotation = recordingRotation
+        val manager = getSystemService(android.hardware.display.DisplayManager::class.java)
+        if (manager != null) {
+            val listener = object : android.hardware.display.DisplayManager.DisplayListener {
+                override fun onDisplayAdded(displayId: Int) {}
+                override fun onDisplayRemoved(displayId: Int) {}
+                override fun onDisplayChanged(displayId: Int) {
+                    if (displayId != Display.DEFAULT_DISPLAY) return
+                    if (liveRecorder == null && recordingSetup == null) return
+                    checkRecordingRotation()
                 }
             }
+            recordingDisplay = listener
+            runCatching { manager.registerDisplayListener(listener, main) }
         }
-        recordingDisplay = listener
-        runCatching { manager.registerDisplayListener(listener, main) }
+        main.removeCallbacks(rotationPoll)
+        main.postDelayed(rotationPoll, ROTATION_POLL_MS)
+    }
+
+    /** Current rotation of the default display, or -1 when it cannot be read. */
+    private fun currentRotation(): Int = runCatching {
+        getSystemService(android.hardware.display.DisplayManager::class.java)
+            ?.getDisplay(Display.DEFAULT_DISPLAY)?.rotation ?: -1
+    }.getOrDefault(-1)
+
+    /**
+     * Ends the session when the screen no longer matches the frame the recording was started from.
+     *
+     * Recording: stop and save (the projection cannot be re-cropped mid-session, and resuming into
+     * a different orientation would mix two geometries in one file). Setup stage: cancel and ask for
+     * a new region, because the frame is drawn in the old orientation's pixel grid.
+     */
+    private fun checkRecordingRotation() {
+        val rotation = currentRotation()
+        if (rotation < 0) return
+        if (recordingRotation < 0) { recordingRotation = rotation; return }
+        if (!ScreenRecordingGeometry.rotationSuperseded(recordingRotation, rotation)) return
+        recordingRotation = rotation
+        // No session: `onConfigurationChanged` keeps arriving after the bar is gone, so only move
+        // the baseline instead of reporting a rotation that ends nothing.
+        if (liveRecorder == null && recordingSetup == null) { sharedRotation = rotation; return }
+        android.util.Log.i("VoxFix", "RECORDING_ROTATION_END rotation=$rotation")
+        val running = liveRecorder
+        if (running != null && !running.isFinishing()) {
+            Toast.makeText(this, "屏幕已旋转，录屏结束并保存", Toast.LENGTH_SHORT).show()
+            running.stop()
+        } else if (recordingSetup != null) {
+            cancelRecordingSetup("屏幕已旋转，请重新选择录制区域")
+        }
     }
 
     private fun stopWatchingRecordingRotation() {
+        main.removeCallbacks(rotationPoll)
         recordingDisplay?.let { listener ->
             runCatching {
                 getSystemService(android.hardware.display.DisplayManager::class.java)
@@ -1078,6 +1147,13 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         var sharedOptions: ScreenRecordingOptions? = null
         @Volatile
         var sharedStartedAtMs: Long = 0
+
+        /** Rotation the running capture was framed in; a rebuilt instance compares against it. */
+        @Volatile
+        var sharedRotation: Int = -1
+
+        /** Rotation poll cadence: fast enough to stop before a rotated frame is written, cheap. */
+        const val ROTATION_POLL_MS = 400L
     }
 
     /** Instance field first, then the process-wide one. */
