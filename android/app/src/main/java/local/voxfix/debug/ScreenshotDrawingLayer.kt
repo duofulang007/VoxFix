@@ -190,7 +190,7 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
     }==true
     fun previewText(value: String) {
         textPreview=if(isSerialLabel(textPreviewIndex)) textPreviewIndex?.let { renderer.fitSerialLabel(history.items[it].copy(text=value)) }
-            else textPreview?.copy(text=value)
+            else textPreview?.let { if(it.autoResize) renderer.naturalFit(it.copy(text=value)) else it.copy(text=value) }
         invalidate()
     }
     fun cancelTextPreview() { textPreview=null; textPreviewIndex=null; invalidate() }
@@ -235,10 +235,12 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
         val editedIndex=index?.takeIf { it in history.items.indices }
         if(editedIndex!=null) {
             val value=history.items[editedIndex].copy(text=text)
-            history.replace(editedIndex,if(isSerialLabel(editedIndex)) renderer.fitSerialLabel(value) else value)
+            val fitted=if(isSerialLabel(editedIndex)) renderer.fitSerialLabel(value)
+                else if(value.autoResize) renderer.naturalFit(value) else renderer.wrappedFit(value)
+            history.replace(editedIndex,fitted)
         }
-        else history.add(ScreenshotDrawingStroke(ScreenshotDrawingTool.TEXT,listOf(point),style.color,style.width*pixelUnit,style,text=text,
-            textWidth=minOf(240*pixelUnit,(image.width-point.x).coerceAtLeast(1f))))
+        else history.add(renderer.naturalFit(ScreenshotDrawingStroke(ScreenshotDrawingTool.TEXT,listOf(point),style.color,style.width*pixelUnit,style,text=text,
+            textWidth=minOf(240*pixelUnit,(image.width-point.x).coerceAtLeast(1f)),autoResize=true)))
         // A finished text mark is handed to the selection tool: the usual next step is placing it.
         tool=ScreenshotDrawingTool.SELECT
         selectedIndex=editedIndex ?: history.items.lastIndex

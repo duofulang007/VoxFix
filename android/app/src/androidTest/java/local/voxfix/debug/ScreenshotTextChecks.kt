@@ -112,6 +112,27 @@ internal object ScreenshotTextChecks {
             memory.save(ScreenshotDrawingTool.TEXT,defaults)
             memory.save(ScreenshotDrawingTool.SERIAL,defaultScreenshotDrawingStyle(ScreenshotDrawingTool.SERIAL))
 
+            // T22 auto-resize text: creation hugs the natural layout; each edit keeps its policy.
+            layer.history.load(emptyList())
+            layer.addText(ScreenshotDrawingPoint(20f,40f),"自然宽度")
+            val created=layer.history.items.single()
+            check(created.autoResize) { "新建文字未启用自然宽度" }
+            check(created.textWidth>0f && created.textWidth<240f) { "自然宽度未按实测：${created.textWidth}" }
+            check(created.textHeight>0f)
+            check(created.points.first()==ScreenshotDrawingPoint(20f,40f)) { "左对齐创建移动了锚点" }
+            val fixed=ScreenshotDrawingStroke(ScreenshotDrawingTool.TEXT,listOf(ScreenshotDrawingPoint(20f,120f)),Color.RED,2f,
+                defaults,text="旧",textWidth=120f,textHeight=40f)
+            layer.history.load(listOf(fixed))
+            layer.addText(ScreenshotDrawingPoint(20f,120f),"旧文字换行之后更长了",0)
+            val edited=layer.history.items.single()
+            check(!edited.autoResize && edited.textWidth==120f) { "固定宽文字编辑不应改 wrap 宽度" }
+            check(edited.textHeight>=40f && edited.points.first().y==120f) { "固定宽编辑未保持顶边钉住" }
+            val encodedAR=ScreenshotDocumentCodec.encode(ScreenshotDocument.full(400,300).copy(objects=listOf(created)))
+            check(ScreenshotDocumentCodec.decode(encodedAR).objects.single().autoResize) { "工程丢失自然宽度标记" }
+            val legacyAR=org.json.JSONObject(encodedAR)
+            legacyAR.getJSONArray("objects").getJSONObject(0).remove("autoResize")
+            check(!ScreenshotDocumentCodec.decode(legacyAR.toString()).objects.single().autoResize) { "旧工程自然宽度应缺省关闭" }
+
             // Toolbar: readout, wheel step and the typed editor share the same bounds.
             layer.layout(0,0,400,300); layer.region=Rect(0,0,400,300); layer.savedFontUnit=1f; layer.savedPixelUnit=1f
             layer.tool=ScreenshotDrawingTool.TEXT

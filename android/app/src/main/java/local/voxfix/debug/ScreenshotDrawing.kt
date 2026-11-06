@@ -51,6 +51,12 @@ data class ScreenshotDrawingStroke(
     val tool: ScreenshotDrawingTool, val points: List<ScreenshotDrawingPoint>, val color: Int, val width: Float,
     val style: ScreenshotDrawingStyle = ScreenshotDrawingStyle(color=color),
     val text: String = "", val number: Long = 1L, val textWidth: Float = 0f, val fontScale: Float = 1f, val textHeight: Float = 0f,
+    /**
+     * TEXT only (`TextData::auto_resize`): the box hugs the host-measured layout and the aligned
+     * edges stay pinned on re-measurement. A width-only resize turns it off (fixed wrap width);
+     * legacy projects without the key keep the fixed-width model.
+     */
+    val autoResize: Boolean = false,
     /** Stable identity across saves. 0 means "not assigned yet"; the history stamps it once. */
     val id: Long = 0L,
     /**
@@ -82,7 +88,7 @@ data class ScreenshotDrawingStroke(
         if (other !is ScreenshotDrawingStroke) return false
         return tool == other.tool && points == other.points && color == other.color && width == other.width &&
             style == other.style && text == other.text && number == other.number && textWidth == other.textWidth &&
-            fontScale == other.fontScale && textHeight == other.textHeight &&
+            fontScale == other.fontScale && textHeight == other.textHeight && autoResize == other.autoResize &&
             smooth == other.smooth && closedPath == other.closedPath && boundTextId == other.boundTextId &&
             rotation == other.rotation && fixedElbowSegments == other.fixedElbowSegments &&
             startBinding == other.startBinding && endBinding == other.endBinding &&
@@ -99,6 +105,7 @@ data class ScreenshotDrawingStroke(
         result = 31 * result + textWidth.hashCode()
         result = 31 * result + fontScale.hashCode()
         result = 31 * result + textHeight.hashCode()
+        result = 31 * result + autoResize.hashCode()
         result = 31 * result + smooth.hashCode()
         result = 31 * result + closedPath.hashCode()
         result = 31 * result + boundTextId.hashCode()

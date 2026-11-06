@@ -79,6 +79,43 @@ internal class ScreenshotDrawingRenderer(private var image: Bitmap, private val 
     }
     /** Host measurement for fixed-width single-text reflow; no estimated character widths. */
     fun measureText(stroke: ScreenshotDrawingStroke): RectF=localBounds(stroke.copy(textHeight=0f))
+
+    /**
+     * Natural layout (no wrap): widest laid-out line and laid-out height, the phone equivalent of
+     * the host's `TextLayoutSize` for auto-resizing labels.
+     */
+    fun naturalLayout(stroke: ScreenshotDrawingStroke): Pair<Float,Float> {
+        val layout=textLayout(stroke.copy(textWidth=image.width*2f))
+        val widest=(0 until layout.lineCount).maxOf { layout.getLineWidth(it) }
+        return ceil(widest).toFloat() to layout.height.toFloat()
+    }
+
+    /**
+     * `text_with_pinned_alignment_layout` on the top-left point model: the box takes the natural
+     * layout and the aligned edges stay pinned (left: point unchanged, center: symmetric shrink,
+     * right: left edge follows the width change; the top edge always holds vertically).
+     */
+    fun naturalFit(stroke: ScreenshotDrawingStroke): ScreenshotDrawingStroke {
+        if(stroke.tool!=ScreenshotDrawingTool.TEXT) return stroke
+        val (width,height)=naturalLayout(stroke)
+        val point=stroke.points.first()
+        // point = centre - size/2, so the pinned-edge shifts collapse to: left stays, centre
+        // shrinks symmetrically, right follows the width change; the top edge always holds.
+        val shiftX=when(stroke.style.align) {
+            1->(stroke.textWidth-width)/2f
+            2->stroke.textWidth-width
+            else->0f
+        }
+        return stroke.copy(points=listOf(ScreenshotDrawingPoint(point.x+shiftX,point.y)),
+            textWidth=width,textHeight=height)
+    }
+
+    /** `text_with_wrapped_layout`: keep the wrap width, take the measured height, pin the top edge. */
+    fun wrappedFit(stroke: ScreenshotDrawingStroke): ScreenshotDrawingStroke {
+        if(stroke.tool!=ScreenshotDrawingTool.TEXT || stroke.textWidth<=0f) return stroke
+        val height=textLayout(stroke).height.toFloat()
+        return stroke.copy(textHeight=height)
+    }
     fun rotationMatrix(stroke: ScreenshotDrawingStroke,box: RectF=localBounds(stroke))=Matrix().apply {
         setRotate(Math.toDegrees(stroke.rotation.toDouble()).toFloat(),box.centerX(),box.centerY())
     }

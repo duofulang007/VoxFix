@@ -386,8 +386,15 @@ internal class ScreenshotObjectSelection(private val history: ScreenshotDrawing,
         val original=SelBox.of(originalBox)
         val widthOnly=h.x!=0f && h.y==0f
         val scale=if(widthOnly) 1f else ScreenshotSelectionResize.textScale(h,g,stroke.style.fontSize*stroke.fontScale)
-        val width=if(widthOnly) (original.width*g.sx).coerceAtLeast(unit()) else original.width*scale
-        val sized=stroke.copy(style=stroke.style.copy(fontSize=stroke.style.fontSize*scale),textWidth=width,textHeight=0f)
+        var sized=stroke.copy(style=stroke.style.copy(fontSize=stroke.style.fontSize*scale),
+            textWidth=if(widthOnly) (original.width*g.sx).coerceAtLeast(unit()) else stroke.textWidth,
+            textHeight=if(widthOnly) 0f else stroke.textHeight)
+        if(widthOnly) sized=sized.copy(autoResize=false)
+        if(sized.autoResize) {
+            // Auto-resizing labels re-hug the measured layout at the new font; the aligned
+            // edges pin per the alignment, exactly like the host's commit re-measurement.
+            return renderer.naturalFit(sized)
+        }
         val measured=renderer.measureText(sized)
         val next=ScreenshotSelectionResize.textFrame(original,h,frameRotation,measured.width(),measured.height(),alt)
         return sized.copy(points=listOf(ScreenshotDrawingPoint(next.left,next.top)),textWidth=next.width,textHeight=next.height)

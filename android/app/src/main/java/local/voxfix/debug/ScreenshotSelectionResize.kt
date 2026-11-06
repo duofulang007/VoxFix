@@ -95,9 +95,11 @@ internal object ScreenshotSelectionResize {
         val scaleY=if(filter) { if(rawH>0f) (own.height*sy-s.width).coerceAtLeast(0f)/rawH else 1f } else sy
         val points=s.points.map { ScreenshotDrawingPoint(next.x+(it.x-center.x)*scaleX,next.y+(it.y-center.y)*scaleY) }
         val fontScale=if(s.tool==ScreenshotDrawingTool.SERIAL) min(sx,sy) else if(s.tool==ScreenshotDrawingTool.TEXT) sx else 1f
+        // A multi-select resize always becomes a fixed-width text (resize.rs `_ =>` branch).
         return s.copy(points=points,style=s.style.copy(fontSize=s.style.fontSize*fontScale),
             textWidth=if(s.tool==ScreenshotDrawingTool.TEXT) own.width*sx else s.textWidth,
-            textHeight=if(s.tool==ScreenshotDrawingTool.TEXT) own.height*sy else s.textHeight)
+            textHeight=if(s.tool==ScreenshotDrawingTool.TEXT) own.height*sy else s.textHeight,
+            autoResize=if(s.tool==ScreenshotDrawingTool.TEXT) false else s.autoResize)
     }
     /**
      * `text_with_selection_rect`: a width-only handle keeps the font and only rewraps the text

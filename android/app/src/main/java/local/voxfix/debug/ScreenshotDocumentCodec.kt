@@ -45,6 +45,7 @@ internal object ScreenshotDocumentCodec {
                 .put("width", stroke.width.toDouble()).put("style", style)
                 .put("text", stroke.text).put("number", stroke.number)
                 .put("textWidth", stroke.textWidth.toDouble()).put("fontScale", stroke.fontScale.toDouble())
+                .put("autoResize", stroke.autoResize)
                 .put("textHeight", stroke.textHeight.toDouble()).put("points", points)
                 // Written only for pen strokes that use the smoothed geometry; a missing key means the
                 // legacy polyline, so older readers and older documents stay valid.
@@ -167,9 +168,10 @@ internal object ScreenshotDocumentCodec {
                 category
             } else null
             objects.add(ScreenshotDrawingStroke(tool, list, row.optInt("color", 0), row.optDouble("width", 2.0).toFloat(),
-                style, row.optString("text", ""), row.optLong("number", 1L),
-                row.optDouble("textWidth", 0.0).toFloat(), fontScale,
-                row.optDouble("textHeight", 0.0).toFloat(), id,
+                style, text = row.optString("text", ""), number = row.optLong("number", 1L),
+                textWidth = row.optDouble("textWidth", 0.0).toFloat(), fontScale = fontScale,
+                textHeight = row.optDouble("textHeight", 0.0).toFloat(), autoResize = tool == ScreenshotDrawingTool.TEXT && row.optBoolean("autoResize", false),
+                id = id,
                 smooth = row.optBoolean("smooth", false), closedPath = row.optBoolean("closedPath", false),
                 boundTextId = row.optLong("boundTextId",0L), rotation=ScreenshotObjectTransform.normalize(rotation),
                 fixedElbowSegments = fixedSegments,
