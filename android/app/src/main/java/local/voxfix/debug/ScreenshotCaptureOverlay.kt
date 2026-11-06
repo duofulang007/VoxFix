@@ -351,10 +351,7 @@ class ScreenshotCaptureOverlay(
             }
         }
     }
-    private val cursorButton=ImageView(context)
     private val qrButton=ImageView(context)
-    private val pixelPhysicalButton=ImageView(context)
-    private val pixelLogicalButton=ImageView(context)
     private val hideBarButton=ImageView(context)
     private var selectionReadoutHidden = false
     private val selectActionsScroll=android.widget.HorizontalScrollView(context).apply {
@@ -530,11 +527,8 @@ class ScreenshotCaptureOverlay(
         icon(regionPolylineButton,R.drawable.snow_region_polyline,"折线截图区域") { setRegionShape(ScreenshotRegionShape.POLYLINE) }
         icon(regionCurveButton,R.drawable.snow_region_curve,"曲线截图区域") { setRegionShape(ScreenshotRegionShape.CURVE) }
         icon(regionFreehandButton,R.drawable.snow_region_freehand,"自由手绘截图区域") { setRegionShape(ScreenshotRegionShape.FREEHAND) }
-        icon(cursorButton,R.drawable.snow_cursor,"捕捉光标，暂未支持") { showFeedback("捕捉光标暂未支持") }
         icon(recaptureButton,R.drawable.snow_recapture,"重新截图") { if (canRecapture()) onRecaptureRequested?.invoke() }
         icon(qrButton,R.drawable.snow_barcode,"显示二维码") { scanBarcode() }
-        icon(pixelPhysicalButton,R.drawable.snow_pixel_physical,"物理像素单位") { showFeedback("像素单位切换暂未支持") }
-        icon(pixelLogicalButton,R.drawable.snow_pixel_logical,"逻辑像素单位") { showFeedback("像素单位切换暂未支持") }
         icon(hideBarButton,R.drawable.snow_eye_off,"隐藏选择工具栏") {
             selectionReadoutHidden = !selectionReadoutHidden
             val label = if (selectionReadoutHidden) "显示选择工具栏" else "隐藏选择工具栏"
@@ -556,9 +550,8 @@ class ScreenshotCaptureOverlay(
         }
         cell(row1,addRegionButton,dp(36)); cell(row1,subtractRegionButton,dp(36)); divider(row1)
         for(button in listOf(regionRectButton,regionPolylineButton,regionCurveButton,regionFreehandButton)) cell(row1,button,dp(36))
-        for(button in listOf(cursorButton,recaptureButton,qrButton)) cell(row2,button,dp(36))
+        for(button in listOf(recaptureButton,qrButton)) cell(row2,button,dp(36))
         divider(row2)
-        cell(row2,pixelPhysicalButton,dp(36)); cell(row2,pixelLogicalButton,dp(36)); divider(row2)
         cell(row2,hideBarButton,dp(36))
         cell(row2,recaptureDraftButton,dp(98))
     }
