@@ -251,6 +251,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     private val recordingPreferences by lazy { ScreenRecordingPreferences(this) }
     private var recorder: ScreenRecorder? = null
     private var recordingControl: ScreenRecordingControl? = null
+    private var recordingArea: ScreenRecordingAreaView? = null
     private var recordingSaved: ScreenRecordingLibrary.Saved? = null
     private var recordingRotation = -1
     private var recordingBarWarned = false
@@ -285,8 +286,12 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
                 runCatching(stopProjection)
                 busy = false
                 recordingControl?.showFailure("屏幕已旋转，请重新选择录制区域")
+                removeRecordingArea()
                 showHandle()
-            } else launchRecorder(projection, stopProjection, region, screenWidth, screenHeight, options)
+            } else {
+                updateRecordingArea(ScreenRecordingAreaView.State.RECORDING)
+                launchRecorder(projection, stopProjection, region, screenWidth, screenHeight, options)
+            }
         }
         if (options.startDelaySeconds > 0) {
             recordingControl?.startCountdown(options.startDelaySeconds, launch) {
@@ -336,6 +341,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         busy = false
         runCatching(stopProjection)
         stopWatchingRecordingRotation()
+        removeRecordingArea()
         if (file == null) {
             recordingControl?.showFailure(message ?: "录屏已取消")
             message?.let { Toast.makeText(this, it, Toast.LENGTH_SHORT).show() }
@@ -353,13 +359,48 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         showHandle()
     }
 
+    /** Border around the recorded region so the user can see what is being captured. */
+    private fun showRecordingArea(region: Rect, state: ScreenRecordingAreaView.State) {
+        if (recordingArea != null) {
+            recordingArea?.setState(state)
+            return
+        }
+        val view = ScreenRecordingAreaView(this, Rect(region)).apply { setState(state) }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            android.graphics.PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = android.view.Gravity.TOP or android.view.Gravity.LEFT
+            setFitInsetsTypes(0)
+            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+        }
+        runCatching { windows.addView(view, params) }.onSuccess { recordingArea = view }
+    }
+
+    private fun updateRecordingArea(state: ScreenRecordingAreaView.State) {
+        recordingArea?.setState(state)
+    }
+
+    private fun removeRecordingArea() {
+        recordingArea?.let { runCatching { windows.removeView(it) } }
+        recordingArea = null
+    }
+
     private fun showRecordingControl(region: Rect, options: ScreenRecordingOptions) {
         if (recordingControl != null) return
         recordingBarWarned = false
+        showRecordingArea(region, ScreenRecordingAreaView.State.COUNTDOWN)
         val control = ScreenRecordingControl(this)
         control.onStop = { recorder?.stop() }
         control.onCancel = { recorder?.cancel() }
-        control.onTogglePause = { paused -> if (paused) recorder?.pause() else recorder?.resume() }
+        control.onTogglePause = { paused ->
+            if (paused) recorder?.pause() else recorder?.resume()
+            updateRecordingArea(if (paused) ScreenRecordingAreaView.State.PAUSED
+            else ScreenRecordingAreaView.State.RECORDING)
+        }
         control.setOptions(options)
         control.onOptionsChanged = { updated ->
             recordingPreferences.save(updated)
@@ -420,6 +461,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         }
         recordingControl = null
         recordingSaved = null
+        removeRecordingArea()
         stopWatchingRecordingRotation()
     }
 

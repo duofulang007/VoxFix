@@ -3,6 +3,8 @@ package local.voxfix.debug
 import android.app.Instrumentation
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Rect
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
@@ -17,6 +19,7 @@ import android.opengl.EGLSurface
 import android.opengl.GLES20
 import android.provider.MediaStore
 import android.view.Surface
+import android.view.View
 import java.io.File
 
 /**
@@ -31,6 +34,49 @@ internal object ScreenshotRecordingChecks {
         val file = encodeMp4(context)
         val saved = publish(context, file)
         return "SCREENSHOT_RECORDING_PASS:$saved"
+    }
+
+    /**
+     * Draws the recording border off-screen and checks upstream geometry: solid state colour on the
+     * stroke centre, nothing painted inside the selection, and the paused colour swap.
+     */
+    fun area(test: Instrumentation): String {
+        val context = test.targetContext
+        val density = context.resources.displayMetrics.density
+        val region = Rect(120, 240, 420, 540)
+        val view = ScreenRecordingAreaView(context, Rect(region))
+        val width = 600
+        val height = 700
+        fun render(state: ScreenRecordingAreaView.State): Bitmap {
+            view.setState(state)
+            view.measure(
+                View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
+            view.layout(0, 0, width, height)
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            view.draw(Canvas(bitmap))
+            return bitmap
+        }
+        val strokeCentre = region.left - Math.round(2f * density)
+        val inside = region.left + Math.round(1.5f * density)
+        val recording = render(ScreenRecordingAreaView.State.RECORDING)
+        try {
+            check(recording.getPixel(strokeCentre, region.centerY()) == 0xFFF5222D.toInt()) {
+                "录制边框颜色不对：${Integer.toHexString(recording.getPixel(strokeCentre, region.centerY()))}"
+            }
+            check(recording.getPixel(inside, region.centerY()) == 0) { "边框压进了录制区域" }
+        } finally {
+            recording.recycle()
+        }
+        val paused = render(ScreenRecordingAreaView.State.PAUSED)
+        try {
+            check(paused.getPixel(strokeCentre, region.centerY()) == 0xFFFAAD14.toInt()) {
+                "暂停边框颜色不对：${Integer.toHexString(paused.getPixel(strokeCentre, region.centerY()))}"
+            }
+        } finally {
+            paused.recycle()
+        }
+        return "SCREENSHOT_RECORDING_AREA_PASS:stroke=${strokeCentre}px:inside=clear"
     }
 
     /**
@@ -74,8 +120,7 @@ internal object ScreenshotRecordingChecks {
         }
     }
 
-    private fun encodeMp4(context: Context): File {
-        val width = 320
+    private fun encodeMp4(context: Context): File {        val width = 320
         val height = 240
         val frames = 30
         val file = File(context.cacheDir, "recording-check.mp4")
