@@ -31,6 +31,8 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
     var onOptionsChanged: ((ScreenRecordingOptions) -> Unit)? = null
     var onLayoutChanged: (() -> Unit)? = null
     var onReleased: (() -> Unit)? = null
+    /** Screen-space drag deltas from the grip, so the bar can be moved off the recorded content. */
+    var onDrag: ((Float, Float) -> Unit)? = null
 
     private val handler = Handler(Looper.getMainLooper())
     private val bar = LinearLayout(context)
@@ -42,6 +44,17 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
     private val microphone = button("麦克")
     private val settings = button("设置")
     private val dot = View(context)
+    private val grip = TextView(context).apply {
+        text = "⋮⋮"
+        textSize = 10f
+        setTextColor(0x99FFFFFF.toInt())
+        gravity = Gravity.CENTER
+        contentDescription = "按住拖动录屏控制条"
+        isClickable = true
+        isFocusable = true
+        setPadding(dp(2), 0, dp(2), 0)
+        layoutParams = LayoutParams(dp(18), LayoutParams.MATCH_PARENT)
+    }
     private val optionRows = mutableListOf<TextView>()
 
     private var startedAt = 0L
@@ -72,6 +85,7 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         bar.setPadding(dp(10), dp(6), dp(10), dp(6))
         dot.layoutParams = LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(6) }
         dot.background = GradientDrawable().apply { cornerRadius = dp(4).toFloat(); setColor(0xFFE53935.toInt()) }
+        bar.addView(grip)
         bar.addView(dot)
         duration.setTextColor(Color.WHITE)
         duration.textSize = 15f
@@ -245,8 +259,52 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         onOptionsChanged?.invoke(options)
     }
 
-    private fun togglePause() {
-        if (finished || counting) return
+    private var lastRawX = 0f
+    private var lastRawY = 0f
+    private var downRawX = 0f
+    private var downRawY = 0f
+    private var dragging = false
+
+    /**
+     * Whole-bar dragging.
+     *
+     * The bar is the window root; non-interactive children (the duration label, padding) return
+     * false on touch-down, and an unconsumed DOWN drops the whole gesture, so moves never arrive.
+     * Consuming DOWN here and deciding on MOVE keeps taps on buttons intact while letting any other
+     * spot drag the window out of the recorded region.
+     */
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downRawX = event.rawX
+                downRawY = event.rawY
+                lastRawX = event.rawX
+                lastRawY = event.rawY
+                dragging = false
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (!dragging) {
+                    val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+                    dragging = kotlin.math.abs(event.rawX - downRawX) > slop ||
+                        kotlin.math.abs(event.rawY - downRawY) > slop
+                }
+                if (dragging) {
+                    onDrag?.invoke(event.rawX - lastRawX, event.rawY - lastRawY)
+                    lastRawX = event.rawX
+                    lastRawY = event.rawY
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                dragging = false
+                return true
+            }
+        }
+        return super.onTouchEvent(event)
+    }
+
+    private fun togglePause() {        if (finished || counting) return
         setPaused(!paused)
         onTogglePause?.invoke(paused)
     }

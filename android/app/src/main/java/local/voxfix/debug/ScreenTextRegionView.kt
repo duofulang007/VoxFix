@@ -65,6 +65,8 @@ internal class ScreenTextRegionView(
     private var smartPreview: RectF? = null
     private var smartPointer: PointF? = null
     private var smartTracking = false
+    /** True once a long-press exploration is under way; moving then re-targets instead of drawing. */
+    private var exploring = false
     private var lastSmartTap: PointF? = null
     val selectionInProgress get() = active || constructing
     var opMode = false
@@ -326,6 +328,7 @@ internal class ScreenTextRegionView(
         smartPreview = null
         smartPointer = null
         smartTracking = false
+        exploring = false
         invalidate()
     }
 
@@ -461,20 +464,19 @@ internal class ScreenTextRegionView(
                 }
                 val dx = x - downX; val dy = y - downY
                 if (smartTracking) {
+                    // Once exploration has started it stays exploratory until the finger lifts;
+                    // moving during exploration re-targets the preview instead of falling back to a
+                    // manual frame. A drag that starts before the long-press timeout is manual for
+                    // the rest of the gesture.
+                    if (exploring) { previewSmart(x, y); return true }
                     val held = event.eventTime - pressAt >= ViewConfiguration.getLongPressTimeout()
-                    // Once the finger travels past touch slop the gesture is a manual drag: keep it
-                    // manual even when the long-press timeout has already elapsed, otherwise a
-                    // normal (slow) drag is swallowed by smart exploration and the frame snaps to a
-                    // hit element instead of following the finger.
-                    if (dx * dx + dy * dy >= slop * slop) {
-                        clearSmartPreview()
-                        smartTracking = false
-                        moved = true
-                        if (before.isEmpty) { edges = 0; rect.set(downX, downY, downX, downY) }
-                    } else {
-                        if (held) previewSmart(x, y)
+                    if (dx * dx + dy * dy < slop * slop) {
+                        if (held) { exploring = true; previewSmart(x, y) }
                         return true
                     }
+                    clearSmartPreview()
+                    moved = true
+                    if (before.isEmpty) { edges = 0; rect.set(downX, downY, downX, downY) }
                 }
                 if (abs(dx) > slop || abs(dy) > slop) moved = true
                 when (edges) {
@@ -516,6 +518,19 @@ internal class ScreenTextRegionView(
                     return true
                 }
                 val dx = x - downX; val dy = y - downY
+                if (exploring) {
+                    // Leaving exploration commits whatever the preview last showed.
+                    previewSmart(x, y)
+                    val path = smartPath
+                    val index = smartIndex
+                    clearSmartPreview()
+                    active = false
+                    if (index >= 0) {
+                        if (index < path.lastIndex) smartWindowMode = false
+                        onSmartCommit?.invoke(path, index)
+                    }
+                    return true
+                }
                 if (smartTracking) {
                     val held = event.eventTime - pressAt >= ViewConfiguration.getLongPressTimeout()
                     if (held || dx * dx + dy * dy < slop * slop) {

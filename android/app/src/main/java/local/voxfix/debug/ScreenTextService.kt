@@ -287,6 +287,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     private var recordingSaved: ScreenRecordingLibrary.Saved? = null
     private var recordingRotation = -1
     private var recordingBarWarned = false
+    private var recordingBarManual = false
     private var recordingDisplay: android.hardware.display.DisplayManager.DisplayListener? = null
 
     private fun startRecording(editor: ScreenshotCaptureOverlay, region: Rect) {
@@ -424,6 +425,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     private fun showRecordingControl(region: Rect, options: ScreenRecordingOptions) {
         if (recordingControl != null) return
         recordingBarWarned = false
+        recordingBarManual = false
         showRecordingArea(region, ScreenRecordingAreaView.State.COUNTDOWN)
         val control = ScreenRecordingControl(this)
         control.onStop = { recorder?.stop() }
@@ -459,6 +461,17 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         control.onLayoutChanged = {
             if (recordingControl === control) placeRecordingControl(control, params, region)
         }
+        control.onDrag = { dx, dy ->
+            if (recordingControl === control) {
+                val metrics = resources.displayMetrics
+                val barWidth = control.width.takeIf { it > 0 } ?: control.measuredWidth
+                val barHeight = control.height.takeIf { it > 0 } ?: control.measuredHeight
+                params.x = (params.x + dx.toInt()).coerceIn(0, (metrics.widthPixels - barWidth).coerceAtLeast(0))
+                params.y = (params.y + dy.toInt()).coerceIn(0, (metrics.heightPixels - barHeight).coerceAtLeast(0))
+                recordingBarManual = true
+                runCatching { windows.updateViewLayout(control, params) }
+            }
+        }
         val added = runCatching { windows.addView(control, params) }.isSuccess
         if (!added) {
             recorder?.cancel()
@@ -475,15 +488,21 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         val barWidth = control.width.takeIf { it > 0 } ?: control.measuredWidth
         val barHeight = control.height.takeIf { it > 0 } ?: control.measuredHeight
         val gap = (8 * metrics.density).toInt()
-        params.x = (region.centerX() - barWidth / 2).coerceIn(gap, maxOf(gap, metrics.widthPixels - barWidth - gap))
-        var y = region.bottom + gap
-        if (y + barHeight > metrics.heightPixels - gap) y = region.top - barHeight - gap
-        if (y < gap) y = (metrics.heightPixels - barHeight - gap).coerceAtLeast(gap)
-        params.y = y
+        if (recordingBarManual) {
+            // The user placed the bar; only keep it on screen when the settings row grows.
+            params.x = params.x.coerceIn(0, (metrics.widthPixels - barWidth).coerceAtLeast(0))
+            params.y = params.y.coerceIn(0, (metrics.heightPixels - barHeight).coerceAtLeast(0))
+        } else {
+            params.x = (region.centerX() - barWidth / 2).coerceIn(gap, maxOf(gap, metrics.widthPixels - barWidth - gap))
+            var y = region.bottom + gap
+            if (y + barHeight > metrics.heightPixels - gap) y = region.top - barHeight - gap
+            if (y < gap) y = (metrics.heightPixels - barHeight - gap).coerceAtLeast(gap)
+            params.y = y
+        }
         runCatching { windows.updateViewLayout(control, params) }
         if (!recordingBarWarned && Rect(params.x, params.y, params.x + barWidth, params.y + barHeight).intersect(Rect(region))) {
             recordingBarWarned = true
-            Toast.makeText(this, "选区外没有空间，录屏控制条会进入画面", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "录屏控制条在录制区域内，会被录进画面，可按住左侧拖动移开", Toast.LENGTH_LONG).show()
         }
     }
 
