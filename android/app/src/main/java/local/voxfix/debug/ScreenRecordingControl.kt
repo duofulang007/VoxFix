@@ -42,18 +42,26 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
     private val stop = button("完成", accent = true)
     private val cancel = button("取消")
     private val microphone = button("麦克")
-    private val settings = button("设置")
-    private val dot = View(context)
-    private val grip = TextView(context).apply {
-        text = "⋮⋮"
-        textSize = 10f
-        setTextColor(0x99FFFFFF.toInt())
-        gravity = Gravity.CENTER
-        contentDescription = "按住拖动录屏控制条"
+    private val settings = android.widget.ImageView(context).apply {
+        setImageResource(R.drawable.snow_setting)
+        setColorFilter(Color.WHITE, android.graphics.PorterDuff.Mode.SRC_IN)
+        contentDescription = "录制设置"
+        tooltipText = contentDescription
+        scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+        setPadding(dp(7), dp(7), dp(7), dp(7))
+        background = buttonBackground(false, false)
         isClickable = true
         isFocusable = true
-        setPadding(dp(2), 0, dp(2), 0)
-        layoutParams = LayoutParams(dp(18), LayoutParams.MATCH_PARENT)
+        layoutParams = LayoutParams(dp(36), dp(32)).apply { marginStart = dp(4) }
+    }
+    private val dot = View(context)
+    private val grip = android.widget.ImageView(context).apply {
+        setImageResource(R.drawable.snow_grip)
+        setColorFilter(0x99FFFFFF.toInt(), android.graphics.PorterDuff.Mode.SRC_IN)
+        contentDescription = "按住拖动录屏控制条"
+        scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+        setPadding(dp(1), dp(10), dp(1), dp(10))
+        layoutParams = LayoutParams(dp(14), LayoutParams.MATCH_PARENT).apply { marginEnd = dp(4) }
     }
     private val optionRows = mutableListOf<TextView>()
 
@@ -88,11 +96,11 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         bar.addView(grip)
         bar.addView(dot)
         duration.setTextColor(Color.WHITE)
-        duration.textSize = 15f
+        duration.textSize = 14f
         duration.typeface = android.graphics.Typeface.MONOSPACE
         duration.text = "00:00:00"
         duration.gravity = Gravity.CENTER
-        duration.setPadding(dp(2), 0, dp(8), 0)
+        duration.setPadding(dp(2), 0, dp(6), 0)
         duration.contentDescription = "录制时长"
         bar.addView(duration)
         bar.addView(pause)
@@ -288,6 +296,9 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
                     val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
                     dragging = kotlin.math.abs(event.rawX - downRawX) > slop ||
                         kotlin.math.abs(event.rawY - downRawY) > slop
+                    // Haptic tick the moment the bar starts following the finger; without it the
+                    // window seems to jump on its own.
+                    if (dragging) performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
                 }
                 if (dragging) {
                     onDrag?.invoke(event.rawX - lastRawX, event.rawY - lastRawY)
@@ -450,14 +461,14 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
             gravity = Gravity.CENTER
             isSingleLine = true
             maxLines = 1
-            minWidth = dp(44)
-            minHeight = dp(36)
-            setPadding(dp(8), dp(6), dp(8), dp(6))
+            minWidth = dp(40)
+            minHeight = dp(34)
+            setPadding(dp(6), dp(6), dp(6), dp(6))
             background = buttonBackground(false, accent)
             isClickable = true
             isFocusable = true
             layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
-                marginStart = dp(6)
+                marginStart = dp(4)
             }
             setOnTouchListener { view, event ->
                 when (event.actionMasked) {
