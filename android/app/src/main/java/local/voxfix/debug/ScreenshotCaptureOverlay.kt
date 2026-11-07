@@ -474,7 +474,8 @@ class ScreenshotCaptureOverlay(
         translateAction.active = resultTool==ScreenshotAction.TRANSLATE
         if (busy || editing || translating || resultTool!=null || moveMode) drawing.tool = null
         drawingActions.forEach { it.active = ScreenshotDrawingTools.actions[drawing.tool] == it.action }
-        drawing.visibility = if (showingOriginal || showingTranslation || translating || editing) View.INVISIBLE else View.VISIBLE
+        // 上游「显示原图」只隐藏识别内容容器，画布上的对象照常可见。
+        drawing.visibility = if (showingTranslation || translating || editing) View.INVISIBLE else View.VISIBLE
         drawingStyles.visibility = if (drawingStyleCardVisible()) View.VISIBLE else View.GONE
         syncSelectSideActions()
         translateAction.setImageResource(R.drawable.snow_translate)
@@ -1020,9 +1021,13 @@ class ScreenshotCaptureOverlay(
         selector.selectRegion(Rect(0,0,image.width,image.height))
     }
     private fun composeCurrent(region: Rect): Bitmap? {
-        val composed=if(textLayer!=null && resultLayer.visibility==View.VISIBLE)
+        // 上游 `ScreenshotRecognitionWindow::setShowOriginalImage` 只做 `m_contentContainer->setVisible(!show)`，
+        // `m_showOriginalImage` 不进任何导出/保存路径。所以「显示原图」是纯预览开关：导出永远是完整结果
+        // （当前内容层＋绘图对象），预览态不能改变保存下来的像素。
+        val contentVisible = resultLayer.visibility==View.VISIBLE || showingOriginal
+        val composed=if(textLayer!=null && contentVisible)
             (if(showingTranslation) translationLayer else textLayer)?.render(region) else null
-        return if(!showingOriginal && !showingTranslation) drawing.render(region,composed) else composed
+        return if(!showingTranslation) drawing.render(region,composed) else composed
     }
     private fun currentImage(): Bitmap {
         val region=picked ?: error("请先框选截图区域")
