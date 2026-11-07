@@ -29,6 +29,7 @@ internal object ScreenshotSelectionBarChecks {
         val fresh=Bitmap.createBitmap(image.width,image.height,Bitmap.Config.ARGB_8888)
         val radiusPrefs=context.getSharedPreferences("screenshot-region-type",Context.MODE_PRIVATE)
         val oldRadius=radiusPrefs.getInt("screenshot_selection/radius",0)
+        val oldSquare=radiusPrefs.getBoolean("screenshot_selection/square",false)
         val overlay=ScreenshotCaptureOverlay(context,image,{},{},{},{},{},Translator())
         try {
             val root=field(overlay,"root") as ViewGroup
@@ -128,10 +129,19 @@ internal object ScreenshotSelectionBarChecks {
             checkNotNull(find(root,"应用")).performClick()
             check(field(overlay,"picked")==Rect(120,220,520,520)) { "越界输入改动了选区" }
             checkNotNull(find(root,"取消")).performClick()
+            // 比例锁定（上游锁图标）：开启后新拉框按 1:1 生成；这里验证开关接线，几何由
+            // ScreenshotSelectionMarqueeTest 覆盖。
+            val selector=field(overlay,"selector") as ScreenTextRegionView
+            checkNotNull(find(root,"方形选区：关")).performClick()
+            check(selector.lockSquareSelection) { "方形开关没有接到选框" }
+            checkNotNull(find(root,"方形选区：开"))
+            checkNotNull(find(root,"方形选区：开")).performClick()
+            check(!selector.lockSquareSelection) { "方形开关关不掉" }
         } finally {
             overlay.dismiss(context.getSystemService(android.view.WindowManager::class.java))
-            // 圆角写的是真实偏好，测完还原，避免污染后续套件与用户设置。
-            radiusPrefs.edit().putInt("screenshot_selection/radius",oldRadius).apply()
+            // 圆角/方形写的是真实偏好，测完还原，避免污染后续套件与用户设置。
+            radiusPrefs.edit().putInt("screenshot_selection/radius",oldRadius)
+                .putBoolean("screenshot_selection/square",oldSquare).apply()
             image.recycle()
             fresh.recycle()
         }
