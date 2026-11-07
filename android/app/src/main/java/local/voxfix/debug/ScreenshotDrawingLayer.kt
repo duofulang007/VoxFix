@@ -108,7 +108,7 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
             if(field==value) return
             finishStylePreview(false)
             field?.let { toolStyles[it]=style }
-            field=value; quickDrag=false; pending=null; pen=null; continuation=null; selection.cancel(); penFeedback.clear()
+            field=value; quickDrag=false; pending=null; pen=null; continuation=null; selection.cancel(); penFeedback.clear(); eraserPointers.clear()
             autoFilterPress = null
             autoFilterPressRegions = null
             autoFilterSession?.hits = emptyList()
@@ -133,7 +133,11 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
     private var pendingStyle=style
     private var serialLabelStyle=defaultScreenshotDrawingStyle(ScreenshotDrawingTool.TEXT)
     private var down=ScreenshotDrawingPoint(0f,0f)
-    private var lastEraser=ScreenshotDrawingPoint(0f,0f)
+    /**
+     * 上游 `state.eraser.active_pointers`（`eraser_workflow.rs::process_eraser_pointer_event`）：
+     * 橡皮擦按 pointer id 各自记录上一位置，多根手指可以同时擦，互不相干。
+     */
+    private val eraserPointers=HashMap<Int,ScreenshotDrawingPoint>()
     /** Objects under the last selection tap, topmost first; the second one is reachable by cycling. */
     private var tapCandidates: List<Int> = emptyList()
     private var previewOriginal: ScreenshotDrawingStyle?=null
@@ -351,7 +355,7 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
             penFeedback.draw(canvas,if(pending==null) history.items.flatMap { ScreenshotPenContinuation.endpoints(it,renderer) } else emptyList())
     }
     override fun onDetachedFromWindow() {
-        pending=null; pen=null; continuation=null; penFeedback.clear(); selection.cancel()
+        pending=null; pen=null; continuation=null; penFeedback.clear(); selection.cancel(); eraserPointers.clear()
         super.onDetachedFromWindow()
     }
     private fun penPoint(point: ScreenshotDrawingPoint): ScreenshotDrawingPoint {
@@ -400,15 +404,34 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
     private fun eraseAt(point: ScreenshotDrawingPoint) {
         history.items.indices.filterTo(erased) { it !in erased && renderer.hit(history.items[it],point,ERASER_RADIUS*unit) }
     }
-    private fun eraseTo(point: ScreenshotDrawingPoint) {
-        val from=lastEraser
-        val steps=ceil(hypot(point.x-from.x,point.y-from.y)/(4*unit)).toInt().coerceIn(1,4096)
-        for(step in 1..steps) {
-            val t=step.toFloat()/steps
-            val sample=ScreenshotDrawingPoint(from.x+(point.x-from.x)*t,from.y+(point.y-from.y)*t)
-            eraseAt(sample)
-        }
-        lastEraser=point
+    private fun eraseTo(id: Int,point: ScreenshotDrawingPoint) {
+        val from=eraserPointers.put(id,point)
+        if(from==null) eraseAt(point) else eraseSamples(from,point)
+    }
+    /**
+     * 上游 `queue_eraser_hits(document, &samples)`：把线段按半半径采样后逐点命中。命中只记进
+     * [erased]，拖动中不删对象（保持半透明预览）。
+     */
+    private fun eraseSamples(from: ScreenshotDrawingPoint,to: ScreenshotDrawingPoint) {
+        ScreenshotEraserSamples.segment(from,to,ERASER_RADIUS*unit).forEach(::eraseAt)
+    }
+    /** 上游 `Up | Cancel` 分支：先按该指针的上一位置到抬手点采样，再把它移出 `active_pointers`。 */
+    private fun eraseLift(id: Int,point: ScreenshotDrawingPoint) {
+        val from=eraserPointers.remove(id) ?: return
+        eraseSamples(from,point)
+    }
+    /**
+     * 上游只在 `active_pointers` 清空（最后一根手指抬起）时才把 `pending_ids` 交给 `delete_elements`，
+     * 因此多指同擦整体仍然只占一条历史。
+     */
+    private fun commitEraser() {
+        history.remove(erased); selectedIndex=null; tapCandidates=emptyList()
+    }
+    /** 某一根手指的画布坐标，沿用单指时代的越界夹取。 */
+    private fun eraserPoint(event: MotionEvent,index: Int): ScreenshotDrawingPoint {
+        val x=event.getX(index)*image.width/width
+        val y=event.getY(index)*image.height/height
+        return ScreenshotDrawingPoint(x.coerceIn(0f,image.width.toFloat()),y.coerceIn(0f,image.height.toFloat()))
     }
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val active=tool ?: return false
@@ -433,7 +456,7 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
                         selected?.let { style=it.style }
                         changed()
                     }
-                    ScreenshotDrawingTool.ERASER -> { lastEraser=point; eraseAt(point) }
+                    ScreenshotDrawingTool.ERASER -> { eraserPointers.clear(); eraseTo(event.getPointerId(0),point) }
                     ScreenshotDrawingTool.TEXT -> Unit
                     ScreenshotDrawingTool.WATERMARK -> Unit
                     else -> {
@@ -460,11 +483,39 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
                     }
                 }
             }
-            MotionEvent.ACTION_POINTER_DOWN,MotionEvent.ACTION_CANCEL -> { cancelled=true; quickDrag=false; pending=null; pen=null; continuation=null; erased.clear(); selection.cancel(); penFeedback.clear() }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                if(active==ScreenshotDrawingTool.ERASER && !cancelled) {
+                    // 上游 `Down` 对任意 pointer 都有效：后按下的手指各自加入 active_pointers 一起擦，
+                    // 不取消已经开始的这一次手势（原版测试 multiple_pointers_commit_only_after_final_pointer_ends）。
+                    val index=event.actionIndex
+                    eraseTo(event.getPointerId(index),eraserPoint(event,index))
+                } else {
+                    cancelled=true; quickDrag=false; pending=null; pen=null; continuation=null; erased.clear(); selection.cancel(); penFeedback.clear()
+                }
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                // 上游 `Up` 分支按 pointer 逐个收尾；只要 active_pointers 还有人，就不提交。
+                if(active==ScreenshotDrawingTool.ERASER && !cancelled) {
+                    val index=event.actionIndex
+                    eraseLift(event.getPointerId(index),eraserPoint(event,index))
+                }
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                // 上游把 `Cancel` 与 `Up` 同等处理：已经命中的对象在取消时照样提交成一条历史。
+                if(active==ScreenshotDrawingTool.ERASER && !cancelled) {
+                    for(index in 0 until event.pointerCount) eraseLift(event.getPointerId(index),eraserPoint(event,index))
+                    commitEraser()
+                }
+                cancelled=true; quickDrag=false; pending=null; pen=null; continuation=null; erased.clear(); selection.cancel(); penFeedback.clear()
+            }
             MotionEvent.ACTION_MOVE -> if(quickDrag) selection.move(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,image.width,image.height,event.metaState and android.view.KeyEvent.META_ALT_ON!=0)
                 else if(!cancelled) when(active) {
                 ScreenshotDrawingTool.SELECT -> selection.move(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,image.width,image.height,event.metaState and android.view.KeyEvent.META_ALT_ON!=0)
-                ScreenshotDrawingTool.ERASER -> eraseTo(point)
+                ScreenshotDrawingTool.ERASER -> for(index in 0 until event.pointerCount) {
+                    val id=event.getPointerId(index)
+                    // 只处理本工具跟踪过的手指：POINTER_DOWN 落在框外等情况不会进入 active_pointers。
+                    if(id in eraserPointers) eraseTo(id,eraserPoint(event,index))
+                }
                 else -> pending?.let { points ->
                     val builder=pen
                     if(builder!=null) {
@@ -500,7 +551,13 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
                 if(quickDrag) selection.release(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,image.width,image.height,event.metaState and android.view.KeyEvent.META_ALT_ON!=0)
                 else if(!cancelled) when(active) {
                     ScreenshotDrawingTool.SELECT -> selection.release(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,image.width,image.height,event.metaState and android.view.KeyEvent.META_ALT_ON!=0)
-                    ScreenshotDrawingTool.ERASER -> { eraseTo(point); history.remove(erased); selectedIndex=null; tapCandidates=emptyList() }
+                    ScreenshotDrawingTool.ERASER -> {
+                        eraseLift(event.getPointerId(0),point)
+                        // 正常序列下 POINTER_UP 已经把其余手指移走；异常序列残留时一并清掉，
+                        // 避免把上一轮的指针位置带进下一次手势。
+                        if(eraserPointers.isNotEmpty()) eraserPointers.clear()
+                        commitEraser()
+                    }
                     ScreenshotDrawingTool.TEXT -> onTextRequest?.invoke(point,null)
                     ScreenshotDrawingTool.SERIAL -> {
                         val serial=ScreenshotDrawingStroke(active,listOf(down),pendingStyle.color,pendingStyle.width*pixelUnit,pendingStyle,number=nextNumber)

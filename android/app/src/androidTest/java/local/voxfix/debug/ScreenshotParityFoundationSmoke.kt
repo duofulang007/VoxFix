@@ -52,7 +52,7 @@ object ScreenshotParityFoundationSmoke {
             finally { prefs.edit().clear().commit() }
         }
         failure?.let { throw it }
-        return "SCREENSHOT_PARITY_FOUNDATION_PASS: cancel-states,idempotence,pen-styles,export,history,legacy,document,memory,layout,geometry,shape-kinds,shape-fill,shape-stroke,shape-hit,shape-document,shape-ui,line-straight,line-curve,line-hit,line-document,line-ui,arrow-heads,arrow-outline,arrow-hit,arrow-document,arrow-ui,arrow-shaft,arrow-ratio,arrow-gesture,eraser-sweep,eraser-preview,eraser-reach,eraser-undo,highlight-default,highlight-render,highlight-alpha,highlight-ui,spotlight-default,spotlight-alpha,spotlight-union,spotlight-global,spotlight-history,spotlight-document,spotlight-ui,hatch-4x,hatch-origin,hatch-alpha,hatch-cleanup,serial-geometry,serial-circle,serial-contrast,serial-hit,serial-legacy,serial-document,serial-ui,serial-label-create,serial-label-preview,serial-label-history,serial-label-document,serial-label-cancel,serial-label-move,font-search,font-list,serial-int64,serial-wheel,serial-disabled,text-default,text-line-background,text-size,text-document,watermark-default,watermark-tile,watermark-opacity,watermark-gap,watermark-layer,watermark-ui,watermark-document,selection-units,selection-unit-toggle,region-model,region-mask,region-gesture,object-marquee,object-group-move,object-group-rotate,object-cancel,object-rotate-export,object-rotate-document,object-linear-points,pen-continue,pen-touch-feedback"
+        return "SCREENSHOT_PARITY_FOUNDATION_PASS: cancel-states,idempotence,pen-styles,export,history,legacy,document,memory,layout,geometry,shape-kinds,shape-fill,shape-stroke,shape-hit,shape-document,shape-ui,line-straight,line-curve,line-hit,line-document,line-ui,arrow-heads,arrow-outline,arrow-hit,arrow-document,arrow-ui,arrow-shaft,arrow-ratio,arrow-gesture,eraser-sweep,eraser-preview,eraser-reach,eraser-undo,eraser-multitouch,highlight-default,highlight-render,highlight-alpha,highlight-ui,spotlight-default,spotlight-alpha,spotlight-union,spotlight-global,spotlight-history,spotlight-document,spotlight-ui,hatch-4x,hatch-origin,hatch-alpha,hatch-cleanup,serial-geometry,serial-circle,serial-contrast,serial-hit,serial-legacy,serial-document,serial-ui,serial-label-create,serial-label-preview,serial-label-history,serial-label-document,serial-label-cancel,serial-label-move,font-search,font-list,serial-int64,serial-wheel,serial-disabled,text-default,text-line-background,text-size,text-document,watermark-default,watermark-tile,watermark-opacity,watermark-gap,watermark-layer,watermark-ui,watermark-document,selection-units,selection-unit-toggle,region-model,region-mask,region-gesture,object-marquee,object-group-move,object-group-rotate,object-cancel,object-rotate-export,object-rotate-document,object-linear-points,pen-continue,pen-touch-feedback"
     }
     private fun cancel(context: Context) {
         for(mode in listOf("empty","drawing","busy","editing","translating")) {
@@ -751,6 +751,38 @@ object ScreenshotParityFoundationSmoke {
             drag(60f,170f,300f,170f)
             check(layer.history.items.any { it.id==farId }) { "橡皮擦超出了 8px 半径" }
             check(layer.history.items.none { it.tool==ScreenshotDrawingTool.RECTANGLE && it.id!=farId }) { "半径内的对象没有被擦掉" }
+
+            // 多指同擦：上游 `active_pointers` 让每根手指各自记录位置并一起擦，且只有最后一根手指
+            // 抬起（`active_pointers` 清空）时才发现一次删除，整体只占一条历史。
+            layer.resetCanvas()
+            layer.tool=ScreenshotDrawingTool.RECTANGLE
+            drag(70f,140f,130f,200f); drag(150f,140f,210f,200f); drag(230f,140f,290f,200f)
+            check(layer.history.items.size==3) { "多指前置：三个矩形没有落笔" }
+            layer.tool=ScreenshotDrawingTool.ERASER
+            val multiBefore=undoDepth()
+            // 两指事件必须显式构造 pointerProperties / pointerCoords，单指 obtain 带不了第二个点。
+            fun multi(action: Int,points: List<Pair<Float,Float>>,actionIndex: Int) {
+                val props=Array(points.size) { id -> MotionEvent.PointerProperties().apply {
+                    this.id=id; toolType=MotionEvent.TOOL_TYPE_FINGER
+                } }
+                val coords=Array(points.size) { index -> MotionEvent.PointerCoords().apply {
+                    x=points[index].first; y=points[index].second; pressure=1f; size=1f
+                } }
+                val masked=action or (actionIndex shl MotionEvent.ACTION_POINTER_INDEX_SHIFT)
+                val event=MotionEvent.obtain(1L,2L,masked,points.size,props,coords,0,0,1f,1f,0,0,0,0)
+                try { check(layer.onTouchEvent(event)) { "多指手势未被消费：$action" } } finally { event.recycle() }
+            }
+            touch(MotionEvent.ACTION_DOWN,100f,170f)
+            multi(MotionEvent.ACTION_POINTER_DOWN,listOf(100f to 170f,180f to 170f),1)
+            check(layer.history.items.size==3) { "多指按下时就删了对象" }
+            multi(MotionEvent.ACTION_POINTER_UP,listOf(100f to 170f,180f to 170f),1)
+            check(layer.history.items.size==3) { "第二根手指抬起就提交了，应等最后一根" }
+            multi(MotionEvent.ACTION_MOVE,listOf(260f to 170f),0)
+            touch(MotionEvent.ACTION_UP,260f,170f)
+            check(layer.history.items.isEmpty()) { "多指同擦没有擦掉三个对象" }
+            check(undoDepth()==multiBefore+1) { "多指同擦应只占一条历史：${undoDepth()-multiBefore}" }
+            layer.undo()
+            check(layer.history.items.size==3) { "撤销没有恢复多指擦掉的对象" }
         } finally { layer.close(); image.recycle() }
     }
 
