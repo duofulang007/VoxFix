@@ -2,7 +2,8 @@ package local.voxfix.debug
 
 enum class ScreenshotDrawingTool { ARROW, RECTANGLE, PEN, FILTER, HIGHLIGHT, SPOTLIGHT, TEXT, SERIAL, ERASER, SELECT, LINE, WATERMARK }
 enum class ScreenshotAreaMode { RECTANGLE, PEN }
-enum class ScreenshotFilter { MOSAIC, BLUR }
+/** 上游 `DisplayFilterType` 的六种滤镜；顺序沿用原版取值，名字写进工程 JSON，追加不影响旧档。 */
+enum class ScreenshotFilter { MOSAIC, BLUR, GRAYSCALE, INVERT, EMBOSS, BRIGHTNESS }
 enum class ScreenshotSerialShape { OUTLINED_CIRCLE, SOLID_CIRCLE, OUTLINED_SQUARE, SOLID_SQUARE, CIRCLED_NUMBER, CIRCLE }
 enum class ScreenshotStrokePattern { SOLID, DASHED, DOTTED }
 enum class ScreenshotFillPattern { SOLID, CROSS_LINE, LINE }

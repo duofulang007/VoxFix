@@ -147,7 +147,7 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
     val pixelUnit get()=savedPixelUnit.takeIf { it>0 } ?: (resources.displayMetrics.density*image.width/(width.takeIf { it>0 } ?: image.width))
     val fontUnit get()=savedFontUnit.takeIf { it>0 } ?: (resources.displayMetrics.scaledDensity*image.width/(width.takeIf { it>0 } ?: image.width))
     private val unit get()=resources.displayMetrics.density*image.width/(width.takeIf { it>0 } ?: image.width)
-    private val renderer=ScreenshotDrawingRenderer(image) { fontUnit }
+    private val renderer=ScreenshotDrawingRenderer(image,{ resources.displayMetrics.density }) { fontUnit }
     private val snapPreferences by lazy { ScreenshotSnapConfig.preferences(context) }
     private val selection by lazy { ScreenshotObjectSelection(history,renderer,{ unit },{ slop }) }
     private val penFeedback by lazy { ScreenshotPenFeedback(this,image.width,image.height) }

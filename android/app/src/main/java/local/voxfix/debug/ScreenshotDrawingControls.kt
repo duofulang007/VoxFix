@@ -167,8 +167,16 @@ internal class ScreenshotDrawingControls(context: Context,private val drawing: S
             if(!hasWidth) row(listOf(customColor!!))
         }
         if(active==ScreenshotDrawingTool.FILTER) {
-            row(ScreenshotFilter.values().map { filter -> chip(if(filter==ScreenshotFilter.MOSAIC) "马赛克" else "高斯模糊",!mixed(FILTER) && style.filter==filter) { change(FILTER) { it.copy(filter=filter) } } })
-            slider(STRENGTH,"强度",style.strength-4,60,4) { s,v -> s.copy(strength=v) }
+            // 上游 DisplayFilterType 的六种滤镜。灰度与反色的强度在 FilterRenderSpec::resolve 里恒为 1.0，
+            // 滑块对它们无效，所以不显示强度条（不是省掉，是原版也没有可调项）。
+            val labels = listOf("马赛克","高斯模糊","灰度","反色","浮雕","亮度")
+            row(ScreenshotFilter.values().mapIndexed { index, filter ->
+                chip(labels.getOrElse(index) { filter.name },!mixed(FILTER) && style.filter==filter) {
+                    change(FILTER) { it.copy(filter=filter) }
+                }
+            })
+            if(!mixed(FILTER) && style.filter !in setOf(ScreenshotFilter.GRAYSCALE,ScreenshotFilter.INVERT))
+                slider(STRENGTH,"强度",style.strength-4,60,4) { s,v -> s.copy(strength=v) }
             if (drawing.autoFilterActive) {
                 val regions = drawing.autoFilterRegions
                 group(when {

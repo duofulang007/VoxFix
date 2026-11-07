@@ -29,6 +29,24 @@ internal object ScreenshotFilterStabilitySmoke {
                     maxFrame.set(maxOf(maxFrame.get(),(android.os.SystemClock.elapsedRealtimeNanos()-start)/1_000_000))
                     if(retained==null) retained=cache.snapshot().values.first() as Bitmap
                 }
+                // 新接的四种滤镜：在纯色底上逐像素核对上游公式（灰度系数、预乘反色、亮度白点、浮雕中灰）。
+                val flat=Bitmap.createBitmap(8,8,Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED) }
+                val box=Rect(0,0,8,8)
+                fun probe(type: ScreenshotFilter,strength: Int): Int {
+                    val out=ScreenshotDrawingFilters.apply(flat,box,type,strength,1)
+                    return try { out.getPixel(4,4) } finally { out.recycle() }
+                }
+                check(probe(ScreenshotFilter.GRAYSCALE,24)==0xFF363636.toInt()) {
+                    "灰度像素不对：${Integer.toHexString(probe(ScreenshotFilter.GRAYSCALE,24))}" }
+                check(probe(ScreenshotFilter.INVERT,24)==0xFF00FFFF.toInt()) { "反色像素不对" }
+                // 强度 64 → 归一化 1 → scale 131072 → 全白；强度 4 → 全黑。
+                check(probe(ScreenshotFilter.BRIGHTNESS,64)==0xFFFFFFFF.toInt()) { "亮度最亮不是白" }
+                check(probe(ScreenshotFilter.BRIGHTNESS,4)==0xFF000000.toInt()) { "亮度最暗不是黑" }
+                // 强度 34 → 归一化 0.5 → scale 65536 → 中性，不改像素。
+                check(probe(ScreenshotFilter.BRIGHTNESS,34)==0xFFFF0000.toInt()) { "亮度中性点改了像素" }
+                // 纯色上浮雕 delta=0 → 灰阶 alpha/2。
+                check(probe(ScreenshotFilter.EMBOSS,24)==0xFF808080.toInt()) { "浮雕中性灰不对" }
+                flat.recycle()
                 check(cache.size()<=24*1024*1024)
                 check(retained?.isRecycled==false) { "cache eviction recycled an image retained by a frame" }
                 renderer.close()
@@ -40,6 +58,7 @@ internal object ScreenshotFilterStabilitySmoke {
         worker.start(); worker.join(3000)
         check(!worker.isAlive) { "filter cache stalled during a growing drag: ${worker.stackTrace.take(7).joinToString()}" }
         error.get()?.let { throw it }
-        return "SCREENSHOT_FILTER_STABILITY_PASS: 32-growing-mosaic+8-blur,pen/rectangle,cache-eviction,retained-frame,maxFrameMs=${maxFrame.get()}"
+        return "SCREENSHOT_FILTER_STABILITY_PASS: 32-growing-mosaic+8-per-type,pen/rectangle,cache-eviction,retained-frame," +
+            "gray/invert/brightness/emboss,maxFrameMs=${maxFrame.get()}"
     }
 }

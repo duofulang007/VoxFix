@@ -7,7 +7,10 @@ import android.text.TextPaint
 import android.util.LruCache
 import kotlin.math.*
 
-internal class ScreenshotDrawingRenderer(private var image: Bitmap, private val fontUnit: () -> Float) {
+internal class ScreenshotDrawingRenderer(private var image: Bitmap,
+    /** 设备密度：浮雕的「1 逻辑像素」采样半径要按它换成设备像素。 */
+    private val density: () -> Float = { 1f },
+    private val fontUnit: () -> Float) {
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap=Paint.Cap.ROUND; strokeJoin=Paint.Join.ROUND }
     private val penPaint=Paint()
     private data class FilterKey(val left:Int,val top:Int,val right:Int,val bottom:Int,val type:ScreenshotFilter,val strength:Int)
@@ -444,7 +447,8 @@ internal class ScreenshotDrawingRenderer(private var image: Bitmap, private val 
                 if(safe.width()<1 || safe.height()<1) return
                 // Drag points mutate between frames; only immutable source-region values may be cache keys.
                 val key=FilterKey(safe.left,safe.top,safe.right,safe.bottom,stroke.style.filter,stroke.style.strength.coerceIn(4,64))
-                val bitmap=filters.get(key) ?: ScreenshotDrawingFilters.apply(image,safe,key.type,key.strength).also { filters.put(key,it) }
+                val bitmap=filters.get(key) ?: ScreenshotDrawingFilters.apply(image,safe,key.type,key.strength,
+                    ScreenshotFilterMath.embossRadius(density())).also { filters.put(key,it) }
                 canvas.save()
                 if(stroke.style.area==ScreenshotAreaMode.PEN) {
                     val mask=Path(); paint.style=Paint.Style.STROKE; paint.strokeWidth=stroke.width
