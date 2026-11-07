@@ -429,6 +429,7 @@ class ScreenshotCaptureOverlay(
     }
     private var qrHits: List<ScreenshotBarcodeHit>?=null
     private var qrVisible=false
+    private var qrScanning=false
     private var qrPopup: android.widget.PopupWindow?=null
     private val hideBarButton=ImageView(context)
     private var selectionReadoutHidden = false
@@ -669,9 +670,32 @@ class ScreenshotCaptureOverlay(
         if(busy || translating || editing) return
         moveMode=!moveMode
         if(!moveMode) setRegionOperation(null)
-        else { drawing.tool=null; resultTool=null; showingOriginal=false; showingTranslation=false; rebuildDrawingStyles() }
+        else {
+            drawing.tool=null; resultTool=null; showingOriginal=false; showingTranslation=false; rebuildDrawingStyles()
+            // 上游 `startAutomaticQrRecognition`：进入编辑态就识别，默认设置 auto_recognize_qr_code = true，
+            // 标记默认可见（`m_visible = true`）。手机在进入选区编辑时补做一次后台识别。
+            autoScanQr()
+        }
         moveAction.active=moveMode
         sync()
+    }
+    /** 进入选区编辑时的后台识码；不占 busy，失败静默（用户仍可手动点开关重试）。 */
+    private fun autoScanQr() {
+        if (qrHits != null || qrScanning || picked == null) {
+            if (qrHits?.isNotEmpty() == true) qrVisible = true
+            return
+        }
+        val bitmap = try { currentImage() } catch(error: Exception) { return }
+        val token = ++actionGeneration
+        qrScanning = true
+        ScreenshotBarcode.scan(bitmap,{ hits ->
+            qrScanning = false
+            if (token==actionGeneration && !disposed) {
+                qrHits=hits
+                if (hits.isNotEmpty()) qrVisible=true
+                sync()
+            }
+        },{ qrScanning=false })
     }
     private fun setRegionOperation(op: ScreenshotRegionOp?) {
         regionOperation=op
