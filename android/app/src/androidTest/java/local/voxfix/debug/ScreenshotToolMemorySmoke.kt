@@ -82,9 +82,9 @@ internal object ScreenshotToolMemorySmoke {
             check(layer.tool==ScreenshotDrawingTool.RECTANGLE && layer.style.color==Color.BLUE && layer.style.width==8)
             layer.tool=ScreenshotDrawingTool.FILTER
             layer.changeArea(ScreenshotAreaMode.PEN)
-            layer.applyStyle(layer.style.copy(filter=ScreenshotFilter.BLUR,strength=32,width=40))
+            layer.applyStyle(layer.style.copy(filter=ScreenshotFilter.BLUR,strength=0.64f,width=40))
             layer.changeArea(ScreenshotAreaMode.RECTANGLE)
-            layer.applyStyle(layer.style.copy(strength=52))
+            layer.applyStyle(layer.style.copy(strength=0.86f))
             layer.changeArea(ScreenshotAreaMode.PEN)
             layer.tool=ScreenshotDrawingTool.SERIAL; layer.setNumber(17)
             layer.tool=ScreenshotDrawingTool.RECTANGLE
@@ -101,8 +101,8 @@ internal object ScreenshotToolMemorySmoke {
             val reopened=ScreenshotDrawingLayer(context,bitmap,ScreenshotToolMemory(context)) {}
             try {
                 reopened.tool=ScreenshotDrawingTool.FILTER
-                check(reopened.style.filter==ScreenshotFilter.BLUR && reopened.style.area==ScreenshotAreaMode.PEN && reopened.style.strength==32)
-                reopened.changeArea(ScreenshotAreaMode.RECTANGLE); check(reopened.style.strength==52)
+                check(reopened.style.filter==ScreenshotFilter.BLUR && reopened.style.area==ScreenshotAreaMode.PEN && reopened.style.strength==0.64f)
+                reopened.changeArea(ScreenshotAreaMode.RECTANGLE); check(reopened.style.strength==0.86f)
                 check(reopened.nextNumber==17L)
             } finally { reopened.close() }
             val textStyle=ScreenshotDrawingStyle(color=Color.CYAN,fontFamily="serif",bold=true,fontSize=28f,align=2,verticalAlign=1,
@@ -116,6 +116,10 @@ internal object ScreenshotToolMemorySmoke {
             prefs.edit().putString("style.TEXT.last","{\"width\":-1,\"fontSize\":9000,\"opacity\":\"NaN\",\"fontFamily\":\"invalid\"}").commit()
             val safe=memory.style(ScreenshotDrawingTool.TEXT)!!
             check(safe.width==1 && safe.fontSize==256f && safe.opacity==1f && safe.fontFamily=="sans-serif") { "Invalid style was not normalized: $safe" }
+            // 旧记忆把强度存成 4..64 的像素块边长，新键 `filterStrength` 是上游 0..1。
+            prefs.edit().putString("style.FILTER.last","{\"filter\":\"BLUR\",\"strength\":64}").commit()
+            val migrated=memory.style(ScreenshotDrawingTool.FILTER)
+            check(migrated!=null && kotlin.math.abs(migrated.strength-1f)<1e-4f) { "旧记忆强度没有迁移：${migrated?.strength}" }
         } finally { second.dismiss(context.getSystemService(WindowManager::class.java)); bitmap.recycle() }
     }
 }

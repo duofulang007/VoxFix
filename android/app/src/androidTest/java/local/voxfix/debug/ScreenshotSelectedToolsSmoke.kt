@@ -86,7 +86,11 @@ object ScreenshotSelectedToolsSmoke {
     }
     private fun drawing(context: Context) {
         val source=Bitmap.createBitmap(600,900,Bitmap.Config.ARGB_8888)
-        val pixels=IntArray(600*900) { index -> if((index%600/3)%2==0) Color.BLACK else Color.WHITE }
+        // 彩色条纹底：滤镜断言横跨 130..270 取一行像素，纯黑白底会让灰度在黑色行上「没有变化」，
+        // 那验证的是底色而不是滤镜。高亮用 MULTIPLY 混合（黄×橙仍是橙），所以两色都必须带非零蓝分量。
+        val pixels=IntArray(600*900) { index ->
+            if((index%600/3)%2==0) Color.rgb(30,144,255) else Color.rgb(200,40,200)
+        }
         source.setPixels(pixels,0,600,0,0,600,900)
         val layer=ScreenshotDrawingLayer(context,source) {}
         layer.layout(0,0,600,900); layer.region=Rect(0,0,600,900)
@@ -134,7 +138,12 @@ object ScreenshotSelectedToolsSmoke {
             layer.applyStyle(layer.inspectedStyle.copy(area=ScreenshotAreaMode.RECTANGLE,color=Color.YELLOW,opacity=.5f))
             drag(50f,50f,250f,250f)
             var output=layer.render(layer.region!!,null)!!
-            check(output.getPixel(100,100)!=source.getPixel(100,100)); check(output.getPixel(500,500)==source.getPixel(500,500)); output.recycle()
+            check(output.getPixel(100,100)!=source.getPixel(100,100)) {
+                "highlight did not tint inside: ${Integer.toHexString(output.getPixel(100,100))} vs ${Integer.toHexString(source.getPixel(100,100))}"
+            }
+            check(output.getPixel(500,500)==source.getPixel(500,500)) {
+                "highlight leaked outside: ${Integer.toHexString(output.getPixel(500,500))} vs ${Integer.toHexString(source.getPixel(500,500))}"
+            }; output.recycle()
             layer.history.remove(layer.history.items.indices.toSet())
             layer.tool=ScreenshotDrawingTool.SPOTLIGHT; drag(100f,100f,300f,300f)
             output=layer.render(layer.region!!,null)!!
@@ -143,11 +152,11 @@ object ScreenshotSelectedToolsSmoke {
             layer.history.remove(layer.history.items.indices.toSet())
             layer.tool=ScreenshotDrawingTool.FILTER
             for(filter in ScreenshotFilter.values()) {
-                layer.applyStyle(layer.inspectedStyle.copy(filter=filter,area=ScreenshotAreaMode.RECTANGLE,strength=16))
+                layer.applyStyle(layer.inspectedStyle.copy(filter=filter,area=ScreenshotAreaMode.RECTANGLE,strength=0.27f))
                 drag(100f,100f,300f,300f); output=layer.render(layer.region!!,null)!!
                 var changed=0
                 for(x in 130..270) if(output.getPixel(x,200)!=source.getPixel(x,200)) changed++
-                check(changed>40) { "$filter did not filter actual pixels: $changed" }
+                check(changed>40) { "$filter did not filter actual pixels: $changed (strength=${layer.style.strength}, area=${layer.style.area}, objects=${layer.history.items.size}, filter=${layer.style.filter})" }
                 check(output.getPixel(500,500)==source.getPixel(500,500)); output.recycle(); layer.undo()
             }
             check(source.getPixel(100,100)==pixels[60100]) { "source screenshot changed" }

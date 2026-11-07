@@ -1432,14 +1432,20 @@ class ScreenshotCaptureOverlay(
             smartBar.translationY = dock.top.toFloat()
         }
         val detailWidth=minOf(maxOf(toolbarWidth,dp(320)),width-bars.left-bars.right-dp(16)).coerceAtLeast(1)
+        val lp=secondaryPanel.layoutParams
+        if(lp.width!=detailWidth || lp.height!=-2) secondaryPanel.layoutParams=FrameLayout.LayoutParams(detailWidth,-2)
+        // 先按内容测高，再决定贴上还是贴下：旧判据只看「下方还剩 104dp」，三行详细栏（比如滤镜的
+        // 类型／面积／强度）会超出屏幕底部被裁掉——看得见最后一行却点不到滑杆。
+        if(secondaryMaxHeight!=dp(280)) secondaryMaxHeight=dp(280)
+        secondaryPanel.measure(View.MeasureSpec.makeMeasureSpec(detailWidth,View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED))
+        val contentHeight=secondaryPanel.measuredHeight.coerceIn(1,dp(280))
         val below=(safeBottom-y-toolbarHeight-dp(8)).coerceAtLeast(0)
         val above=(y-safeTop-dp(8)).coerceAtLeast(0)
-        val detailsAbove=below<dp(104) && above>below
+        val detailsAbove=below<contentHeight && above>below
         val detailHeight=(if(detailsAbove) above else below).coerceAtLeast(1).coerceAtMost(dp(280))
         val detailTop=if(detailsAbove) y-dp(8)-detailHeight else y+toolbarHeight+dp(8)
         if(secondaryMaxHeight!=detailHeight) { secondaryMaxHeight=detailHeight; secondaryPanel.requestLayout() }
-        val lp=secondaryPanel.layoutParams
-        if(lp.width!=detailWidth || lp.height!=-2) secondaryPanel.layoutParams=FrameLayout.LayoutParams(detailWidth,-2)
         secondaryPanel.measure(View.MeasureSpec.makeMeasureSpec(detailWidth,View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(detailHeight,View.MeasureSpec.AT_MOST))
         secondaryPanel.translationX=x.coerceAtMost(width-bars.right-detailWidth-dp(8)).coerceAtLeast(bars.left+dp(8)).toFloat()

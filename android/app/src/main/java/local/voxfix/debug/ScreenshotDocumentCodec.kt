@@ -23,7 +23,7 @@ internal object ScreenshotDocumentCodec {
             val style = JSONObject()
                 .put("color", stroke.style.color).put("width", stroke.style.width)
                 .put("opacity", stroke.style.opacity.toDouble()).put("area", stroke.style.area.name)
-                .put("filter", stroke.style.filter.name).put("strength", stroke.style.strength)
+                .put("filter", stroke.style.filter.name).put("filterStrength", stroke.style.strength.toDouble())
                 .put("fontSize", stroke.style.fontSize.toDouble()).put("bold", stroke.style.bold)
                 .put("align", stroke.style.align).put("serial", stroke.style.serialShape.name)
                 .put("family", stroke.style.fontFamily).put("verticalAlign", stroke.style.verticalAlign)
@@ -278,6 +278,11 @@ internal object ScreenshotDocumentCodec {
         if (row == null) return ScreenshotDrawingStyle()
         fun name(key: String, fallback: String) = row.optString(key, fallback)
         val rawSize=row.optDouble("fontSize",18.0).toFloat()
+        // 新键 `filterStrength` 是上游 0..1 强度；旧工程写的是 4..64 的像素块边长（`strength`），
+        // 读到旧键时按原语义线性换算一次，写回永远用新键。
+        val strength=if(row.has("filterStrength"))
+            row.optDouble("filterStrength",0.5).takeIf { it.isFinite() }?.coerceIn(0.0,1.0)?.toFloat() ?: 0.5f
+        else row.optInt("strength",-1).takeIf { it>=0 }?.let { ((it-4)/60f).coerceIn(0f,1f) } ?: 0.5f
         // A size edit divides by the object's scale to leave its outline/background untouched.
         val effectiveSize=rawSize*fontScale
         val fontSize=if(rawSize.isFinite() && rawSize>0f && effectiveSize.isFinite() && effectiveSize>=ScreenshotFontSize.MIN) rawSize
@@ -288,7 +293,7 @@ internal object ScreenshotDocumentCodec {
             opacity = row.optDouble("opacity", 1.0).toFloat().coerceIn(0f, 1f),
             area = runCatching { ScreenshotAreaMode.valueOf(name("area", "RECTANGLE")) }.getOrDefault(ScreenshotAreaMode.RECTANGLE),
             filter = runCatching { ScreenshotFilter.valueOf(name("filter", "MOSAIC")) }.getOrDefault(ScreenshotFilter.MOSAIC),
-            strength = row.optInt("strength", 12).coerceIn(4, 64),
+            strength = strength,
             // Doubles since the original model stores a double; older documents wrote integers and
             // still decode, because a JSON number reads the same either way.
             fontSize = fontSize,

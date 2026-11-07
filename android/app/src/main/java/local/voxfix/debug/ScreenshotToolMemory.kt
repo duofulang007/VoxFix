@@ -23,10 +23,15 @@ class ScreenshotToolMemory(context: Context) {
             fun int(name: String,default: Int,min: Int,max: Int)=json.optInt(name,default).coerceIn(min,max)
             val opacity=json.optDouble("opacity",base.opacity.toDouble()).takeIf { it.isFinite() }?.coerceIn(0.0,1.0)?.toFloat() ?: base.opacity
             val fontSize=json.optDouble("fontSize",base.fontSize.toDouble()).toFloat()
+            // `filterStrength` 是上游 0..1 强度；旧版本存的是 4..64 的像素块边长（`strength`），
+            // 读到旧键时按原来的线性语义换算一次，之后只写新键。
+            val strength=if(json.has("filterStrength"))
+                json.optDouble("filterStrength",base.strength.toDouble()).takeIf { it.isFinite() }?.coerceIn(0.0,1.0)?.toFloat() ?: base.strength
+            else json.optInt("strength",-1).takeIf { it>=0 }?.let { ((it-4)/60f).coerceIn(0f,1f) } ?: base.strength
             base.copy(color=json.optInt("color",base.color),width=int("width",base.width,1,64),opacity=opacity,
                 area=area ?: ScreenshotAreaMode.values().firstOrNull { it.name==json.optString("area") } ?: base.area,
                 filter=ScreenshotFilter.values().firstOrNull { it.name==json.optString("filter") } ?: base.filter,
-                strength=int("strength",base.strength,4,64),fontSize=ScreenshotFontSize.clamp(tool,fontSize,base.fontSize),
+                strength=strength,fontSize=ScreenshotFontSize.clamp(tool,fontSize,base.fontSize),
                 bold=json.optBoolean("bold",base.bold),align=int("align",base.align,0,2),
                 serialShape=ScreenshotSerialShape.values().firstOrNull { it.name==json.optString("serialShape") } ?: base.serialShape,
                 fontFamily=ScreenshotFontFamilies.resolve(json.optString("fontFamily")) ?: base.fontFamily,
@@ -48,7 +53,7 @@ class ScreenshotToolMemory(context: Context) {
     fun save(tool: ScreenshotDrawingTool,style: ScreenshotDrawingStyle) {
         if(tool in setOf(ScreenshotDrawingTool.SELECT,ScreenshotDrawingTool.ERASER)) return
         val json=JSONObject().put("color",style.color).put("width",style.width).put("opacity",style.opacity.toDouble())
-            .put("area",style.area.name).put("filter",style.filter.name).put("strength",style.strength)
+            .put("area",style.area.name).put("filter",style.filter.name).put("filterStrength",style.strength.toDouble())
             .put("fontSize",style.fontSize.toDouble()).put("bold",style.bold).put("align",style.align).put("serialShape",style.serialShape.name)
             .put("serialGeometryVersion",style.serialGeometryVersion)
             .put("fontFamily",style.fontFamily).put("verticalAlign",style.verticalAlign).put("outlineColor",style.outlineColor)

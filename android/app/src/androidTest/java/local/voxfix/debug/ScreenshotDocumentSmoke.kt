@@ -16,7 +16,7 @@ object ScreenshotDocumentSmoke {
         var error: Throwable? = null
         test.runOnMainSync { try { documents(); textBlocks(test.targetContext) } catch (e: Throwable) { error = e } }
         error?.let { throw it }
-        return "SCREENSHOT_DOCUMENT_PASS: round-trip,stable-ids,unknown-version,invalid-values,bounded-input,block-move,block-undo"
+        return "SCREENSHOT_DOCUMENT_PASS: round-trip,stable-ids,unknown-version,invalid-values,bounded-input,block-move,block-undo,legacy-strength"
     }
 
     private fun document() = ScreenshotDocument(
@@ -35,7 +35,7 @@ object ScreenshotDocumentSmoke {
                 text = "第一行\n第二行", textWidth = 480f, fontScale = 1.5f, textHeight = 90f, id = 12),
             ScreenshotDrawingStroke(ScreenshotDrawingTool.FILTER,
                 listOf(ScreenshotDrawingPoint(300f, 500f), ScreenshotDrawingPoint(600f, 800f)),
-                0, 24f, ScreenshotDrawingStyle(width = 24, filter = ScreenshotFilter.BLUR, strength = 40, area = ScreenshotAreaMode.PEN), id = 13)
+                0, 24f, ScreenshotDrawingStyle(width = 24, filter = ScreenshotFilter.BLUR, strength = 0.66f, area = ScreenshotAreaMode.PEN), id = 13)
         ),
         text = ScreenshotDocumentText(
             blocks = listOf(ScreenshotTextBlock(70, 320, 500, 380, "识别原文"), ScreenshotTextBlock(70, 400, 480, 460, "第二段")),
@@ -53,6 +53,14 @@ object ScreenshotDocumentSmoke {
         check(restored.objects.map { it.id } == listOf(11L, 12L, 13L)) { "工程对象编号未保留" }
         check(restored.text?.mode == ScreenshotTextMode.TRANSLATION) { "工程未记录译文模式" }
         check(restored.text?.translation?.single()?.text == "Recognised") { "工程丢失译文" }
+
+        // 旧工程把强度存成 4..64 的像素块边长（`strength`），新键是上游 0..1 强度（`filterStrength`）。
+        // 缺新键时必须按原语意换算一次，否则老图重开会得到完全不同的打码力度。
+        val legacy = encoded.replace(Regex("\"filterStrength\":[0-9.eE+-]+"), "\"strength\":34")
+        check(legacy != encoded) { "测试没能造出旧格式强度键" }
+        val migrated = ScreenshotDocumentCodec.decode(legacy)
+        val migratedStrength = migrated.objects.first { it.tool == ScreenshotDrawingTool.FILTER }.style.strength
+        check(kotlin.math.abs(migratedStrength - 0.5f) < 1e-4f) { "旧工程强度没有迁移：$migratedStrength" }
 
         val history = ScreenshotDrawing()
         history.load(restored.objects)

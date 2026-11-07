@@ -24,7 +24,11 @@ data class ScreenshotDrawingPoint(val x: Float, val y: Float)
 data class ScreenshotDrawingStyle(
     val color: Int = 0xFFF5222D.toInt(), val width: Int = 2, val opacity: Float = 1f,
     val area: ScreenshotAreaMode = ScreenshotAreaMode.RECTANGLE,
-    val filter: ScreenshotFilter = ScreenshotFilter.MOSAIC, val strength: Int = 12,
+    /**
+     * 滤镜强度，语义与上游 `FilterRenderSpec::strength` 一致：0..1，面板滑杆是 0..100。
+     * 默认 0.5 对应上游工具栏的滑杆初值 50。
+     */
+    val filter: ScreenshotFilter = ScreenshotFilter.MOSAIC, val strength: Float = 0.5f,
     val fontSize: Float = 18f, val bold: Boolean = false, val align: Int = 0,
     val serialShape: ScreenshotSerialShape = ScreenshotSerialShape.OUTLINED_CIRCLE,
     val fontFamily: String = "sans-serif", val verticalAlign: Int = 0,

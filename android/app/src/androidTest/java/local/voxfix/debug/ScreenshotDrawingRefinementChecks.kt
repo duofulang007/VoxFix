@@ -79,6 +79,21 @@ internal object ScreenshotDrawingRefinementChecks {
             }
             check(opacity.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id,arguments)) { "spotlight opacity slider rejected the progress action" }
             check(kotlin.math.abs(layer.style.opacity-.45f)<.001f) { "non-drag slider adjustment stayed in uncommitted preview: ${layer.style.opacity}" }
+            layer.tool=ScreenshotDrawingTool.FILTER
+            val filterControls=ScreenshotDrawingControls(context,layer,{ _,_,_-> })
+            val intensity=find(filterControls,"强度") as? android.widget.SeekBar ?: error("滤镜缺少强度滑杆")
+            // 上游 `filter-intensity` 是 0..100 的滑杆（`value / 100` 换成 0..1），初值 50。
+            check(intensity.max==100) { "强度滑杆上限不是 100：${intensity.max}" }
+            check(intensity.progress==50) { "强度默认值不是 50：${intensity.progress}" }
+            fun setIntensity(value: Float) {
+                val arguments=android.os.Bundle().apply {
+                    putFloat(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE,value)
+                }
+                check(intensity.performAccessibilityAction(
+                    android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id,arguments)) { "强度滑杆拒绝进度动作" }
+            }
+            setIntensity(100f); check(kotlin.math.abs(layer.style.strength-1f)<.001f) { "强度 100 没有映射到 1.0：${layer.style.strength}" }
+            setIntensity(0f); check(kotlin.math.abs(layer.style.strength)<.001f) { "强度 0 没有映射到 0.0：${layer.style.strength}" }
             val parent=FrameLayout(context).apply { layout(0,0,600,900) }
             parent.addView(layer,FrameLayout.LayoutParams(600,900))
             layer.tool=ScreenshotDrawingTool.TEXT

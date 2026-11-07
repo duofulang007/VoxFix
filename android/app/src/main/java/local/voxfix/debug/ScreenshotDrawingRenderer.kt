@@ -13,7 +13,7 @@ internal class ScreenshotDrawingRenderer(private var image: Bitmap,
     private val fontUnit: () -> Float) {
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap=Paint.Cap.ROUND; strokeJoin=Paint.Join.ROUND }
     private val penPaint=Paint()
-    private data class FilterKey(val left:Int,val top:Int,val right:Int,val bottom:Int,val type:ScreenshotFilter,val strength:Int)
+    private data class FilterKey(val left:Int,val top:Int,val right:Int,val bottom:Int,val type:ScreenshotFilter,val strength:Float)
     // Recorded hardware frames can outlive cache entries; GC owns the bitmap lifetime.
     private val filters=object : LruCache<FilterKey,Bitmap>(24*1024*1024) {
         override fun sizeOf(key: FilterKey,value: Bitmap)=value.allocationByteCount
@@ -446,9 +446,9 @@ internal class ScreenshotDrawingRenderer(private var image: Bitmap,
                 val safe=Rect(floor(box.left).toInt().coerceAtLeast(0),floor(box.top).toInt().coerceAtLeast(0),ceil(box.right).toInt().coerceAtMost(image.width),ceil(box.bottom).toInt().coerceAtMost(image.height))
                 if(safe.width()<1 || safe.height()<1) return
                 // Drag points mutate between frames; only immutable source-region values may be cache keys.
-                val key=FilterKey(safe.left,safe.top,safe.right,safe.bottom,stroke.style.filter,stroke.style.strength.coerceIn(4,64))
+                val key=FilterKey(safe.left,safe.top,safe.right,safe.bottom,stroke.style.filter,ScreenshotFilterMath.clamp(stroke.style.strength))
                 val bitmap=filters.get(key) ?: ScreenshotDrawingFilters.apply(image,safe,key.type,key.strength,
-                    ScreenshotFilterMath.embossRadius(density())).also { filters.put(key,it) }
+                    density(), ScreenshotFilterMath.embossRadius(density())).also { filters.put(key,it) }
                 canvas.save()
                 if(stroke.style.area==ScreenshotAreaMode.PEN) {
                     val mask=Path(); paint.style=Paint.Style.STROKE; paint.strokeWidth=stroke.width
@@ -479,8 +479,8 @@ internal class ScreenshotDrawingRenderer(private var image: Bitmap,
         val safe=Rect(floor(box.left).toInt().coerceAtLeast(0),floor(box.top).toInt().coerceAtLeast(0),
             ceil(box.right).toInt().coerceAtMost(image.width),ceil(box.bottom).toInt().coerceAtMost(image.height))
         if(safe.width()<1 || safe.height()<1) return
-        val key=FilterKey(safe.left,safe.top,safe.right,safe.bottom,stroke.style.filter,stroke.style.strength.coerceIn(4,64))
-        val bitmap=filters.get(key) ?: ScreenshotDrawingFilters.apply(image,safe,key.type,key.strength).also { filters.put(key,it) }
+        val key=FilterKey(safe.left,safe.top,safe.right,safe.bottom,stroke.style.filter,ScreenshotFilterMath.clamp(stroke.style.strength))
+        val bitmap=filters.get(key) ?: ScreenshotDrawingFilters.apply(image,safe,key.type,key.strength,density()).also { filters.put(key,it) }
         canvas.save(); canvas.clipPath(mask)
         paint.alpha=255; paint.blendMode=BlendMode.SRC_OVER; paint.isFilterBitmap=stroke.style.filter==ScreenshotFilter.BLUR
         canvas.drawBitmap(bitmap,null,safe,paint); paint.isFilterBitmap=false; canvas.restore()

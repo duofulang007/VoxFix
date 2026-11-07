@@ -164,7 +164,7 @@ internal object ScreenshotObjectSelectionChecks {
             for(type in ScreenshotFilter.values()) {
                 val stroke=ScreenshotDrawingStroke(ScreenshotDrawingTool.FILTER,
                     listOf(ScreenshotDrawingPoint(40f,50f),ScreenshotDrawingPoint(80f,70f)),Color.RED,4f,
-                    ScreenshotDrawingStyle(filter=type,strength=12),rotation=PI.toFloat()/2)
+                    ScreenshotDrawingStyle(filter=type,strength=0.2f),rotation=PI.toFloat()/2)
                 val output=source.copy(Bitmap.Config.ARGB_8888,true)
                 try {
                     renderer.draw(Canvas(output),listOf(stroke),Rect(0,0,128,128))

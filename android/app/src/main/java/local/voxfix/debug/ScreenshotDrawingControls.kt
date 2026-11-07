@@ -12,6 +12,7 @@ import android.view.View
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
+import kotlin.math.roundToInt
 
 /** Tool-specific controls; continuous previews never rebuild the active slider. */
 internal class ScreenshotDrawingControls(context: Context,private val drawing: ScreenshotDrawingLayer,
@@ -175,8 +176,9 @@ internal class ScreenshotDrawingControls(context: Context,private val drawing: S
                     change(FILTER) { it.copy(filter=filter) }
                 }
             })
+            // 上游 `filter-intensity` 是一条 0..100 的滑杆，回调里 `value / 100` 换成 0..1 强度。
             if(!mixed(FILTER) && style.filter !in setOf(ScreenshotFilter.GRAYSCALE,ScreenshotFilter.INVERT))
-                slider(STRENGTH,"强度",style.strength-4,60,4) { s,v -> s.copy(strength=v) }
+                slider(STRENGTH,"强度",(style.strength*100).roundToInt(),100) { s,v -> s.copy(strength=v/100f) }
             if (drawing.autoFilterActive) {
                 val regions = drawing.autoFilterRegions
                 group(when {
