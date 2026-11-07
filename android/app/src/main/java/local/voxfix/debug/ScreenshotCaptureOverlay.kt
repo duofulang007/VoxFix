@@ -643,12 +643,25 @@ class ScreenshotCaptureOverlay(
         val op=regionOperation ?: return
         val base=captureRegion ?: picked?.let { ScreenshotRegion.ofRects(listOf(Rect(it))) } ?: return
         val next=base.combined(vertices, shape, op)
-        if(next.isEmpty) { showFeedback("选区已为空，请重新框选"); picked?.let { selector.showParts(base.rects) }; return }
+        if(next.isEmpty) {
+            // 上游 `confirmSelection()`：`commitRegionOperation()` 之后若 `hasPixelSelection()` 为假，
+            // 直接 `returnToSelectionMode(false)` —— 减法把选区扣空时选区真的变空，用户要重新框选，
+            // 不保留旧框（旧版手机的「提示 + 恢复旧框」属未记录的差异，已按原版改掉）。
+            setRegionOperation(null); rebuildDrawingStyles()
+            captureRegion=null; picked=null; drawing.region=null; drawing.invalidate()
+            clearText(); status.visibility=View.GONE
+            sync()
+            showFeedback("选区已为空，请重新框选")
+            return
+        }
         captureRegion=next.takeIf { it.isCustom || !it.isRectangle }
         picked=Rect(next.bounds)
         drawing.region=picked?.let(::Rect); drawing.invalidate()
         clearText()
         if (next.isCustom) selector.showRegion(next.path()) else selector.showParts(next.rects)
+        // 上游加减是**一次性**模式：`confirmSelection()` 里 `commitRegionOperation()` 把
+        // `m_regionOperation` 复位为 Replace，画完一个形状就退出，不像旧版驻留到再点一次按钮。
+        setRegionOperation(null); rebuildDrawingStyles()
         status.visibility=View.GONE
         sync()
     }

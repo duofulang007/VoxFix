@@ -20,6 +20,7 @@ internal object ScreenshotRegionChecks {
         model(context)
         mask(context)
         gesture(context)
+        operation(context)
     }
 
     private fun triangle() = listOf(PointF(10f, 10f), PointF(90f, 10f), PointF(10f, 90f))
@@ -139,4 +140,55 @@ internal object ScreenshotRegionChecks {
         check(curve?.second == ScreenshotRegionShape.CURVE) { "曲线选区应经双击闭合" }
         check(view.regionShape == ScreenshotRegionShape.CURVE) { "切换形状应生效" }
     }
+
+/**
+ * A01/A02：上游 `ScreenshotOverlayInputHandler::beginRegionOperation` 是**一次性**布尔操作——
+ * 画完一个形状走 `confirmSelection()` → `commitRegionOperation()`，把 `m_regionOperation` 复位为
+ * `Replace`，所以模式不会驻留；减法把选区扣空时 `hasPixelSelection()` 为假，直接
+ * `returnToSelectionMode(false)`，选区真的变空而不是恢复旧框。
+ */
+    private fun operation(context: Context) {
+        val image = Bitmap.createBitmap(600, 600, Bitmap.Config.ARGB_8888)
+        val overlay = ScreenshotCaptureOverlay(context, image, {}, {}, {}, {}, {}, object : ScreenshotTranslator {
+            override fun translate(text: String, pair: TranslatePair, onResult: (String) -> Unit,
+                                   onFailure: (String) -> Unit, onUpdate: (String) -> Unit) {}
+            override fun cancel() {}
+            override fun available() = true
+        })
+        fun field(name: String): Any? = overlay.javaClass.getDeclaredField(name)
+            .apply { isAccessible = true }.get(overlay)
+        fun call(name: String, vararg args: Pair<Class<*>, Any?>) {
+            val method = overlay.javaClass.getDeclaredMethod(name, *args.map { it.first }.toTypedArray())
+            method.isAccessible = true
+            method.invoke(overlay, *args.map { it.second }.toTypedArray())
+        }
+        try {
+            // `selectRegion` 在 view 还没有尺寸时只把选区存成 pending，不会回调 `select`。
+            val root = field("root") as android.view.ViewGroup
+            root.measure(android.view.View.MeasureSpec.makeMeasureSpec(600, android.view.View.MeasureSpec.EXACTLY),
+                android.view.View.MeasureSpec.makeMeasureSpec(600, android.view.View.MeasureSpec.EXACTLY))
+            root.layout(0, 0, 600, 600)
+            (field("selector") as ScreenTextRegionView).selectRegion(Rect(100, 100, 500, 500))
+            check(field("picked") != null) { "初始框选没有生效" }
+
+            // 添加：画一个矩形后模式必须退出，而不是留在模式里等第二次点击。
+            call("toggleRegionOperation", ScreenshotRegionOp::class.java to ScreenshotRegionOp.ADD)
+            check(field("regionOperation") == ScreenshotRegionOp.ADD) { "没有进入添加选区模式" }
+            val add = listOf(PointF(480f, 480f), PointF(580f, 480f), PointF(580f, 580f), PointF(480f, 580f))
+            call("applyRegionShape", List::class.java to add, ScreenshotRegionShape::class.java to ScreenshotRegionShape.RECTANGLE)
+            check(field("regionOperation") == null) { "添加一个形状后应退出加减模式（上游 commitRegionOperation）" }
+            val merged = field("picked") as Rect?
+            check(merged != null && merged.right >= 580) { "添加后的选区没有扩大：$merged" }
+
+            // 减少：扣空整个选区后应当没有选区，且模式已退出。
+            call("toggleRegionOperation", ScreenshotRegionOp::class.java to ScreenshotRegionOp.SUBTRACT)
+            check(field("regionOperation") == ScreenshotRegionOp.SUBTRACT) { "没有进入减少选区模式" }
+            val wipe = listOf(PointF(0f, 0f), PointF(599f, 0f), PointF(599f, 599f), PointF(0f, 599f))
+            call("applyRegionShape", List::class.java to wipe, ScreenshotRegionShape::class.java to ScreenshotRegionShape.RECTANGLE)
+            check(field("regionOperation") == null) { "扣除后应退出加减模式" }
+            check(field("picked") == null) { "扣空后应没有选区（上游 returnToSelectionMode），而不是恢复旧框" }
+            check(field("captureRegion") == null) { "扣空后不应残留自定义选区" }
+        } finally { image.recycle() }
+    }
+
 }
