@@ -591,6 +591,8 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             ?: (resources.displayMetrics.widthPixels to resources.displayMetrics.heightPixels)
         val view = ScreenRecordingAnnotation(this, screen.first, screen.second)
         view.onExitRequested = { setAnnotationDrawing(false) }
+        view.onFocusRequest = { focus -> setAnnotationFocus(focus) }
+        recordingRegion?.let { view.setCanvasRegion(it) }
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -602,6 +604,10 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         ).apply {
             gravity = android.view.Gravity.TOP or android.view.Gravity.START
             setFitInsetsTypes(0)
+            // Text marks type into this window: keep the layout put and let the IME report its inset,
+            // exactly like the screenshot editor's overlay.
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
             layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
         }
         if (runCatching { windows.addView(view, params) }.isFailure) {
@@ -612,19 +618,31 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         recordingAnnotationParams = params
     }
 
-    /** 标注层是否接收触摸与焦点：绘制时可点可输入（样式面板的取值框需要 IME），其余时间穿透。 */
+    /** 标注层是否接收触摸与焦点：绘制时可点，文字输入时才临时取得焦点（IME 需要）。 */
     private fun setAnnotationDrawing(active: Boolean) {
         val view = recordingAnnotation ?: return
         val params = recordingAnnotationParams ?: return
         view.setDrawing(active)
-        params.flags = if (active)
-            params.flags and (WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE).inv()
-        else params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        // Touch only. A focusable full-screen window is sorted above the non-focusable bar, so the
+        // canvas would cover 「完成／取消」; focus is granted per text editor instead
+        // (setAnnotationFocus), and the editor's toolbar lives in this same window.
+        params.flags = if (active) params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        else params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
         runCatching { windows.updateViewLayout(view, params) }
         recordingControl?.setAnnotationEnabled(active)
         android.util.Log.i("VoxFix", "RECORDING_ANNOTATION active=$active")
+    }
+
+    /** IME 只能附着在可获焦窗口上：打开／关闭文字与取值编辑器时切换焦点，其余时间保持穿透层。 */
+    private fun setAnnotationFocus(active: Boolean) {
+        val view = recordingAnnotation ?: return
+        val params = recordingAnnotationParams ?: return
+        val focusable = params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE == 0
+        if (focusable == active) return
+        params.flags = if (active) params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+        else params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        runCatching { windows.updateViewLayout(view, params) }
+        android.util.Log.i("VoxFix", "RECORDING_ANNOTATION_FOCUS active=$active")
     }
 
     private fun removeRecordingAnnotation() {

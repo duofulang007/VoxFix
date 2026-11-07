@@ -18,7 +18,12 @@ internal class ScreenshotDrawingControls(context: Context,private val drawing: S
     private val edit: (String,String,(String)->Unit) -> Unit,
     /** The screenshot editor renders these in the bar's right column instead of a bottom row. */
     private val showSelectActions: Boolean = true,
-    private val showDrawTemplates: ((View) -> Unit)? = null) : LinearLayout(context) {
+    private val showDrawTemplates: ((View) -> Unit)? = null,
+    /**
+     * 自动筛选要在画布位图上跑轮廓识别。录制标注层底图是透明的，识别只会得到噪声，
+     * 所以那里不显示入口（`ScreenRecordingAnnotation` 传 false）。
+     */
+    private val allowAutoFilter: Boolean = true) : LinearLayout(context) {
     private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
     private val tool get()=drawing.inspectedTool
     private val style get()=drawing.inspectedStyle
@@ -140,7 +145,7 @@ internal class ScreenshotDrawingControls(context: Context,private val drawing: S
         val customColor=if(active!=ScreenshotDrawingTool.FILTER) color("颜色",style.color,property=COLOR) { s,c -> s.copy(color=c!!) } else null
         if(drawing.selectedIndices.isEmpty() && active in setOf(ScreenshotDrawingTool.FILTER,ScreenshotDrawingTool.HIGHLIGHT))
             row(ScreenshotAreaMode.values().map { mode -> chip(if(mode==ScreenshotAreaMode.PEN) "画笔" else "矩形",!drawing.autoFilterActive && !mixed(AREA) && style.area==mode,"作用方式 ${mode.name}") { drawing.changeArea(mode) } } +
-                if (active == ScreenshotDrawingTool.FILTER) listOf(chip("自动筛选", drawing.autoFilterActive) { drawing.chooseAutoFilter() }) else emptyList())
+                if (active == ScreenshotDrawingTool.FILTER && allowAutoFilter) listOf(chip("自动筛选", drawing.autoFilterActive) { drawing.chooseAutoFilter() }) else emptyList())
         if(active!=ScreenshotDrawingTool.FILTER) {
             val colors=if(active in setOf(ScreenshotDrawingTool.TEXT,ScreenshotDrawingTool.SERIAL))
                 listOf(0xFFF5222D.toInt() to "红色",0xFF52C41A.toInt() to "绿色",0xFF1677FF.toInt() to "蓝色",0xFFFADB14.toInt() to "黄色",Color.BLACK to "黑色")

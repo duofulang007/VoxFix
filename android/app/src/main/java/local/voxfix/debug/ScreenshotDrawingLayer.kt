@@ -93,6 +93,12 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
     /** Endpoint hints help continue a stroke while editing; the recording overlay turns them off. */
     internal var showPenFeedback=true
     /**
+     * Painting and input are limited to this rect (image coordinates) when set. The recording
+     * overlay passes the capture region, because upstream's annotation canvas *is* that region;
+     * the screenshot editor leaves it null so drawing outside the box stays possible.
+     */
+    internal var clip: Rect?=null
+    /**
      * The eyedropper samples the screenshot base; over a live recording the base is transparent, so
      * the annotation layer turns it off and the palette hides the button instead of faking a colour.
      */
@@ -332,6 +338,9 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
         // Drawing may start outside the capture box; it stays visible there (over the dimmed area) so
         // the gesture is not silently clipped. Export still only keeps what is inside the box.
         canvas.save(); canvas.scale(width.toFloat()/image.width,height.toFloat()/image.height)
+        // Recording overlay: upstream draws on the region window itself, so everything — watermark
+        // and spotlight mask included — stops at the region edge. Null keeps the editor unchanged.
+        clip?.let { canvas.clipRect(it) }
         renderer.draw(canvas,marks(true),Rect(0,0,image.width,image.height),watermark)
         if(tool==ScreenshotDrawingTool.SELECT) selection.draw(canvas)
         if(autoFilterActive) autoFilterSession?.draw(canvas, unit, ::postInvalidateOnAnimation)
@@ -379,6 +388,8 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
         if(width==0 || height==0) return false
         val rawX=event.x*image.width/width
         val rawY=event.y*image.height/height
+        // Outside the clipping canvas there is no canvas at all upstream: let the touch through.
+        clip?.let { if(!it.contains(rawX.toInt(),rawY.toInt())) return false }
         val point=ScreenshotDrawingPoint(rawX.coerceIn(0f,image.width.toFloat()),rawY.coerceIn(0f,image.height.toFloat()))
         if (autoFilterActive) return touchAutoFilter(event, point)
         when(event.actionMasked) {

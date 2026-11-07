@@ -42,6 +42,9 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
             if (modelCompare == "screenshot-recording-area") {
                 output.putString("result", ScreenshotRecordingChecks.area(this)); finish(Activity.RESULT_OK,output); return
             }
+            if (modelCompare == "screenshot-recording-annotation") {
+                output.putString("result", ScreenRecordingAnnotationChecks.run(this)); finish(Activity.RESULT_OK,output); return
+            }
             if (modelCompare == "screenshot-recording-format") {
                 output.putString("result", ScreenshotRecordingChecks.format(this)); finish(Activity.RESULT_OK,output); return
             }
@@ -233,6 +236,7 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
                 modelCompare == "screenshot-recording" -> "SCREENSHOT_RECORDING_FAIL"
                 modelCompare == "screenshot-recording-probe" -> "SCREENSHOT_RECORDING_PROBE_FAIL"
                 modelCompare == "screenshot-recording-area" -> "SCREENSHOT_RECORDING_AREA_FAIL"
+                modelCompare == "screenshot-recording-annotation" -> "SCREENSHOT_RECORDING_ANNOTATION_FAIL"
                 modelCompare.startsWith("screenshot-memory") -> "SCREENSHOT_TOOL_MEMORY_FAIL"
                 modelCompare.startsWith("screen-text") -> "SCREEN_TEXT_SMOKE_FAIL"
                 pinyin -> "ARM64_PINYIN_SMOKE_FAIL"
