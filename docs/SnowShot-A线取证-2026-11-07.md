@@ -141,12 +141,12 @@ A 线收口后按"选区二级栏还有没有原版控件"再扫一遍，发现�
 
 | 项 | 上游 | 手机现状 |
 | --- | --- | --- |
-| 位置与尺寸 | X／Y／W／H 四个数值字段，滚轮步进（`handleFieldWheel` → `adjustSelectionFromToolbar`） | **已接（手机形态）**：选区栏「位置」按钮打开面板，直接输入 X／Y／宽／高，越界或宽高<2 拒绝；应用后等同拖动选框（清旧文字块、保留选区编辑态）。原版是逐字段滚轮，手机改成一个面板，属触摸替代 |
+| 位置与尺寸 | X／Y／W／H 四个数值字段，滚轮步进（`handleFieldWheel` → `adjustSelectionFromToolbar`） | 只有一行「选区 W × H」读数，点按切 px/dp（A10／A11），**不可编辑 X/Y/W/H** |
 | 圆角 | Radius 字段 0–**256**（`screenshotselectionlimits.h:5`），非矩形选区不适用（`setCornerRadiusApplicable`） | **已接**：选区栏「圆角 N」按钮，点按输入 0–256；选框遮罩与边框同步变圆角，导出按 `radius × density` 裁四角（四角透明）；只对非自定义选区可用，值与上游同存偏好（`screenshot-region-type` 的 `screenshot_selection/radius`） |
 | 阴影 | Shadow 字段 0–**64**（`:6`），导出时按 `round(shadowWidth × scale)` 扩边（`screenshotgeometry.cpp:47`、`screenshotexportservice.cpp:80`） | 无 |
 | 比例锁定 | 锁图标（`m_lockIconLabel`、`m_selectionResizable`） | 无 |
 | 单位／隐藏 | 单位切换、隐藏工具栏（`hideSelectionToolbarButton`） | 已有（A10／A11、A12） |
 
-**本轮做了圆角与 X/Y/W/H，剩下两项为什么不做**：阴影要在选区外扩边、直接改变导出边界与像素，会牵动保存/工程/贴图/翻译的坐标假设；
-比例锁定要改拖边命中的几何约束（原版是按住锁图标）。这两项需要单独一轮带导出与工程回归。
-已过设备断言：圆角 24 → 选框圆角>0、导出左上角 alpha=0、中心不透明；位置面板输入 120/220/400/300 → 选区变成 (120,220,520,520) 且仍在编辑态；越界输入被拒、选区不变。
+**本轮做了圆角，其余为什么不做**：阴影要在选区外扩边、直接改变导出边界与像素，会牵动保存/工程/贴图/翻译的坐标假设；
+X/Y/W/H 数值编辑在触摸屏上还要重新设计步进方式（原版是滚轮，属差异清单 D11）。**下一轮起点**：Shadow 的扩边与坐标系，再补 X/Y/W/H 与比例锁定。
+圆角已过设备断言：输入 24 → 选框圆角>0、导出左上角 alpha=0、中心不透明、按钮标签变「选区圆角 24」。

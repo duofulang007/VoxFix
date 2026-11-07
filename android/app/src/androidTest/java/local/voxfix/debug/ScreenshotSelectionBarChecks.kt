@@ -109,25 +109,6 @@ internal object ScreenshotSelectionBarChecks {
             } finally { exported.recycle() }
             checkNotNull(find(root,"选区圆角 24"))
             checkRecapture(overlay,root,image,fresh,checkNotNull(picked))
-            // 位置与尺寸（上游 X／Y／W／H 四个数值字段）：手机在一个面板里输入，应用后等于拖动选框。
-            checkNotNull(find(root,"选区位置与尺寸")).performClick()
-            (checkNotNull(find(root,"选区X")) as android.widget.EditText).setText("120")
-            (checkNotNull(find(root,"选区Y")) as android.widget.EditText).setText("220")
-            (checkNotNull(find(root,"选区宽")) as android.widget.EditText).setText("400")
-            (checkNotNull(find(root,"选区高")) as android.widget.EditText).setText("300")
-            checkNotNull(find(root,"应用")).performClick()
-            root.measure(View.MeasureSpec.makeMeasureSpec(1080,View.MeasureSpec.EXACTLY),
-                View.MeasureSpec.makeMeasureSpec(2400,View.MeasureSpec.EXACTLY))
-            root.layout(0,0,1080,2400)
-            check(field(overlay,"picked")==Rect(120,220,520,520)) { "数值改框失败：${field(overlay,"picked")}" }
-            check(field(overlay,"moveMode")==true) { "数值改框后离开了选区编辑态" }
-            // 超出画面要被拒绝，选区保持不变。
-            checkNotNull(find(root,"选区位置与尺寸")).performClick()
-            (checkNotNull(find(root,"选区X")) as android.widget.EditText).setText("900")
-            (checkNotNull(find(root,"选区宽")) as android.widget.EditText).setText("400")
-            checkNotNull(find(root,"应用")).performClick()
-            check(field(overlay,"picked")==Rect(120,220,520,520)) { "越界输入改动了选区" }
-            checkNotNull(find(root,"取消")).performClick()
         } finally {
             overlay.dismiss(context.getSystemService(android.view.WindowManager::class.java))
             // 圆角写的是真实偏好，测完还原，避免污染后续套件与用户设置。
