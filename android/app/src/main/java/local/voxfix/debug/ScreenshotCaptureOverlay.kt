@@ -438,6 +438,13 @@ class ScreenshotCaptureOverlay(
         setPadding(dp(4),0,dp(4),0); isClickable=true; isFocusable=true
         setOnClickListener { editSelectionRadius() }
     }
+    /** 选区位置与尺寸（上游 X／Y／W／H 四个数值字段，手机收在一个面板里）。 */
+    private val geometryButton=TextView(context).apply {
+        text="位置"; textSize=12f; gravity=Gravity.CENTER; setTextColor(COLOR_TEXT)
+        background=surface(PANEL_RADIUS); contentDescription="选区位置与尺寸"
+        setPadding(dp(4),0,dp(4),0); isClickable=true; isFocusable=true
+        setOnClickListener { editSelectionGeometry() }
+    }
     /** A09：二维码标记层。原版标记只在「编辑选区 + 移动工具」下显示，手机同条件。 */
     private val qrMarkers=ScreenshotQrMarkers(context).apply {
         visibility=View.GONE
@@ -613,6 +620,7 @@ class ScreenshotCaptureOverlay(
         radiusButton.text = "圆角 $selectionRadius"
         radiusButton.contentDescription = "选区圆角 $selectionRadius"
         radiusButton.isEnabled = !busy && !editing && !translating && radiusApplicable()
+        geometryButton.isEnabled = !busy && !editing && !translating && picked != null
         // A09：标记只在「编辑选区 + 无绘图工具」时显示，且中心必须落在选区内（上游 refreshMarkers）。
         val showQr=canShowQrMarkers()
         qrMarkers.visibility=if(showQr) View.VISIBLE else View.GONE
@@ -683,6 +691,7 @@ class ScreenshotCaptureOverlay(
         for(button in listOf(regionRectButton,regionPolylineButton,regionCurveButton,regionFreehandButton)) cell(row1,button,dp(36))
         for(button in listOf(recaptureButton,qrButton)) cell(row2,button,dp(36))
         cell(row2,radiusButton,dp(72))
+        cell(row2,geometryButton,dp(56))
         divider(row2)
         cell(row2,hideBarButton,dp(36))
         cell(row2,recaptureDraftButton,dp(98))
@@ -771,6 +780,63 @@ class ScreenshotCaptureOverlay(
                 .edit().putInt("screenshot_selection/radius", selectionRadius).apply()
             sync()
         }
+    }
+    /**
+     * 选区位置与尺寸：上游是 X／Y／W／H 四个可滚轮步进的字段（`screenshotselectiontoolbarwidget.cpp`
+     * 的 `handleFieldWheel`）。手机没有滚轮，收在一个面板里直接输入，范围与画面边界同源。
+     */
+    private fun editSelectionGeometry() {
+        if (busy || editing || translating) return
+        val current = picked ?: return
+        closeStack(); closeDrawingEditor()
+        val panel=LinearLayout(context).apply {
+            orientation=LinearLayout.VERTICAL; background=surface(PANEL_RADIUS); elevation=dp(8).toFloat()
+            setPadding(dp(8),dp(4),dp(8),dp(4))
+        }
+        panel.addView(TextView(context).apply { text="选区位置与尺寸"; textSize=16f; setTextColor(COLOR_TEXT) })
+        fun field(label: String, value: Int): ScreenshotTextEditor {
+            val row=LinearLayout(context).apply { gravity=Gravity.CENTER_VERTICAL }
+            row.addView(TextView(context).apply { text=label; textSize=13f; setTextColor(COLOR_TEXT) },
+                LinearLayout.LayoutParams(dp(28),-2))
+            val editor=ScreenshotTextEditor(context,value.toString()).apply {
+                contentDescription="选区$label"
+                inputType=android.text.InputType.TYPE_CLASS_NUMBER
+                isSingleLine=true
+            }
+            row.addView(editor,LinearLayout.LayoutParams(0,dp(40),1f))
+            panel.addView(row)
+            return editor
+        }
+        val fx=field("X",current.left); val fy=field("Y",current.top)
+        val fw=field("宽",current.width()); val fh=field("高",current.height())
+        val buttons=LinearLayout(context)
+        fun button(label: String, run:()->Unit)=TextView(context).apply {
+            text=label; textSize=16f; gravity=Gravity.CENTER; contentDescription=label; setTextColor(COLOR_PRIMARY)
+            setOnClickListener { run() }
+        }
+        buttons.addView(button("取消") { closeDrawingEditor(); sync() },LinearLayout.LayoutParams(0,dp(44),1f))
+        fun applyGeometry() {
+            val x=fx.text.toString().trim().toIntOrNull()
+            val y=fy.text.toString().trim().toIntOrNull()
+            val w=fw.text.toString().trim().toIntOrNull()
+            val h=fh.text.toString().trim().toIntOrNull()
+            if(x==null || y==null || w==null || h==null) { showFeedback("请输入整数"); return }
+            if(w<2 || h<2) { showFeedback("宽高至少 2"); return }
+            if(x<0 || y<0 || x+w>image.width || y+h>image.height) { showFeedback("选区超出画面范围"); return }
+            closeDrawingEditor()
+            selector.selectRegion(Rect(x,y,x+w,y+h))
+            // 数值改框等同拖动选框：保留选区编辑态，方便继续微调。
+            moveMode=true; moveAction.active=true; sync()
+        }
+        buttons.addView(button("应用") { applyGeometry() },LinearLayout.LayoutParams(0,dp(44),1f))
+        panel.addView(buttons)
+        annotationBackdrop=View(context).apply { setOnClickListener { } }.also { root.addView(it,FrameLayout.LayoutParams(-1,-1)) }
+        annotationEditor=panel; annotationField=fx
+        root.addView(panel,FrameLayout.LayoutParams(minOf(dp(320),root.width.coerceAtLeast(dp(160))),dp(288)))
+        drawingStyles.visibility=View.GONE; placeControls(); fx.requestFocus()
+        root.postDelayed({ if(annotationEditor===panel) context.getSystemService(InputMethodManager::class.java)
+            .showSoftInput(fx,InputMethodManager.SHOW_IMPLICIT) },80)
+        sync()
     }
     /** 导出前按圆角裁掉四角（上游 Radius 走结果合成，默认 0 时不做任何事）。 */
     private fun applySelectionRadius(bitmap: Bitmap): Bitmap {
