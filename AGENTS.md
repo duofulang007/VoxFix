@@ -31,7 +31,7 @@
 
 - 主目标已由用户扩展为 Snow Shot 1.1.8 **全部 44 项**（T01–T28 工具动作、A01–A16 辅助入口）逐项一比一复刻，默认单线推进，不再逐项确认范围。**尚未完成**：T08／T15／T16／T22 的代码面已收口（T08 的 4 倍纹理已验、Shift 段模式为桌面专属），三者剩余项统一是「原版同尺度窗口叠图 + 真人手感」，需 Windows 原版环境，非代码待办（§72）；T28 录屏已接选区 MP4、音轨、暂停恢复、相册保存、导出设置面板、延迟倒计时、打开录制文件夹、录制区域边框、录制前设置阶段（蓝框可调选区 + 开始/关闭，区域裁切已在真机确认）与 **GIF/APNG/WebP 动画导出**（自写容器，720p/10fps/循环默认，三格式均真机录出、实测 10.05fps；拒绝授权与录制中取消已走查），**混音/分轨已接**（§71：48 kHz 双声道 160 kbps、10 ms 槽 + 100 ms 抖动、混音逐样本饱和相加、分轨 system/microphone 两轨，真机两轨/一轨均已验；录中标注见 §70）。T28 主体收口，余平台限制与真人走查；A07 捕捉光标**已决定不做**（2026-11-06：Android 无指针捕捉能力，选区栏占位入口与其两个 px 单位占位按钮一并删除）；水印只差像素叠图与真人走查。
 - 进度的唯一当前口径是 [`docs/SnowShot复刻接续交接-2026-11-04.md`](docs/SnowShot复刻接续交接-2026-11-04.md) 的 §0 与最后一节；总表在 `docs/design/SnowShot全图标复刻总表-2026-11-04.md`。"设备套件 PASS"只证明自动化断言，不等于原版同尺度叠图或真人通过。
-- 最近一轮基线（交接 §71）：JVM **422 项零失败**；K60 设备六组 PASS（`screenshot-recording-audio` 新套件、recording、recording-area、recording-format、recording-pipeline、recording-annotation）；装机主包 sha256 `b9346b57…955792`（证据 `.android/t28-audio-20261107/`）；混音/分轨真机成片（分轨 2×mp4a、混音 1×mp4a）；系统状态一致、用户数据仅 `voxfix-recording.xml`，每轮 instrument 后已重绑无障碍。上一轮基线见 §70（`2a648a92…d352592`）。
+- 最近一轮基线（交接 §73）：JVM **422 项零失败**；K60 设备五组 PASS（parity-foundation 含 A12 整条选区栏收起+恢复入口、editing、toolbar、selected、overlay-suites）；装机主包 sha256 `7a3c372d…569f3e`；A08 真机换图、T22 边缘四组、A12 均已在真机/设备断言层面通过；系统状态一致，每轮 instrument 后已重绑无障碍。前一基线见 §71（`b9346b57…955792`）。
 - 设备 K60 `6959dba1`。**每次 `adb install` 或 `am instrument` 之后无障碍服务都会被标 Crashed、侧边圆弧消失**，必须跑 `bash .android/rebind-voxfix-a11y.sh`，判据只看 `dumpsys accessibility` 的 `Crashed services`。
 - 手机不在电脑旁时继续写代码与本地构建，不因设备缺席而停写，也不虚报设备通过；回插后统一补跑待验队列。
 

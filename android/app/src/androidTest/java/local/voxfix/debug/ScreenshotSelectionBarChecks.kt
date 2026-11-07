@@ -48,13 +48,19 @@ internal object ScreenshotSelectionBarChecks {
             check(picked!=null && picked.width()==600 && picked.height()==500) { "切换单位改变了选区：$picked" }
             status.performClick()
             check(status.text.toString()=="选区 600 × 500 px") { "无法切回物理像素：${status.text}" }
+            // A12：整条选区栏（读数 + 两行按钮）一起收起，主栏保持可见（取消始终可达），
+            // 原位留一颗可见的恢复胶囊；恢复后读数与选区都不变。
             checkNotNull(find(root,"隐藏选择工具栏")).performClick()
-            check(status.visibility == View.GONE)
-            check((field(overlay,"toolbar") as View).visibility == View.VISIBLE)
-            check((field(overlay,"selectActionsScroll") as View).visibility == View.VISIBLE)
-            checkNotNull(find(root,"显示选择工具栏")).performClick()
-            check(status.visibility == View.VISIBLE && status.text.toString()=="选区 600 × 500 px")
-            check(field(overlay,"picked") == picked)
+            check(status.visibility == View.GONE) { "隐藏后读数仍然可见" }
+            check((field(overlay,"toolbar") as View).visibility == View.VISIBLE) { "隐藏把主栏也收掉了" }
+            check((field(overlay,"selectActionsScroll") as View).visibility == View.GONE) { "故选栏没有整条收起" }
+            val restore = checkNotNull(find(root,"恢复选区栏")) { "整条收起后没有恢复入口" }
+            check(restore.visibility == View.VISIBLE) { "恢复入口不可见" }
+            restore.performClick()
+            check(status.visibility == View.VISIBLE && status.text.toString()=="选区 600 × 500 px") { "恢复后读数异常" }
+            check((field(overlay,"selectActionsScroll") as View).visibility == View.VISIBLE) { "恢复后选区栏没回来" }
+            check(restore.visibility == View.GONE) { "恢复后入口没有收起" }
+            check(field(overlay,"picked") == picked) { "隐藏/恢复改动了选区" }
             checkRecapture(overlay,root,image,fresh,checkNotNull(picked))
         } finally {
             overlay.dismiss(context.getSystemService(android.view.WindowManager::class.java))

@@ -275,6 +275,25 @@ class ScreenshotCaptureOverlay(
             }
         }
     }
+    /**
+     * A12：原版 `setSelectionToolbarHiddenForSession` 会把整条选区栏收起来（会话内有效，新一次截图复位）。
+     * 整条收起后必须留下可见的恢复入口，否则主栏之外没有任何回到选区栏的线索。
+     */
+    private val hideBarRestore = TextView(context).apply {
+        text = "显示选择栏"; textSize = 12f; setTextColor(COLOR_PRIMARY)
+        setPadding(dp(10),dp(6),dp(10),dp(6)); background = surface(PANEL_RADIUS)
+        elevation = dp(6).toFloat(); isClickable = true; isFocusable = true
+        // 与栏内那颗眼睛按钮的“显示选择工具栏”区分开，避免同一屏出现两个同名入口。
+        contentDescription = "恢复选区栏"; tooltipText = contentDescription
+        visibility = View.GONE
+        setOnClickListener {
+            selectionReadoutHidden = false
+            hideBarButton.contentDescription = "隐藏选择工具栏"
+            hideBarButton.tooltipText = hideBarButton.contentDescription
+            sync()
+        }
+    }
+
     private fun selectionSize(rect: Rect): String {
         if (!logicalUnits) return "选区 ${rect.width()} × ${rect.height()} px"
         val density = context.resources.displayMetrics.density
@@ -386,6 +405,7 @@ class ScreenshotCaptureOverlay(
         resultActions.addView(copyAction,LinearLayout.LayoutParams(dp(44),dp(44)))
         secondaryPanel.addView(resultActions,LinearLayout.LayoutParams(-1,-2))
         root.addView(secondaryPanel,FrameLayout.LayoutParams(dp(320),-2))
+        root.addView(hideBarRestore,FrameLayout.LayoutParams(-2,-2))
         drawing.onTextRequest = { point,index ->
             beginDrawingText(point,index)
         }
@@ -480,7 +500,9 @@ class ScreenshotCaptureOverlay(
         resultActions.visibility=if(resultTool!=null && textLayer!=null && annotationEditor==null) View.VISIBLE else View.GONE
         moveAction.active=moveMode
         val showSelection=moveMode && picked!=null && !busy && !editing && !translating && resultTool==null && annotationEditor==null
-        selectActionsScroll.visibility=if(showSelection) View.VISIBLE else View.GONE
+        // A12：隐藏时整条选区栏（读数 + 两行按钮）一起收起，只在原位留一颗恢复胶囊。
+        selectActionsScroll.visibility=if(showSelection && !selectionReadoutHidden) View.VISIBLE else View.GONE
+        hideBarRestore.visibility=if(showSelection && selectionReadoutHidden) View.VISIBLE else View.GONE
         recaptureButton.isEnabled = showSelection && canRecapture()
         recaptureDraftButton.visibility = if(recaptureDrafts.isEmpty()) View.GONE else View.VISIBLE
         applyCellStyle(addRegionButton,regionOperation==ScreenshotRegionOp.ADD)
@@ -1430,6 +1452,10 @@ class ScreenshotCaptureOverlay(
             panel.translationX=(bars.left+(width-bars.left-bars.right-panelWidth)/2).toFloat()
             panel.translationY=(safeBottom-panelHeight).coerceAtLeast(safeTop).toFloat()
         }
+        hideBarRestore.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(dp(48),View.MeasureSpec.AT_MOST))
+        hideBarRestore.translationX=x.coerceAtMost(width-bars.right-hideBarRestore.measuredWidth-dp(8)).coerceAtLeast(bars.left+dp(8)).toFloat()
+        hideBarRestore.translationY=(if (detailsAbove) detailTop else y+toolbarHeight+dp(8)).toFloat()
         status.maxWidth=(width-bars.left-bars.right-dp(16)).coerceAtLeast(1)
         status.translationX=x.toFloat(); status.translationY=(y-dp(34)).coerceAtLeast(safeTop).toFloat()
         feedback?.let { view ->
