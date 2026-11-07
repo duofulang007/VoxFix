@@ -129,7 +129,7 @@
 ## 7. 仍未闭环
 
 1. **T18／A09 的收尾差异**：原版复制/打开后收起整个截图（`closeEditor`），手机只收弹层。
-2. **T24** 的右键菜单其余项未做；100% 以上受屏幕宽限制（平台限制）。旋转/翻转已接，编辑后朝向回到未旋转（与上游同）；阴影走选区样式（导出扩边），贴图窗口会同步扩边。
+2. **T24** 的阴影与右键菜单其余项未做；100% 以上受屏幕宽限制（平台限制）。旋转/翻转已接，编辑后朝向回到未旋转（与上游同）。
 3. T19／T20 的「草稿 vs 结果层」按**手机侧既定行为**保留（编辑直接改结果层与导出像素，用户 2026-11-07 明确"别把操作搞没"）；如要改成原版的"只改草稿"，需单独确认，会动到工程、翻译与导出三层。
 4. A08 的系统级拒绝路径（安全窗口／服务失效）需真机触发。
 5. 原版同尺度叠图（B 线）与真人走查（C 线）仍缺。
@@ -143,10 +143,10 @@ A 线收口后按"选区二级栏还有没有原版控件"再扫一遍，发现�
 | --- | --- | --- |
 | 位置与尺寸 | X／Y／W／H 四个数值字段，滚轮步进（`handleFieldWheel` → `adjustSelectionFromToolbar`） | **已接（手机形态）**：选区栏「位置」按钮打开面板，直接输入 X／Y／宽／高，越界或宽高<2 拒绝；应用后等同拖动选框（清旧文字块、保留选区编辑态）。原版是逐字段滚轮，手机改成一个面板，属触摸替代 |
 | 圆角 | Radius 字段 0–**256**（`screenshotselectionlimits.h:5`），非矩形选区不适用（`setCornerRadiusApplicable`） | **已接**：选区栏「圆角 N」按钮，点按输入 0–256；选框遮罩与边框同步变圆角，导出按 `radius × density` 裁四角（四角透明）；只对非自定义选区可用，值与上游同存偏好（`screenshot-region-type` 的 `screenshot_selection/radius`） |
-| 阴影 | Shadow 字段 0–**64**（`:6`），导出时按 `round(shadowWidth × scale)` 扩边（`screenshotgeometry.cpp:47`、`screenshotexportservice.cpp:80`），结果合成用九宫格阴影资产（`screenshotselectionshadowrenderer.cpp::buildShadowAsset` / `paintNineSlice`，峰值 alpha 0.36×颜色 alpha、默认 `#333333`） | **已接**：选区栏「阴影 N」按钮（0–64、偏好持久化）；导出按 `round(N × density)` 四边扩边，资产与九宫格逐行移植（含圆角、最近邻拉伸）；贴图窗口同步扩边，识码用不带阴影的内容图，工程裁剪改按未改动的底图（`source.png`）以避开扩边坐标 |
+| 阴影 | Shadow 字段 0–**64**（`:6`），导出时按 `round(shadowWidth × scale)` 扩边（`screenshotgeometry.cpp:47`、`screenshotexportservice.cpp:80`） | 无 |
 | 比例锁定 | 锁图标（`m_lockIconLabel`、`m_selectionResizable`）；锁定后新拉框用 `kNewMarqueeAspectRatio = 1.0`，**拖边等比缩放需要 Shift**（`kEqualWidthHeightAspectRatio`，桌面修饰键） | **已接**：选区栏「方形」开关（状态高亮、偏好持久化），开启后新拉框按 1:1（移植 `aspectRatioLockedMarqueeRect`，含贴边收缩）。**拖边等比缩放属 Shift，记平台差异 D10** |
 | 单位／隐藏 | 单位切换、隐藏工具栏（`hideSelectionToolbarButton`） | 已有（A10／A11、A12） |
 
-**选区浮动工具栏的四类控件均已接**：X／Y／W／H 数值、圆角、阴影、1:1 锁定（单位与隐藏沿用 A10–A12）。
-已过设备断言：圆角 24 → 选框圆角>0、导出左上角 alpha=0、中心不透明；位置面板输入 120/220/400/300 → 选区变成 (120,220,520,520) 且仍在编辑态；越界输入被拒；「方形」开关接线；阴影 10 → 导出尺寸 = 选区 + 2×round(10×density)、画布角透明、内容不裁。
-纯函数由 `ScreenshotSelectionMarqueeTest`（拉框/1:1）与 `ScreenshotSelectionShadowTest`（资产尺寸/中心透明/边缘峰值/九宫格）覆盖。
+**本轮做了圆角、X/Y/W/H 与 1:1 锁定，只剩阴影**：阴影要在选区外扩边、直接改变导出边界与像素，会牵动保存/工程/贴图/翻译的坐标假设，需单独一轮带导出与工程回归。
+已过设备断言：圆角 24 → 选框圆角>0、导出左上角 alpha=0、中心不透明；位置面板输入 120/220/400/300 → 选区变成 (120,220,520,520) 且仍在编辑态；越界输入被拒；「方形」开关能开能关并即时作用到选框。
+1:1 拉框几何由 `ScreenshotSelectionMarqueeTest` 覆盖（含首尾像素格、反向拖动、贴边收缩）。

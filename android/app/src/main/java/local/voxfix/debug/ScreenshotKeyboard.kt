@@ -32,9 +32,7 @@ internal class ScreenshotKeyboard(context: Context) {
         val entry = store.entries().firstOrNull { it.id == id } ?: error("截图已删除，请刷新")
         val region = Rect(left,top,right,bottom)
         require(left >= 0 && top >= 0 && right <= entry.width && bottom <= entry.height && region.width() >= 2 && region.height() >= 2) { "请拖动选择裁剪范围" }
-        // 工程的合成图可能按选区阴影扩过边，裁剪必须按未改动的底图 + viewport 坐标走。
-        val source = (if (entry.kind == ScreenshotStore.Kind.PROJECT) store.sourceBitmap(id) else null)
-            ?: BitmapFactory.decodeFile(store.file(id).path) ?: error("截图无法读取")
+        val source = BitmapFactory.decodeFile(store.file(id).path) ?: error("截图无法读取")
         try {
             // A project crops its own viewport; the canvas and its objects stay addressable, and the
             // result is a new record so the original keeps editing as it was.
