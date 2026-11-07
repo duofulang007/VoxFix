@@ -223,6 +223,12 @@ internal class ScreenTextRegionView(
     }
 
     init { contentDescription = "拖动框选文字；已有选框可拖动边缘调整或在框内移动，松手识别" }
+    /** 选区圆角（视口像素）。上游 Radius 字段只对非自定义形状生效（`cornerRadiusApplicable`）。 */
+    var selectionCornerRadius = 0f
+        set(value) { if (field != value) { field = value; invalidate() } }
+    private fun framePath() = Path().apply {
+        addRoundRect(rect, selectionCornerRadius, selectionCornerRadius, Path.Direction.CW)
+    }
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         pendingSelection?.let { pendingSelection = null; selectRegion(it); return }
         if (oldw == 0 && previous != null) rect.set(previous.left * w.toFloat() / imageWidth,
@@ -252,6 +258,9 @@ internal class ScreenTextRegionView(
                 part.right * width.toFloat() / imageWidth,part.bottom * height.toFloat() / imageHeight,Path.Direction.CW)
             canvas.save(); canvas.clipPath(shape,Region.Op.DIFFERENCE)
             canvas.drawRect(0f,0f,width.toFloat(),height.toFloat(),paint); canvas.restore()
+        } else if (selectionCornerRadius > 0f && !rect.isEmpty) {
+            canvas.save(); canvas.clipPath(framePath(),Region.Op.DIFFERENCE)
+            canvas.drawRect(0f,0f,width.toFloat(),height.toFloat(),paint); canvas.restore()
         } else {
             canvas.drawRect(0f, 0f, width.toFloat(), rect.top, paint)
             canvas.drawRect(0f, rect.bottom, width.toFloat(), height.toFloat(), paint)
@@ -274,7 +283,11 @@ internal class ScreenTextRegionView(
             if (parts.size > 1) for (part in parts) canvas.drawRect(
                 part.left * width.toFloat() / imageWidth,part.top * height.toFloat() / imageHeight,
                 part.right * width.toFloat() / imageWidth,part.bottom * height.toFloat() / imageHeight,paint)
-            else if (confirmedPath == null) canvas.drawRect(rect, paint)
+            else if (confirmedPath == null) {
+                // 圆角开启时边框跟着变成圆角矩形，与导出结果一致。
+                if (selectionCornerRadius > 0f) canvas.drawPath(framePath(), paint)
+                else canvas.drawRect(rect, paint)
+            }
         }
         smartPointer?.let {
             drawSmartLoupe(canvas, it)
