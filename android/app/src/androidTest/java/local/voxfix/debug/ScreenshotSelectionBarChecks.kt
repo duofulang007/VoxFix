@@ -30,6 +30,7 @@ internal object ScreenshotSelectionBarChecks {
         val radiusPrefs=context.getSharedPreferences("screenshot-region-type",Context.MODE_PRIVATE)
         val oldRadius=radiusPrefs.getInt("screenshot_selection/radius",0)
         val oldSquare=radiusPrefs.getBoolean("screenshot_selection/square",false)
+        val oldShadow=radiusPrefs.getInt("screenshot_selection/shadow",0)
         val overlay=ScreenshotCaptureOverlay(context,image,{},{},{},{},{},Translator())
         try {
             val root=field(overlay,"root") as ViewGroup
@@ -109,6 +110,24 @@ internal object ScreenshotSelectionBarChecks {
                 check((exported.getPixel(exported.width/2,4) ushr 24)!=0) { "圆角导出中间被裁掉" }
             } finally { exported.recycle() }
             checkNotNull(find(root,"选区圆角 24"))
+            // 选区阴影（上游 Shadow 0–64）：导出在选区外扩边，四角透明、中心不裁。
+            checkNotNull(find(root,"选区阴影 0")).performClick()
+            (checkNotNull(find(root,"选区阴影")) as android.widget.EditText).setText("10")
+            checkNotNull(find(root,"确定")).performClick()
+            root.measure(View.MeasureSpec.makeMeasureSpec(1080,View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(2400,View.MeasureSpec.EXACTLY))
+            root.layout(0,0,1080,2400)
+            val shadowPx=Math.round(10*context.resources.displayMetrics.density).coerceIn(0,64)
+            val shaded=overlay.javaClass.getDeclaredMethod("currentImage").apply { isAccessible=true }
+                .invoke(overlay) as Bitmap
+            try {
+                check(shaded.width==picked.width()+2*shadowPx && shaded.height==picked.height()+2*shadowPx) {
+                    "阴影扩边不对：${shaded.width}x${shaded.height}，期望 ${picked.width()+2*shadowPx}"
+                }
+                check((shaded.getPixel(0,0) ushr 24)==0) { "阴影画布角不透明" }
+                check((shaded.getPixel(shaded.width/2,shadowPx+4) ushr 24)!=0) { "阴影把内容裁掉了" }
+            } finally { shaded.recycle() }
+            checkNotNull(find(root,"选区阴影 10"))
             checkRecapture(overlay,root,image,fresh,checkNotNull(picked))
             // 位置与尺寸（上游 X／Y／W／H 四个数值字段）：手机在一个面板里输入，应用后等于拖动选框。
             checkNotNull(find(root,"选区位置与尺寸")).performClick()
@@ -141,7 +160,8 @@ internal object ScreenshotSelectionBarChecks {
             overlay.dismiss(context.getSystemService(android.view.WindowManager::class.java))
             // 圆角/方形写的是真实偏好，测完还原，避免污染后续套件与用户设置。
             radiusPrefs.edit().putInt("screenshot_selection/radius",oldRadius)
-                .putBoolean("screenshot_selection/square",oldSquare).apply()
+                .putBoolean("screenshot_selection/square",oldSquare)
+                .putInt("screenshot_selection/shadow",oldShadow).apply()
             image.recycle()
             fresh.recycle()
         }

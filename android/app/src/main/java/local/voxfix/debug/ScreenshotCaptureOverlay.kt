@@ -403,6 +403,8 @@ class ScreenshotCaptureOverlay(
     private var selectionRadius = loadSelectionRadius()
     /** 比例锁定（上游 `aspectRatioLocked`）：开启后新拉框按 1:1 生成。 */
     private var selectionSquare = loadSelectionSquare()
+    /** 选区阴影（上游 Shadow 字段 0–64）：导出时在选区外扩边并画九宫格阴影。 */
+    private var selectionShadow = loadSelectionShadow()
     private val selectActions=LinearLayout(context).apply {
         // Two rows so every control is visible on a phone; the scroll wrapper only guards narrow cases.
         orientation=LinearLayout.VERTICAL; setPadding(dp(4),dp(2),dp(4),dp(2)); visibility=View.VISIBLE
@@ -459,6 +461,13 @@ class ScreenshotCaptureOverlay(
                 .edit().putBoolean("screenshot_selection/square", selectionSquare).apply()
             sync()
         }
+    }
+    /** 选区阴影（上游 Shadow 0–64）：导出时在选区外扩边并画九宫格阴影。 */
+    private val shadowButton=TextView(context).apply {
+        text="阴影 0"; textSize=12f; gravity=Gravity.CENTER; setTextColor(COLOR_TEXT)
+        background=surface(PANEL_RADIUS); contentDescription="选区阴影 0"
+        setPadding(dp(4),0,dp(4),0); isClickable=true; isFocusable=true
+        setOnClickListener { editSelectionShadow() }
     }
     /** A09：二维码标记层。原版标记只在「编辑选区 + 移动工具」下显示，手机同条件。 */
     private val qrMarkers=ScreenshotQrMarkers(context).apply {
@@ -635,6 +644,9 @@ class ScreenshotCaptureOverlay(
         radiusButton.text = "圆角 $selectionRadius"
         radiusButton.contentDescription = "选区圆角 $selectionRadius"
         radiusButton.isEnabled = !busy && !editing && !translating && radiusApplicable()
+        shadowButton.isEnabled = !busy && !editing && !translating
+        shadowButton.text = "阴影 $selectionShadow"
+        shadowButton.contentDescription = "选区阴影 $selectionShadow"
         geometryButton.isEnabled = !busy && !editing && !translating && picked != null
         selector.lockSquareSelection = selectionSquare
         squareButton.isEnabled = !busy && !editing && !translating
@@ -713,6 +725,7 @@ class ScreenshotCaptureOverlay(
         cell(row2,radiusButton,dp(72))
         cell(row2,geometryButton,dp(56))
         cell(row2,squareButton,dp(56))
+        cell(row2,shadowButton,dp(64))
         divider(row2)
         cell(row2,hideBarButton,dp(36))
         cell(row2,recaptureDraftButton,dp(98))
@@ -737,7 +750,7 @@ class ScreenshotCaptureOverlay(
             if (qrHits?.isNotEmpty() == true) qrVisible = true
             return
         }
-        val bitmap = try { currentImage() } catch(error: Exception) { return }
+        val bitmap = try { contentImage() } catch(error: Exception) { return }
         val token = ++actionGeneration
         qrScanning = true
         ScreenshotBarcode.scan(bitmap,{ hits ->
@@ -791,6 +804,23 @@ class ScreenshotCaptureOverlay(
     private fun loadSelectionSquare() = context
         .getSharedPreferences("screenshot-region-type", Context.MODE_PRIVATE)
         .getBoolean("screenshot_selection/square", false)
+    private fun loadSelectionShadow() = context
+        .getSharedPreferences("screenshot-region-type", Context.MODE_PRIVATE)
+        .getInt("screenshot_selection/shadow", 0).coerceIn(0, 64)
+    /** 上游 `screenshotSelectionRenderedShadowPixels`：逻辑值 × 密度后夹在 0–64。 */
+    private fun selectionShadowPx() =
+        Math.round(selectionShadow * context.resources.displayMetrics.density).coerceIn(0, 64)
+    private fun editSelectionShadow() {
+        if (busy || editing || translating) return
+        showValueEditor("选区阴影", selectionShadow.toString(), "确定") { value ->
+            val parsed = value.trim().toIntOrNull()
+            if (parsed == null) { showFeedback("阴影需为 0–64 的整数"); return@showValueEditor }
+            selectionShadow = parsed.coerceIn(0, 64)
+            context.getSharedPreferences("screenshot-region-type", Context.MODE_PRIVATE)
+                .edit().putInt("screenshot_selection/shadow", selectionShadow).apply()
+            sync()
+        }
+    }
     private fun selectionRadiusPx() = selectionRadius * context.resources.displayMetrics.density
     /** 圆角只作用于非自定义选区；与上游 `cornerRadiusApplicable` 同条件。 */
     private fun radiusApplicable() = captureRegion?.isCustom != true
@@ -862,6 +892,50 @@ class ScreenshotCaptureOverlay(
             .showSoftInput(fx,InputMethodManager.SHOW_IMPLICIT) },80)
         sync()
     }
+    /** 结果合成：先按圆角裁内容，再按阴影在四周扩边；两者都为 0 时原样返回。 */
+    private fun composeSelectionResult(bitmap: Bitmap): Bitmap {
+        val rounded = applySelectionRadius(bitmap)
+        val padded = padSelectionShadow(rounded)
+        if (padded !== rounded && rounded !== bitmap) rounded.recycle()
+        return padded
+    }
+    /** 上游 `compose`：输出 = 内容 + 四边各 effect 像素，阴影用九宫格铺在内容之后、内容之上再画内容。 */
+    private fun padSelectionShadow(bitmap: Bitmap): Bitmap {
+        val effect = selectionShadowPx()
+        if (effect <= 0) return bitmap
+        val radius = if (radiusApplicable()) Math.round(selectionRadiusPx()) else 0
+        val out = Bitmap.createBitmap(bitmap.width + effect * 2, bitmap.height + effect * 2,
+            Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        drawSelectionShadow(canvas, effect, radius, bitmap.width, bitmap.height)
+        canvas.drawBitmap(bitmap, effect.toFloat(), effect.toFloat(), Paint(Paint.ANTI_ALIAS_FLAG))
+        return out
+    }
+    /** 上游 `paintNineSlice`：四角固定、边与中心拉伸；compose 没开平滑，保持最近邻。 */
+    private fun drawSelectionShadow(canvas: Canvas, effect: Int, radius: Int, width: Int, height: Int) {
+        val size = ScreenshotSelectionShadow.assetSize(radius, effect)
+        val pixels = ScreenshotSelectionShadow.asset(radius, effect)
+        val asset = Bitmap.createBitmap(pixels, size, size, Bitmap.Config.ARGB_8888)
+        val paint = Paint()
+        val span = (size - 1) / 2
+        val srcX = intArrayOf(0, span, size - span, size)
+        val rects = ScreenshotSelectionShadow.nineSliceRects(
+            width.toFloat(), height.toFloat(), effect.toFloat(), radius.toFloat())
+        canvas.save()
+        canvas.translate(effect.toFloat(), effect.toFloat())
+        for (row in 0..2) {
+            for (column in 0..2) {
+                val dst = rects[row * 3 + column]
+                if (dst.width <= 0.5f || dst.height <= 0.5f) continue
+                canvas.drawBitmap(asset,
+                    Rect(srcX[column], srcX[row], srcX[column + 1], srcX[row + 1]),
+                    RectF(dst.left, dst.top, dst.right, dst.bottom), paint)
+            }
+        }
+        canvas.restore()
+        asset.recycle()
+    }
+
     /** 导出前按圆角裁掉四角（上游 Radius 走结果合成，默认 0 时不做任何事）。 */
     private fun applySelectionRadius(bitmap: Bitmap): Bitmap {
         val radius = selectionRadiusPx()
@@ -1284,7 +1358,8 @@ class ScreenshotCaptureOverlay(
             (if(showingTranslation) translationLayer else textLayer)?.render(region) else null
         return if(!showingTranslation) drawing.render(region,composed) else composed
     }
-    private fun currentImage(): Bitmap {
+    /** 选区内容（含圆角，不含阴影扩边）。识码要按它算坐标，贴图要按选区定位。 */
+    private fun contentImage(): Bitmap {
         val region=picked ?: error("请先框选截图区域")
         val shaped=captureRegion
         val base=composeCurrent(region) ?: Bitmap.createBitmap(image,region.left,region.top,region.width(),region.height()).let {
@@ -1296,9 +1371,16 @@ class ScreenshotCaptureOverlay(
         if(rounded!==result && result!==image) result.recycle()
         return rounded
     }
+    /** 最终结果：内容 + 选区阴影（上游 compose 会按 shadowWidth 在四周扩边）。 */
+    private fun currentImage(): Bitmap {
+        val content=contentImage()
+        val padded=padSelectionShadow(content)
+        if(padded!==content && content!==image) content.recycle()
+        return padded
+    }
     private fun scanBarcode() {
         if(busy || translating || editing) return
-        val bitmap=try { currentImage() } catch(error: Exception) { showFeedback("无法读取选区，请重试"); return }
+        val bitmap=try { contentImage() } catch(error: Exception) { showFeedback("无法读取选区，请重试"); return }
         val token=++actionGeneration
         busy=true; sync()
         ScreenshotBarcode.scan(bitmap,{ hits ->
@@ -1326,7 +1408,7 @@ class ScreenshotCaptureOverlay(
             if (cached.isEmpty()) { showFeedback("未识别到二维码或条码，可重新框选"); return }
             qrVisible=true; sync(); return
         }
-        val bitmap=try { currentImage() } catch(error: Exception) { showFeedback("无法读取选区，请重试"); return }
+        val bitmap=try { contentImage() } catch(error: Exception) { showFeedback("无法读取选区，请重试"); return }
         val token=++actionGeneration
         busy=true; sync()
         ScreenshotBarcode.scan(bitmap,{ hits ->
@@ -1402,8 +1484,13 @@ class ScreenshotCaptureOverlay(
         val region=picked ?: return
         if(content.width<=0 || content.height<=0) return
         val location=IntArray(2); content.getLocationOnScreen(location)
-        val screenRect=Rect(location[0]+region.left*content.width/image.width,location[1]+region.top*content.height/image.height,
-            location[0]+region.right*content.width/image.width,location[1]+region.bottom*content.height/image.height)
+        // 阴影会把结果四周扩边；贴图窗口同步扩出去，保证像素比例不被拉伸。
+        val padX=Math.round(selectionShadowPx()*content.width.toFloat()/image.width)
+        val padY=Math.round(selectionShadowPx()*content.height.toFloat()/image.height)
+        val screenRect=Rect(location[0]+region.left*content.width/image.width-padX,
+            location[1]+region.top*content.height/image.height-padY,
+            location[0]+region.right*content.width/image.width+padX,
+            location[1]+region.bottom*content.height/image.height+padY)
         try { ScreenshotPins.show(context,currentImage(),screenRect,currentDocument(region),image); exit() }
         catch(error: Exception) { showFeedback("无法贴图，请检查截图服务是否启用") }
     }
@@ -1852,7 +1939,7 @@ class ScreenshotCaptureOverlay(
                     shaped.mask(if(crop.isMutable) crop else crop.copy(Bitmap.Config.ARGB_8888,true),region)
                 }
             }
-            if(base==null) null else applySelectionRadius(base).also { if(it!==base && base!==image) base.recycle() }
+            if(base==null) null else composeSelectionResult(base).also { if(it!==base && base!==image) base.recycle() }
         } catch (error: Exception) {
             android.util.Log.w("VoxFix","SCREENSHOT_RENDER_FAILED",error)
             busy = false; status.text = "保存失败，请重试"; sync(); return
