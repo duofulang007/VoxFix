@@ -592,11 +592,13 @@ object ScreenshotParityFoundationSmoke {
                     }
                 } finally { paintedHead.recycle(); bareShaft.recycle() }
                 // `arrow_is_degenerate`: a tap leaves no object behind, a one-pixel drag still does.
-                val settled=gestureLayer.history.items.size
+                // 先清空已有箭头：绘图工具下按住已有元素是「选中并移动」（上游 quick_selection），
+                // 这两条验的是空白处起笔的退化行为，不能落在旧箭头上。
+                gestureLayer.history.remove(gestureLayer.history.items.indices.toSet())
                 drag(ScreenshotArrowType.STRAIGHT,140f to 200f,140f to 200f)
-                check(gestureLayer.history.items.size==settled) { "空白点按留下了零长度箭头" }
+                check(gestureLayer.history.items.isEmpty()) { "空白点按留下了零长度箭头" }
                 drag(ScreenshotArrowType.STRAIGHT,140f to 200f,141f to 200f)
-                check(gestureLayer.history.items.size==settled+1) { "一像素拖动没有落下箭头" }
+                check(gestureLayer.history.items.size==1) { "一像素拖动没有落下箭头" }
             } finally { gestureLayer.close() }
 
             // The shaft choice and ratio survive a project round-trip; older projects stay on Curve 1.0.

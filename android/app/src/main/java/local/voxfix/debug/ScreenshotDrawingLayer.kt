@@ -108,7 +108,7 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
             if(field==value) return
             finishStylePreview(false)
             field?.let { toolStyles[it]=style }
-            field=value; pending=null; pen=null; continuation=null; selection.cancel(); penFeedback.clear()
+            field=value; quickDrag=false; pending=null; pen=null; continuation=null; selection.cancel(); penFeedback.clear()
             autoFilterPress = null
             autoFilterPressRegions = null
             autoFilterSession?.hits = emptyList()
@@ -342,7 +342,9 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
         // and spotlight mask included — stops at the region edge. Null keeps the editor unchanged.
         clip?.let { canvas.clipRect(it) }
         renderer.draw(canvas,marks(true),Rect(0,0,image.width,image.height),watermark)
-        if(tool==ScreenshotDrawingTool.SELECT) selection.draw(canvas)
+        // 绘图工具下按住已画元素就进入选择移动，所以选中框也要跟着画：抬手后保留，直到在空白处
+        // 起笔（放弃选择）或切换工具。
+        if(tool==ScreenshotDrawingTool.SELECT || selectedIndex!=null) selection.draw(canvas)
         if(autoFilterActive) autoFilterSession?.draw(canvas, unit, ::postInvalidateOnAnimation)
         canvas.restore()
         if(tool==ScreenshotDrawingTool.PEN && showPenFeedback && (pending==null || continuation!=null))
@@ -364,6 +366,32 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
         return outline+body
     }
     private val ERASER_RADIUS get()=8f
+    /**
+     * 按下时命中已有元素、正在拖它（而不是画新对象）。对应上游
+     * `PrimaryPointerIntent::BeginElementSelectionMove`：绘图工具下也能直接拖动已画元素。
+     */
+    private var quickDrag=false
+    /**
+     * 上游 `ToolPolicy.selection_scope` + `quick_selection_enabled`（`input/policy.rs`、
+     * `input/hit_resolution.rs`）：每种工具只命中自己作用域内的既有元素，命中就进入「选中并移动」，
+     * 只有空白处才创建新对象。手机没有指针形状提示，直接按命中结果分派。
+     */
+    private fun quickSelectionCandidate(active: ScreenshotDrawingTool,point: ScreenshotDrawingPoint): Int {
+        val accepts: (ScreenshotDrawingStroke)->Boolean = when(active) {
+            ScreenshotDrawingTool.RECTANGLE -> { item->item.tool==ScreenshotDrawingTool.RECTANGLE }
+            ScreenshotDrawingTool.LINE -> { item->item.tool==ScreenshotDrawingTool.LINE }
+            ScreenshotDrawingTool.ARROW -> { item->item.tool==ScreenshotDrawingTool.ARROW }
+            // 画笔保留「端点接续」优先：本地按上游 `free_draw` 实现了贴着已有笔迹端点继续画并在真机
+            // 验收过；上游同样把快速选择做成可按工具禁用（`set_quick_selection_disabled_tools`），
+            // 在这里等价于对 FreeDraw 关掉快速选择。要移动笔迹用「选择」工具。
+            // 滤镜与高亮按「矩形 / 画笔」分成两个作用域，对应上游 RectangleFilter 与 PenFilter。
+            ScreenshotDrawingTool.FILTER -> { item->item.tool==ScreenshotDrawingTool.FILTER && item.style.area==style.area }
+            ScreenshotDrawingTool.HIGHLIGHT -> { item->item.tool==ScreenshotDrawingTool.HIGHLIGHT && item.style.area==style.area }
+            ScreenshotDrawingTool.SPOTLIGHT -> { item->item.tool==ScreenshotDrawingTool.SPOTLIGHT }
+            else -> return -1
+        }
+        return candidates(point).firstOrNull { accepts(history.items[it]) } ?: -1
+    }
     /** Curve lines sample the drag path; below this spacing the extra vertices add nothing. */
     private val LINE_SAMPLE_SPACING get()=1.5f*unit
     /** Screen slop is expressed in bitmap pixels, which is the space the touches are mapped into. */
@@ -409,19 +437,32 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
                     ScreenshotDrawingTool.TEXT -> Unit
                     ScreenshotDrawingTool.WATERMARK -> Unit
                     else -> {
-                        pendingStyle=style; pending=mutableListOf(point)
-                        if(active==ScreenshotDrawingTool.SERIAL) serialLabelStyle=textCreationStyle()
-                        continuation=if(active==ScreenshotDrawingTool.PEN) ScreenshotPenContinuation.find(history,renderer,point,unit,penTouch,slop) else null
-                        pen=continuation?.builder ?: if(active==ScreenshotDrawingTool.PEN) PenStrokeBuilder(point,pendingStyle.width*pixelUnit) else null
-                        continuation?.let {
-                            pendingStyle=it.original.style; pending=it.builder.preview().toMutableList()
-                            if(penTouch) penFeedback.grab(it.endpoint,point)
+                        val quick=quickSelectionCandidate(active,point)
+                        if(quick>=0) {
+                            quickDrag=true
+                            selection.snap=ScreenshotSnapConfig.fromPreferences(snapPreferences)
+                            tapCandidates=listOf(quick)
+                            selection.press(point,false,listOf(quick))
+                            selected?.let { style=it.style }
+                            changed()
+                        } else {
+                            // 在空白处开始画新对象＝放弃上一步快速选择的对象。
+                            selectedIndex=null; selection.select(null)
+                            pendingStyle=style; pending=mutableListOf(point)
+                            if(active==ScreenshotDrawingTool.SERIAL) serialLabelStyle=textCreationStyle()
+                            continuation=if(active==ScreenshotDrawingTool.PEN) ScreenshotPenContinuation.find(history,renderer,point,unit,penTouch,slop) else null
+                            pen=continuation?.builder ?: if(active==ScreenshotDrawingTool.PEN) PenStrokeBuilder(point,pendingStyle.width*pixelUnit) else null
+                            continuation?.let {
+                                pendingStyle=it.original.style; pending=it.builder.preview().toMutableList()
+                                if(penTouch) penFeedback.grab(it.endpoint,point)
+                            }
                         }
                     }
                 }
             }
-            MotionEvent.ACTION_POINTER_DOWN,MotionEvent.ACTION_CANCEL -> { cancelled=true; pending=null; pen=null; continuation=null; erased.clear(); selection.cancel(); penFeedback.clear() }
-            MotionEvent.ACTION_MOVE -> if(!cancelled) when(active) {
+            MotionEvent.ACTION_POINTER_DOWN,MotionEvent.ACTION_CANCEL -> { cancelled=true; quickDrag=false; pending=null; pen=null; continuation=null; erased.clear(); selection.cancel(); penFeedback.clear() }
+            MotionEvent.ACTION_MOVE -> if(quickDrag) selection.move(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,image.width,image.height,event.metaState and android.view.KeyEvent.META_ALT_ON!=0)
+                else if(!cancelled) when(active) {
                 ScreenshotDrawingTool.SELECT -> selection.move(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,image.width,image.height,event.metaState and android.view.KeyEvent.META_ALT_ON!=0)
                 ScreenshotDrawingTool.ERASER -> eraseTo(point)
                 else -> pending?.let { points ->
@@ -456,7 +497,8 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
                 }
             }
             MotionEvent.ACTION_UP -> {
-                if(!cancelled) when(active) {
+                if(quickDrag) selection.release(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,image.width,image.height,event.metaState and android.view.KeyEvent.META_ALT_ON!=0)
+                else if(!cancelled) when(active) {
                     ScreenshotDrawingTool.SELECT -> selection.release(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,image.width,image.height,event.metaState and android.view.KeyEvent.META_ALT_ON!=0)
                     ScreenshotDrawingTool.ERASER -> { eraseTo(point); history.remove(erased); selectedIndex=null; tapCandidates=emptyList() }
                     ScreenshotDrawingTool.TEXT -> onTextRequest?.invoke(point,null)
@@ -508,14 +550,14 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
                         }
                     }
                 }
-                pending=null; pen=null; continuation=null; erased.clear(); selection.cancel(); penFeedback.clear(); cancelled=false; changed()
+                pending=null; pen=null; continuation=null; erased.clear(); selection.cancel(); penFeedback.clear(); cancelled=false; quickDrag=false; changed()
             }
         }
         invalidate(); return true
     }
     /** `resetCanvasRequested`: drop every mark and the watermark; undo brings them back. */
     fun resetCanvas() {
-        pending=null; pen=null; continuation=null; penFeedback.clear(); selection.cancel(); selectedIndex=null
+        pending=null; pen=null; continuation=null; penFeedback.clear(); quickDrag=false; selection.cancel(); selectedIndex=null
         history.reset(); invalidate(); changed()
     }
     fun undo() { pending=null; pen=null; continuation=null; penFeedback.clear(); selectedIndex=null; history.undo(); invalidate(); changed() }

@@ -22,7 +22,7 @@ object ScreenshotObjectEditingSmoke {
         var error: Throwable? = null
         test.runOnMainSync { try { ScreenshotConsistencyChecks.run(test.targetContext); editing(test.targetContext) } catch (e: Throwable) { error = e } }
         error?.let { throw it }
-        return "SCREENSHOT_OBJECT_EDITING_PASS: interior-drag,oversized-move,overlap-cycle,select-delete,text-select,handle-resize,outside-draw,outside-drag-in"
+        return "SCREENSHOT_OBJECT_EDITING_PASS: interior-drag,oversized-move,overlap-cycle,select-delete,text-select,handle-resize,outside-draw,outside-drag-in,quick-drag"
     }
 
     private fun editing(context: Context) {
@@ -145,6 +145,22 @@ object ScreenshotObjectEditingSmoke {
                 } finally { inside.recycle() }
                 check(outside.getPixel(20,20)==Color.WHITE) { "导出改写了原始截图" }
             } finally { outsideLayer.close(); outside.recycle() }
+            // 绘图工具下按住已画元素应当直接拖动它（上游 `quick_selection_enabled`），
+            // 而不是在原地又新建一个；空白处仍然新建。
+            layer.tool = ScreenshotDrawingTool.SELECT
+            layer.history.remove(layer.history.items.indices.toSet())
+            layer.tool = ScreenshotDrawingTool.FILTER
+            layer.applyStyle(layer.style.copy(area=ScreenshotAreaMode.RECTANGLE,filter=ScreenshotFilter.MOSAIC,strength=0.5f))
+            drag(100f,100f,300f,300f)
+            check(layer.history.items.size==1) { "滤镜没有创建：${layer.history.items.size}" }
+            val filterBefore = layer.history.items.single().points
+            drag(200f,200f,260f,240f)
+            check(layer.history.items.size==1) { "在已有滤镜上拖动又新建了对象：${layer.history.items.size}" }
+            val filterAfter = layer.history.items.single().points
+            check(filterAfter.first().x>filterBefore.first().x+30f) { "滤镜没有被拖动：$filterBefore -> $filterAfter" }
+            check(layer.selectedIndex!=null) { "快速拖动后没有保持选中：${layer.selectedIndex}" }
+            drag(420f,620f,540f,720f)
+            check(layer.history.items.size==2) { "空白处没有创建新滤镜：${layer.history.items.size}" }
             renderer.close()
         } finally { layer.close(); source.recycle() }
     }
