@@ -401,8 +401,6 @@ class ScreenshotCaptureOverlay(
      * （`cornerRadiusApplicable = !selectionRegion().custom()`），手机同样只对矩形/加减形状生效。
      */
     private var selectionRadius = loadSelectionRadius()
-    /** 比例锁定（上游 `aspectRatioLocked`）：开启后新拉框按 1:1 生成。 */
-    private var selectionSquare = loadSelectionSquare()
     private val selectActions=LinearLayout(context).apply {
         // Two rows so every control is visible on a phone; the scroll wrapper only guards narrow cases.
         orientation=LinearLayout.VERTICAL; setPadding(dp(4),dp(2),dp(4),dp(2)); visibility=View.VISIBLE
@@ -446,19 +444,6 @@ class ScreenshotCaptureOverlay(
         background=surface(PANEL_RADIUS); contentDescription="选区位置与尺寸"
         setPadding(dp(4),0,dp(4),0); isClickable=true; isFocusable=true
         setOnClickListener { editSelectionGeometry() }
-    }
-    /** 比例锁定开关（上游锁图标）：开启后新拉框按 1:1。 */
-    private val squareButton=TextView(context).apply {
-        text="方形"; textSize=12f; gravity=Gravity.CENTER; setTextColor(COLOR_TEXT)
-        background=surface(PANEL_RADIUS); contentDescription="方形选区：关"
-        setPadding(dp(4),0,dp(4),0); isClickable=true; isFocusable=true
-        setOnClickListener {
-            if (busy || editing || translating) return@setOnClickListener
-            selectionSquare = !selectionSquare
-            context.getSharedPreferences("screenshot-region-type", Context.MODE_PRIVATE)
-                .edit().putBoolean("screenshot_selection/square", selectionSquare).apply()
-            sync()
-        }
     }
     /** A09：二维码标记层。原版标记只在「编辑选区 + 移动工具」下显示，手机同条件。 */
     private val qrMarkers=ScreenshotQrMarkers(context).apply {
@@ -636,11 +621,6 @@ class ScreenshotCaptureOverlay(
         radiusButton.contentDescription = "选区圆角 $selectionRadius"
         radiusButton.isEnabled = !busy && !editing && !translating && radiusApplicable()
         geometryButton.isEnabled = !busy && !editing && !translating && picked != null
-        selector.lockSquareSelection = selectionSquare
-        squareButton.isEnabled = !busy && !editing && !translating
-        squareButton.contentDescription = if (selectionSquare) "方形选区：开" else "方形选区：关"
-        squareButton.background = if (selectionSquare) activeSurface(PANEL_RADIUS) else surface(PANEL_RADIUS)
-        squareButton.setTextColor(if (selectionSquare) android.graphics.Color.WHITE else COLOR_TEXT)
         // A09：标记只在「编辑选区 + 无绘图工具」时显示，且中心必须落在选区内（上游 refreshMarkers）。
         val showQr=canShowQrMarkers()
         qrMarkers.visibility=if(showQr) View.VISIBLE else View.GONE
@@ -712,7 +692,6 @@ class ScreenshotCaptureOverlay(
         for(button in listOf(recaptureButton,qrButton)) cell(row2,button,dp(36))
         cell(row2,radiusButton,dp(72))
         cell(row2,geometryButton,dp(56))
-        cell(row2,squareButton,dp(56))
         divider(row2)
         cell(row2,hideBarButton,dp(36))
         cell(row2,recaptureDraftButton,dp(98))
@@ -788,9 +767,6 @@ class ScreenshotCaptureOverlay(
     private fun loadSelectionRadius() = context
         .getSharedPreferences("screenshot-region-type", Context.MODE_PRIVATE)
         .getInt("screenshot_selection/radius", 0).coerceIn(0, 256)
-    private fun loadSelectionSquare() = context
-        .getSharedPreferences("screenshot-region-type", Context.MODE_PRIVATE)
-        .getBoolean("screenshot_selection/square", false)
     private fun selectionRadiusPx() = selectionRadius * context.resources.displayMetrics.density
     /** 圆角只作用于非自定义选区；与上游 `cornerRadiusApplicable` 同条件。 */
     private fun radiusApplicable() = captureRegion?.isCustom != true

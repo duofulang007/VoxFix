@@ -226,8 +226,6 @@ internal class ScreenTextRegionView(
     /** 选区圆角（视口像素）。上游 Radius 字段只对非自定义形状生效（`cornerRadiusApplicable`）。 */
     var selectionCornerRadius = 0f
         set(value) { if (field != value) { field = value; invalidate() } }
-    /** 比例锁定：上游 `aspectRatioLocked` 在新拉框时按 1:1（`kNewMarqueeAspectRatio`）生成。 */
-    var lockSquareSelection = false
     private fun framePath() = Path().apply {
         addRoundRect(rect, selectionCornerRadius, selectionCornerRadius, Path.Direction.CW)
     }
@@ -495,12 +493,7 @@ internal class ScreenTextRegionView(
                 }
                 if (abs(dx) > slop || abs(dy) > slop) moved = true
                 when (edges) {
-                    0 -> if (lockSquareSelection) {
-                        // 上游 `aspectRatioLockedMarqueeRect`（ratio = 1）：新拉框即正方形。
-                        val square=ScreenshotSelectionMarquee.lockedSquare(downX,downY,x,y,
-                            width.toFloat(),height.toFloat())
-                        rect.set(square.left,square.top,square.right,square.bottom)
-                    } else rect.set(minOf(downX, x), minOf(downY, y), maxOf(downX, x), maxOf(downY, y))
+                    0 -> rect.set(minOf(downX, x), minOf(downY, y), maxOf(downX, x), maxOf(downY, y))
                     16 -> { rect.set(before); rect.offset(dx.coerceIn(-before.left, width - before.right), dy.coerceIn(-before.top, height - before.bottom)) }
                     else -> {
                         if (edges and 1 != 0) rect.left = x.coerceAtMost(rect.right - 1)
@@ -572,12 +565,7 @@ internal class ScreenTextRegionView(
                 }
                 if (abs(dx) > slop || abs(dy) > slop) moved = true
                 when (edges) {
-                    0 -> if (lockSquareSelection) {
-                        // 上游 `aspectRatioLockedMarqueeRect`（ratio = 1）：新拉框即正方形。
-                        val square=ScreenshotSelectionMarquee.lockedSquare(downX,downY,x,y,
-                            width.toFloat(),height.toFloat())
-                        rect.set(square.left,square.top,square.right,square.bottom)
-                    } else rect.set(minOf(downX, x), minOf(downY, y), maxOf(downX, x), maxOf(downY, y))
+                    0 -> rect.set(minOf(downX, x), minOf(downY, y), maxOf(downX, x), maxOf(downY, y))
                     16 -> { rect.set(before); rect.offset(dx.coerceIn(-before.left, width - before.right), dy.coerceIn(-before.top, height - before.bottom)) }
                     else -> {
                         if (edges and 1 != 0) rect.left = x.coerceAtMost(rect.right - 1)
