@@ -422,6 +422,14 @@ class ScreenshotCaptureOverlay(
         }
     }
     private val qrButton=ImageView(context)
+    /** A09：二维码标记层。原版标记只在「编辑选区 + 移动工具」下显示，手机同条件。 */
+    private val qrMarkers=ScreenshotQrMarkers(context).apply {
+        visibility=View.GONE
+        onMarker=::showQrPopover
+    }
+    private var qrHits: List<ScreenshotBarcodeHit>?=null
+    private var qrVisible=false
+    private var qrPopup: android.widget.PopupWindow?=null
     private val hideBarButton=ImageView(context)
     private var selectionReadoutHidden = false
     private val selectActionsScroll=android.widget.HorizontalScrollView(context).apply {
@@ -438,6 +446,7 @@ class ScreenshotCaptureOverlay(
         content.addView(selector,FrameLayout.LayoutParams(-1,-1))
         content.addView(resultLayer,FrameLayout.LayoutParams(-1,-1))
         content.addView(drawing,FrameLayout.LayoutParams(-1,-1))
+        content.addView(qrMarkers,FrameLayout.LayoutParams(-1,-1))
         selector.onRegionMoved = ::select
         selector.onRegionOperation = ::applyRegionOperation
         selector.onDraftCommit = ::commitRegionShape
@@ -582,6 +591,12 @@ class ScreenshotCaptureOverlay(
         applyCellStyle(regionCurveButton,regionShape==ScreenshotRegionShape.CURVE)
         applyCellStyle(regionFreehandButton,regionShape==ScreenshotRegionShape.FREEHAND)
         applyCellStyle(hideBarButton, selectionReadoutHidden)
+        // A09：标记只在「编辑选区 + 无绘图工具」时显示，且中心必须落在选区内（上游 refreshMarkers）。
+        val showQr=canShowQrMarkers()
+        qrMarkers.visibility=if(showQr) View.VISIBLE else View.GONE
+        if(showQr) refreshQrMarkers() else if(!qrVisible) qrMarkers.setMarkers(emptyList())
+        val qrLabel=if(qrVisible) "隐藏二维码标记" else "显示二维码标记"
+        qrButton.contentDescription=qrLabel; qrButton.tooltipText=qrLabel
         if(showSelection && regionOperation==null) picked?.let {
             status.text=selectionSize(it)
             status.contentDescription="${selectionSize(it)}，点击切换单位"
@@ -590,6 +605,7 @@ class ScreenshotCaptureOverlay(
         secondaryPanel.visibility=if(annotationEditor==null && (drawingStyles.visibility==View.VISIBLE || resultActions.visibility==View.VISIBLE ||
             selectActionsScroll.visibility==View.VISIBLE || pairBar?.visibility==View.VISIBLE)) View.VISIBLE else View.GONE
         if (working || showingTranslation) status.visibility = View.GONE
+        if (qrMarkers.visibility==View.VISIBLE) refreshQrMarkers()
         syncSmartSelection()
         placeControls()
     }
@@ -620,7 +636,8 @@ class ScreenshotCaptureOverlay(
         icon(regionCurveButton,R.drawable.snow_region_curve,"曲线截图区域") { setRegionShape(ScreenshotRegionShape.CURVE) }
         icon(regionFreehandButton,R.drawable.snow_region_freehand,"自由手绘截图区域") { setRegionShape(ScreenshotRegionShape.FREEHAND) }
         icon(recaptureButton,R.drawable.snow_recapture,"重新截图") { if (canRecapture()) onRecaptureRequested?.invoke() }
-        icon(qrButton,R.drawable.snow_barcode,"显示二维码") { scanBarcode() }
+        // 上游选区栏这颗按钮是二维码标记的显隐开关，不是重新扫描；可用性来自识别结果。
+        icon(qrButton,R.drawable.snow_barcode,if(qrVisible) "隐藏二维码标记" else "显示二维码标记") { toggleQrMarkers() }
         icon(hideBarButton,R.drawable.snow_eye_off,"隐藏选择工具栏") {
             selectionReadoutHidden = !selectionReadoutHidden
             val label = if (selectionReadoutHidden) "显示选择工具栏" else "隐藏选择工具栏"
@@ -917,6 +934,8 @@ class ScreenshotCaptureOverlay(
         drawing.region = picked?.let(::Rect); drawing.invalidate()
         // Blocks belong to the previous region; moving the box invalidates them.
         clearText()
+        // 二维码标记同样属于旧选区：识别框坐标按旧裁切换算，换框即失效（上游按选区包含过滤）。
+        qrHits=null; qrVisible=false; qrPopup?.dismiss(); qrMarkers.setMarkers(emptyList())
         status.text = "拖动框选，可移动和拉边调整"
         status.visibility = if (picked == null) View.VISIBLE else View.GONE
         sync()
@@ -1112,9 +1131,13 @@ class ScreenshotCaptureOverlay(
         val bitmap=try { currentImage() } catch(error: Exception) { showFeedback("无法读取选区，请重试"); return }
         val token=++actionGeneration
         busy=true; sync()
-        ScreenshotBarcode.scan(bitmap,{ codes ->
+        ScreenshotBarcode.scan(bitmap,{ hits ->
             if(token==actionGeneration && !disposed) {
-                busy=false; sync()
+                busy=false
+                // 主栏识码同时留下标记数据，选区栏的显隐开关随后可直接用。
+                qrHits=hits
+                val codes=hits.map { it.text }.distinct()
+                sync()
                 if(codes.isEmpty()) showFeedback("未识别到二维码或条码，可重新框选")
                 else showValueEditor("识别结果",codes.joinToString("\n\n"),"复制",
                     codes.singleOrNull()?.let(ScreenshotQrLinks::webUrl)?.let(android.net.Uri::parse)) { text ->
@@ -1123,6 +1146,86 @@ class ScreenshotCaptureOverlay(
                 }
             }
         },{ message -> if(token==actionGeneration && !disposed) { busy=false; sync(); showFeedback(message) } })
+    }
+    /** A09：显示／隐藏二维码标记；首次点按才做识别（原版在进入编辑态时自动识别）。 */
+    private fun toggleQrMarkers() {
+        if (busy || editing || translating || annotationEditor!=null) return
+        if (qrVisible) { qrVisible=false; qrPopup?.dismiss(); sync(); return }
+        val cached=qrHits
+        if (cached!=null) {
+            if (cached.isEmpty()) { showFeedback("未识别到二维码或条码，可重新框选"); return }
+            qrVisible=true; sync(); return
+        }
+        val bitmap=try { currentImage() } catch(error: Exception) { showFeedback("无法读取选区，请重试"); return }
+        val token=++actionGeneration
+        busy=true; sync()
+        ScreenshotBarcode.scan(bitmap,{ hits ->
+            if(token==actionGeneration && !disposed) {
+                busy=false; qrHits=hits
+                if(hits.isEmpty()) showFeedback("未识别到二维码或条码，可重新框选") else qrVisible=true
+                sync()
+            }
+        },{ message -> if(token==actionGeneration && !disposed) { busy=false; sync(); showFeedback(message) } })
+    }
+    /** 上游标记中心落在识别框四角质心，按控件尺寸换算成视口坐标。 */
+    private fun refreshQrMarkers() {
+        val crop=picked
+        val width=if(qrMarkers.width>0) qrMarkers.width else content.width
+        val height=if(qrMarkers.height>0) qrMarkers.height else content.height
+        if (crop==null || width<=0 || height<=0) { qrMarkers.setMarkers(emptyList()); return }
+        qrMarkers.setMarkers(ScreenshotQrMarkers.centersFor(
+            qrHits.orEmpty(),crop,width,height,image.width,image.height))
+    }
+    private fun canShowQrMarkers() = qrVisible && moveMode && !busy && !editing && !translating &&
+        annotationEditor==null && drawing.tool==null && regionOperation==null && picked!=null
+    private fun showQrPopover(index: Int) {
+        val hit=qrHits?.getOrNull(index) ?: return
+        val center=qrMarkers.centerAt(index) ?: return
+        qrPopup?.dismiss()
+        val panel=LinearLayout(context).apply {
+            orientation=LinearLayout.VERTICAL; background=surface(PANEL_RADIUS)
+            setPadding(dp(12),dp(8),dp(12),dp(4)); elevation=dp(8).toFloat()
+        }
+        panel.addView(TextView(context).apply {
+            text=hit.text; textSize=13f; setTextColor(COLOR_TEXT); setTextIsSelectable(true)
+            maxLines=6; ellipsize=android.text.TextUtils.TruncateAt.END
+            contentDescription="二维码内容：${hit.text.take(40)}"
+        })
+        val row=LinearLayout(context)
+        fun action(label: String,run:()->Unit)=TextView(context).apply {
+            text=label; textSize=14f; gravity=Gravity.CENTER; setTextColor(COLOR_PRIMARY)
+            contentDescription=label; setOnClickListener { run() }
+        }
+        row.addView(action("复制") {
+            runCatching { context.getSystemService(ClipboardManager::class.java)
+                .setPrimaryClip(ClipData.newPlainText("识别结果",hit.text)) }
+                .onSuccess { showFeedback("已复制二维码内容") }
+                .onFailure { showFeedback("复制失败，请重试") }
+            qrPopup?.dismiss()
+        },LinearLayout.LayoutParams(0,dp(44),1f))
+        // 只有整段就是一个 http(s) 地址时才给「打开」（上游 webUrl 判定）。
+        ScreenshotQrLinks.webUrl(hit.text)?.let { url ->
+            row.addView(action("打开") {
+                runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse(url)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    .onFailure { showFeedback("没有可打开此链接的应用") }
+                qrPopup?.dismiss()
+            },LinearLayout.LayoutParams(0,dp(44),1f))
+        }
+        row.addView(action("关闭") { qrPopup?.dismiss() },LinearLayout.LayoutParams(0,dp(44),1f))
+        panel.addView(row)
+        val width=minOf(dp(280),maxOf(dp(160),root.width-dp(16)))
+        val popup=android.widget.PopupWindow(panel,width,-2,true).apply {
+            elevation=dp(8).toFloat()
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+            isOutsideTouchable=true
+        }
+        // 弹层放在标记下方并夹在屏内；关闭时只收起弹层，不结束截图（原版会 closeEditor）。
+        val x=(qrMarkers.left+center.x-width/2f).toInt()
+            .coerceIn(dp(8),maxOf(dp(8),root.width-width-dp(8)))
+        val y=(qrMarkers.top+center.y+dp(12)+dp(8)).toInt()
+        popup.showAtLocation(root,Gravity.TOP or Gravity.START,x,y)
+        qrPopup=popup
     }
     private fun pinImage() {
         if(busy || translating || editing) return

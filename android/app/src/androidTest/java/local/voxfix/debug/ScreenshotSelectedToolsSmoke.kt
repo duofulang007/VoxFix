@@ -269,7 +269,7 @@ object ScreenshotSelectedToolsSmoke {
     }
     private fun scan(test: Instrumentation,bitmap: Bitmap,expected: String) {
         val done=CountDownLatch(1); var values=listOf<String>(); var error=""
-        test.runOnMainSync { ScreenshotBarcode.scan(bitmap,{ values=it; done.countDown() },{ error=it; done.countDown() }) }
+        test.runOnMainSync { ScreenshotBarcode.scanText(bitmap,{ values=it; done.countDown() },{ error=it; done.countDown() }) }
         check(done.await(20,TimeUnit.SECONDS)) { "offline scanner timed out" }
         check(expected in values) { "barcode $expected not recognized: $values $error" }
     }

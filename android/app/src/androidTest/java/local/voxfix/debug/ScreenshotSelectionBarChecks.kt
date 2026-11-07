@@ -61,6 +61,32 @@ internal object ScreenshotSelectionBarChecks {
             check((field(overlay,"selectActionsScroll") as View).visibility == View.VISIBLE) { "恢复后选区栏没回来" }
             check(restore.visibility == View.GONE) { "恢复后入口没有收起" }
             check(field(overlay,"picked") == picked) { "隐藏/恢复改动了选区" }
+            // A09：二维码标记——中心按识别框质心换算，只在「编辑选区 + 无绘图工具」时显示，
+            // 命中半径按上游 12 逻辑像素；这颗按钮是显隐开关而不是重新扫描。
+            val markers = field(overlay,"qrMarkers") as ScreenshotQrMarkers
+            val mapped = ScreenshotQrMarkers.centersFor(
+                listOf(ScreenshotBarcodeHit("https://example.com", Rect(10,20,30,40))),
+                checkNotNull(picked),1080,2400,1080,2400)
+            check(mapped.size==1 && Math.round(mapped[0].x)==picked.left+20 && Math.round(mapped[0].y)==picked.top+30) {
+                "坐标换算不对：$mapped"
+            }
+            overlay.javaClass.getDeclaredField("qrHits").apply { isAccessible=true }
+                .set(overlay,listOf(ScreenshotBarcodeHit("https://example.com", Rect(10,20,30,40))))
+            overlay.javaClass.getDeclaredField("qrVisible").apply { isAccessible=true }.set(overlay,true)
+            overlay.javaClass.getDeclaredMethod("sync").apply { isAccessible=true }.invoke(overlay)
+            root.measure(View.MeasureSpec.makeMeasureSpec(1080,View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(2400,View.MeasureSpec.EXACTLY))
+            root.layout(0,0,1080,2400)
+            check(markers.visibility==View.VISIBLE && markers.markerCount()==1) {
+                "标记未显示：${markers.visibility}/${markers.markerCount()}"
+            }
+            val center = checkNotNull(markers.centerAt(0))
+            check(markers.hitIndex(center.x,center.y)==0) { "标记命中失败" }
+            check(markers.hitIndex(center.x+60*context.resources.displayMetrics.density,center.y)==-1) { "标记外误命中" }
+            checkNotNull(find(root,"隐藏二维码标记")) { "开关标签没有跟随可见性" }
+            checkNotNull(find(root,"隐藏二维码标记")).performClick()
+            check(markers.visibility==View.GONE && field(overlay,"qrVisible")==false) { "关闭后标记仍在" }
+            checkNotNull(find(root,"显示二维码标记"))
             checkRecapture(overlay,root,image,fresh,checkNotNull(picked))
         } finally {
             overlay.dismiss(context.getSystemService(android.view.WindowManager::class.java))
