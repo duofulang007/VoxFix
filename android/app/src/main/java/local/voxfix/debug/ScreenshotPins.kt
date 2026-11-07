@@ -174,6 +174,14 @@ object ScreenshotPins {
                 fitButtons(); clamp(); updateWindow()
             }
         }
+        /** 上游 `applyScale`：百分比相对初始窗口宽度；手机窗口不能超出屏幕，由 [resize] 收口。 */
+        private fun currentPercent()=Math.round(params.width*100f/origin.width())
+        private fun scaleTo(percent: Int) {
+            val clamped=percent.coerceIn(10,500)
+            resize(Math.round(origin.width()*clamped/100f).coerceAtLeast(1))
+            updateWindow()
+        }
+        /** 100%：回到初始窗口尺寸，同时解除缩略态（上游 100% 预设同样恢复初始宽高）。 */
         private fun resetSize() {
             beforeThumbnail=null
             params.width=origin.width(); params.height=origin.height(); clamp(); fitButtons(); updateWindow()
@@ -194,7 +202,12 @@ object ScreenshotPins {
             },LinearLayout.LayoutParams(-1,dp(44))) }
             item("编辑贴图") { edit() }
             item(if(beforeThumbnail==null) "缩略贴图" else "还原贴图") { thumbnail() }
-            item("恢复100% · 当前 ${(params.width*100f/origin.width()).toInt()}%") { resetSize() }
+            // 上游 Process image → Scale：±10% 与 25/50/75/100 预设，百分比以初始窗口宽度为 100%。
+            val percent=currentPercent()
+            item("放大 10%（当前 $percent%）") { scaleTo(percent+10) }
+            item("缩小 10%") { scaleTo(percent-10) }
+            listOf(25,50,75).forEach { target -> item("缩放 $target%") { scaleTo(target) } }
+            item("缩放 100%") { resetSize() }
             val readout=TextView(context).apply { text="透明度 ${(picture.alpha*100).toInt()}%"; textSize=13f; setTextColor(0xFF000000.toInt()) }
             body.addView(readout)
             body.addView(SeekBar(context).apply {

@@ -59,6 +59,20 @@ object ScreenshotRefinementSmoke {
                 invoke("thumbnail"); invoke("thumbnail")
                 check(geometry()==region) { "thumbnail restore lost pin geometry: got ${geometry()} want $region" }
                 invoke("resetSize"); check(geometry().sizeEquals(region)) { "100% lost original dimensions" }
+                // T24：Scale 菜单按初始窗口宽度换算（上游 10–500%），25% 不会变大、200% 不会变小，
+                // 100% 预设回到原始尺寸。手机窗口不能超出屏幕，所以上限由 resize 收口。
+                val scaleTo = { percent: Int ->
+                    pinClass.getDeclaredMethod("scaleTo", Int::class.javaPrimitiveType)
+                        .apply { isAccessible=true }.invoke(pin, percent)
+                }
+                val base = geometry().width()
+                scaleTo(25)
+                val quarter = geometry().width()
+                scaleTo(200)
+                val doubled = geometry().width()
+                check(quarter <= base) { "25% grew the pin: $quarter/$base" }
+                check(doubled >= quarter) { "200% shrank the pin: $doubled/$quarter" }
+                invoke("resetSize"); check(geometry().sizeEquals(region)) { "100% preset lost original dimensions" }
                 var result: ScreenshotPinResult?=null
                 val editor=ScreenshotPinEditor(context,bitmap,region) { result=it }
                 try {

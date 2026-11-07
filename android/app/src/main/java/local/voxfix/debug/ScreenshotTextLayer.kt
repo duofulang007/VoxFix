@@ -65,12 +65,38 @@ class ScreenshotTextLayer(
     private var layoutDown = ScreenshotDrawingPoint(0f,0f)
     private var layoutFrom: ScreenshotTextBlock? = null
     private val layoutSlop = ViewConfiguration.get(context).scaledTouchSlop
+    /** 结果栏两个下拉的状态机（上游 `ScreenshotOcrTextEditingSession` 的 formatting／punctuation）。 */
+    private val transforms = ScreenshotTextTransformState()
+    val transformFormatting: String get() = transforms.formatting
+    val transformPunctuation: String get() = transforms.punctuation
+    /** 下游只是换行或标点，不触碰版面：改完仍按行回到各自的文字块。 */
+    fun setFormatting(value: String, region: Rect? = null): Boolean =
+        applyTransform(region) { transforms.setFormatting(value, text()) }
+    fun setPunctuation(value: String, region: Rect? = null): Boolean =
+        applyTransform(region) { transforms.setPunctuation(value, text()) }
+    private fun applyTransform(region: Rect?, compute: () -> String): Boolean {
+        // 上游先 beginTextEditing() 再改草稿；这里按需建整段编辑器，不依赖调用方的延时。
+        if (documentEditor == null) beginDocumentEditing(region ?: blockBounds())
+        val editor = documentEditor ?: return false
+        val next = compute()
+        if (editor.text.toString() == next) return false
+        restoring = true
+        editor.setText(next); editor.setSelection(editor.length())
+        restoring = false
+        recordEdit()
+        return true
+    }
+    private fun blockBounds(): Rect = Rect(
+        layoutBlocks.minOfOrNull { it.left } ?: 0,
+        layoutBlocks.minOfOrNull { it.top } ?: 0,
+        layoutBlocks.maxOfOrNull { it.right } ?: source.width,
+        layoutBlocks.maxOfOrNull { it.bottom } ?: source.height)
     private fun recordEdit() {
         if (!restoring) history.record(currentBlocks())
         changed(text()); historyChanged()
     }
-    fun undo() = restoreEdit(history.undo())
-    fun redo() = restoreEdit(history.redo())
+    fun undo() { if (!history.canUndo) return; transforms.clear(); restoreEdit(history.undo()) }
+    fun redo() { if (!history.canRedo) return; transforms.clear(); restoreEdit(history.redo()) }
     private fun restoreEdit(value: List<ScreenshotTextBlock>?) {
         if (value == null) return
         restoring=true
@@ -182,7 +208,11 @@ class ScreenshotTextLayer(
             }
             addTextChangedListener(object:TextWatcher {
                 override fun beforeTextChanged(s:CharSequence?,start:Int,count:Int,after:Int) {}
-                override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int) { recordEdit() }
+                override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int) {
+                    // 上游 `recordCurrentText()`：用户改字即丢弃格式化状态，下拉回到空值。
+                    if (!restoring) transforms.clear()
+                    recordEdit()
+                }
                 override fun afterTextChanged(s:Editable?) {}
             })
             if (fitToBlock) {
@@ -387,7 +417,10 @@ class ScreenshotTextLayer(
                 editor.setSelection(selectionStart.coerceIn(0,editor.length()),selectionEnd.coerceIn(0,editor.length()))
                 editor.addTextChangedListener(object:TextWatcher {
                     override fun beforeTextChanged(s:CharSequence?,start:Int,count:Int,after:Int) {}
-                    override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int) { recordEdit() }
+                    override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int) {
+                        if (!restoring) transforms.clear()
+                        recordEdit()
+                    }
                     override fun afterTextChanged(s:Editable?) {}
                 })
                 addView(editor,LayoutParams(1,1))

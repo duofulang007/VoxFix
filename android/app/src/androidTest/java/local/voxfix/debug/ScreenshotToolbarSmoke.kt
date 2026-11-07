@@ -186,6 +186,28 @@ object ScreenshotToolbarSmoke {
             check(layer.text() == "第一行文字\n跨行新增\n第二行文字") { "document edit lost lines" }
             evidence.add("edit=document")
 
+            // T19：结果栏两个文本变换下拉（上游 Formatting／Punctuation 两个 AdSelect）。
+            // 默认空值＝恒等；改动从基线重算，清空即回到识别原文。
+            val formatEntry = field(overlay,"textFormatButton") as android.widget.TextView
+            val punctEntry = field(overlay,"textPunctButton") as android.widget.TextView
+            check(formatEntry.parent===field(overlay,"resultActions") &&
+                punctEntry.parent===field(overlay,"resultActions")) { "transform entries outside the result bar" }
+            check(formatEntry.text=="格式" && punctEntry.text=="标点") {
+                "transform entries must start empty: ${formatEntry.text}/${punctEntry.text}"
+            }
+            overlay.applyTextTransform(true, ScreenshotTextTransforms.REMOVE)
+            check(formatEntry.text=="移除换行") { "format label=${formatEntry.text}" }
+            check(layer.text()=="第一行文字跨行新增第二行文字") { "remove line breaks text=${layer.text()}" }
+            overlay.applyTextTransform(true, ScreenshotTextTransforms.KEEP)
+            check(formatEntry.text=="保留换行") { "keep label=${formatEntry.text}" }
+            check(layer.text()=="第一行文字\n跨行新增\n第二行文字") { "keep did not restore=${layer.text()}" }
+            overlay.applyTextTransform(true, "")
+            check(formatEntry.text=="格式" && layer.text()=="第一行文字\n跨行新增\n第二行文字") {
+                "clearing format did not restore: ${formatEntry.text}/${layer.text()}"
+            }
+            checkNotNull(action("完成编辑")).performClick()
+            evidence.add("transform=ok")
+
             checkNotNull(action("保存截图")).performClick()
             check(savedCalls == 1) { "save not raised" }
             check(savedRegion == Rect(60,60,1020,600)) { "save region=${savedRegion}" }

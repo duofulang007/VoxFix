@@ -323,6 +323,57 @@ class ScreenshotCaptureOverlay(
         contentDescription = "调整文字位置"; tooltipText = "拖动文字块移动，右下角改大小"
         setOnClickListener { toggleTextLayout() }
     }
+    /**
+     * 结果栏的两个文本变换下拉（上游 Formatting／Punctuation 两个 AdSelect）。
+     * 原版是可清空的下拉，手机用同尺寸的文字按钮 + 弹出菜单表达同一组选项。
+     */
+    private val textFormatButton = textTransformButton { showTextTransformMenu(it, formatting = true) }
+    private val textPunctButton = textTransformButton { showTextTransformMenu(it, formatting = false) }
+    private fun textTransformButton(run: (View) -> Unit) = TextView(context).apply {
+        textSize = 12f; setTextColor(COLOR_TEXT); gravity = Gravity.CENTER
+        setPadding(dp(8),0,dp(8),0); minWidth = dp(44)
+        background = surface(PANEL_RADIUS); isClickable = true; isFocusable = true
+        setOnClickListener { run(it) }
+    }
+    private fun formatLabel(value: String) = when (value) {
+        ScreenshotTextTransforms.KEEP -> "保留换行"
+        ScreenshotTextTransforms.REMOVE -> "移除换行"
+        else -> "格式"
+    }
+    private fun punctuationLabel(value: String) = when (value) {
+        ScreenshotTextTransforms.HALF -> "半角"
+        ScreenshotTextTransforms.FULL -> "全角"
+        else -> "标点"
+    }
+    /** 上游下拉可清空：已选值时额外给「恢复默认」，清空后文本回到基线。 */
+    private fun showTextTransformMenu(anchor: View, formatting: Boolean) {
+        if (busy || translating || showingTranslation) return
+        val layer = editedLayer() ?: return
+        val current = if (formatting) layer.transformFormatting else layer.transformPunctuation
+        android.widget.PopupMenu(context, anchor).apply {
+            menu.add(0,1,0,if (formatting) "保留换行" else "半角")
+            menu.add(0,2,1,if (formatting) "移除换行" else "全角")
+            if (current.isNotEmpty()) menu.add(0,3,2,"恢复默认")
+            setOnMenuItemClickListener { choice ->
+                val value = when (choice.itemId) {
+                    1 -> if (formatting) ScreenshotTextTransforms.KEEP else ScreenshotTextTransforms.HALF
+                    2 -> if (formatting) ScreenshotTextTransforms.REMOVE else ScreenshotTextTransforms.FULL
+                    else -> ""
+                }
+                applyTextTransform(formatting,value)
+                true
+            }
+            show()
+        }
+    }
+    /** 上游 `applyTextFormatting`：不在编辑态时先 `beginTextEditing()` 再改草稿。 */
+    internal fun applyTextTransform(formatting: Boolean, value: String) {
+        if (busy || translating || showingTranslation) return
+        if (!editing) setEditing(true, document = true)
+        val layer = editedLayer() ?: return
+        if (formatting) layer.setFormatting(value,picked) else layer.setPunctuation(value,picked)
+        sync()
+    }
     private val barcodeAction = Action(ScreenshotAction.BARCODE,R.drawable.snow_barcode) { scanBarcode() }
     private val pinAction = Action(ScreenshotAction.PIN,R.drawable.snow_pin) { pinImage() }
     private val shareAction = Action(ScreenshotAction.SHARE,R.drawable.snow_share) { shareImage() }
@@ -376,6 +427,10 @@ class ScreenshotCaptureOverlay(
     private val selectActionsScroll=android.widget.HorizontalScrollView(context).apply {
         isHorizontalScrollBarEnabled=false; visibility=View.GONE
     }
+    /** 结果栏加上两个文本变换下拉后可能超宽，窄屏仍要能横向滚动到全部入口。 */
+    private val resultActionsScroll=android.widget.HorizontalScrollView(context).apply {
+        isHorizontalScrollBarEnabled=false; visibility=View.GONE
+    }
     init {
         root.addView(content,FrameLayout.LayoutParams(-1,-1))
         drawing.colorSamplingBase={ if(resultLayer.visibility==View.VISIBLE) (if(showingTranslation) translationLayer else textLayer)?.render(Rect(0,0,image.width,image.height)) else null }
@@ -401,9 +456,12 @@ class ScreenshotCaptureOverlay(
         resultActions.addView(eyeAction,LinearLayout.LayoutParams(dp(44),dp(44)))
         resultActions.addView(View(context).apply { setBackgroundColor(COLOR_SEPARATOR) },LinearLayout.LayoutParams(dp(1),dp(16)).apply { marginStart=dp(8); marginEnd=dp(8) })
         resultActions.addView(editAction,LinearLayout.LayoutParams(dp(44),dp(44)))
+        resultActions.addView(textFormatButton,LinearLayout.LayoutParams(-2,dp(44)).apply { marginStart=dp(6) })
+        resultActions.addView(textPunctButton,LinearLayout.LayoutParams(-2,dp(44)).apply { marginStart=dp(6) })
         resultActions.addView(textLayoutButton,LinearLayout.LayoutParams(dp(44),dp(44)))
         resultActions.addView(copyAction,LinearLayout.LayoutParams(dp(44),dp(44)))
-        secondaryPanel.addView(resultActions,LinearLayout.LayoutParams(-1,-2))
+        resultActionsScroll.addView(resultActions,android.widget.FrameLayout.LayoutParams(-2,-2))
+        secondaryPanel.addView(resultActionsScroll,LinearLayout.LayoutParams(-1,-2))
         root.addView(secondaryPanel,FrameLayout.LayoutParams(dp(320),-2))
         root.addView(hideBarRestore,FrameLayout.LayoutParams(-2,-2))
         drawing.onTextRequest = { point,index ->
@@ -499,6 +557,17 @@ class ScreenshotCaptureOverlay(
         pairBar?.isEnabled=!working
         languageDivider.visibility=if(pairBar?.visibility==View.VISIBLE) View.VISIBLE else View.GONE
         resultActions.visibility=if(resultTool!=null && textLayer!=null && annotationEditor==null) View.VISIBLE else View.GONE
+        resultActionsScroll.visibility=resultActions.visibility
+        // 上游 setTextTransformSelections：下拉显示当前会话的 formatting／punctuation，
+        // 空值即占位文案；译文流式输出与锁定时禁用，避免改动正在替换的文本。
+        val textLayerForTransforms=editedLayer()
+        val transformsEnabled=!busy && !translating && !showingTranslation && textLayerForTransforms!=null
+        textFormatButton.isEnabled=transformsEnabled
+        textPunctButton.isEnabled=transformsEnabled
+        textFormatButton.text=formatLabel(textLayerForTransforms?.transformFormatting.orEmpty())
+        textPunctButton.text=punctuationLabel(textLayerForTransforms?.transformPunctuation.orEmpty())
+        textFormatButton.contentDescription="格式化：${textFormatButton.text}"
+        textPunctButton.contentDescription="标点：${textPunctButton.text}"
         moveAction.active=moveMode
         val showSelection=moveMode && picked!=null && !busy && !editing && !translating && resultTool==null && annotationEditor==null
         // A12：隐藏时整条选区栏（读数 + 两行按钮）一起收起，只在原位留一颗恢复胶囊。
@@ -1048,7 +1117,7 @@ class ScreenshotCaptureOverlay(
                 busy=false; sync()
                 if(codes.isEmpty()) showFeedback("未识别到二维码或条码，可重新框选")
                 else showValueEditor("识别结果",codes.joinToString("\n\n"),"复制",
-                    codes.singleOrNull()?.let { android.net.Uri.parse(it) }?.takeIf { it.scheme in setOf("http","https") }) { text ->
+                    codes.singleOrNull()?.let(ScreenshotQrLinks::webUrl)?.let(android.net.Uri::parse)) { text ->
                     runCatching { context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("识别结果",text)) }
                         .onFailure { showFeedback("复制失败，请重试") }
                 }
