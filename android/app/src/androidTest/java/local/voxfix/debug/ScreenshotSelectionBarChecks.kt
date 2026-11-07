@@ -27,8 +27,6 @@ internal object ScreenshotSelectionBarChecks {
     fun run(context: Context) {
         val image=Bitmap.createBitmap(1080,2400,Bitmap.Config.ARGB_8888)
         val fresh=Bitmap.createBitmap(image.width,image.height,Bitmap.Config.ARGB_8888)
-        val radiusPrefs=context.getSharedPreferences("screenshot-region-type",Context.MODE_PRIVATE)
-        val oldRadius=radiusPrefs.getInt("screenshot_selection/radius",0)
         val overlay=ScreenshotCaptureOverlay(context,image,{},{},{},{},{},Translator())
         try {
             val root=field(overlay,"root") as ViewGroup
@@ -89,30 +87,9 @@ internal object ScreenshotSelectionBarChecks {
             checkNotNull(find(root,"隐藏二维码标记")).performClick()
             check(markers.visibility==View.GONE && field(overlay,"qrVisible")==false) { "关闭后标记仍在" }
             checkNotNull(find(root,"显示二维码标记"))
-            // 选区圆角（上游 Radius 0–256，默认 0）：输入后选框与导出一起变圆角，四角透明。
-            checkNotNull(find(root,"选区圆角 0")).performClick()
-            val radiusField=checkNotNull(find(root,"选区圆角")) as android.widget.EditText
-            radiusField.setText("24")
-            checkNotNull(find(root,"确定")).performClick()
-            root.measure(View.MeasureSpec.makeMeasureSpec(1080,View.MeasureSpec.EXACTLY),
-                View.MeasureSpec.makeMeasureSpec(2400,View.MeasureSpec.EXACTLY))
-            root.layout(0,0,1080,2400)
-            check(field(overlay,"selectionRadius")==24) { "圆角没有保存：${field(overlay,"selectionRadius")}" }
-            check((field(overlay,"selector") as ScreenTextRegionView).selectionCornerRadius>0f) { "选框没有圆角" }
-            // 底图原本是全透明位图；先铺一层实色，才能区分"被圆角裁掉"和"本来就是透明"。
-            image.eraseColor(Color.RED)
-            val exported=overlay.javaClass.getDeclaredMethod("currentImage").apply { isAccessible=true }
-                .invoke(overlay) as Bitmap
-            try {
-                check((exported.getPixel(0,0) ushr 24)==0) { "圆角导出左上角不透明" }
-                check((exported.getPixel(exported.width/2,4) ushr 24)!=0) { "圆角导出中间被裁掉" }
-            } finally { exported.recycle() }
-            checkNotNull(find(root,"选区圆角 24"))
             checkRecapture(overlay,root,image,fresh,checkNotNull(picked))
         } finally {
             overlay.dismiss(context.getSystemService(android.view.WindowManager::class.java))
-            // 圆角写的是真实偏好，测完还原，避免污染后续套件与用户设置。
-            radiusPrefs.edit().putInt("screenshot_selection/radius",oldRadius).apply()
             image.recycle()
             fresh.recycle()
         }

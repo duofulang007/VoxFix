@@ -5,15 +5,11 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.Insets
-import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.PointF
 import android.graphics.PorterDuff
 import android.graphics.Rect
-import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.view.Gravity
@@ -396,11 +392,6 @@ class ScreenshotCaptureOverlay(
     private var regionOperation: ScreenshotRegionOp?=null
     /** Region shape for the next selection, persisted like the original's region_type preference. */
     private var regionShape = loadRegionShapePreference()
-    /**
-     * 选区圆角（逻辑像素 0–256，上游 Radius 字段；默认 0）。原版只对非自定义形状可用
-     * （`cornerRadiusApplicable = !selectionRegion().custom()`），手机同样只对矩形/加减形状生效。
-     */
-    private var selectionRadius = loadSelectionRadius()
     private val selectActions=LinearLayout(context).apply {
         // Two rows so every control is visible on a phone; the scroll wrapper only guards narrow cases.
         orientation=LinearLayout.VERTICAL; setPadding(dp(4),dp(2),dp(4),dp(2)); visibility=View.VISIBLE
@@ -431,13 +422,6 @@ class ScreenshotCaptureOverlay(
         }
     }
     private val qrButton=ImageView(context)
-    /** 选区圆角（上游 Radius 字段）：点按输入 0–256，默认 0。 */
-    private val radiusButton=TextView(context).apply {
-        textSize=12f; gravity=Gravity.CENTER; setTextColor(COLOR_TEXT)
-        background=surface(PANEL_RADIUS); contentDescription="选区圆角"
-        setPadding(dp(4),0,dp(4),0); isClickable=true; isFocusable=true
-        setOnClickListener { editSelectionRadius() }
-    }
     /** A09：二维码标记层。原版标记只在「编辑选区 + 移动工具」下显示，手机同条件。 */
     private val qrMarkers=ScreenshotQrMarkers(context).apply {
         visibility=View.GONE
@@ -608,11 +592,6 @@ class ScreenshotCaptureOverlay(
         applyCellStyle(regionCurveButton,regionShape==ScreenshotRegionShape.CURVE)
         applyCellStyle(regionFreehandButton,regionShape==ScreenshotRegionShape.FREEHAND)
         applyCellStyle(hideBarButton, selectionReadoutHidden)
-        // 选区圆角：控件显示当前值，自定义形状（折线/曲线/手绘）不可用，与上游同条件。
-        selector.selectionCornerRadius = if (radiusApplicable()) selectionRadiusPx() else 0f
-        radiusButton.text = "圆角 $selectionRadius"
-        radiusButton.contentDescription = "选区圆角 $selectionRadius"
-        radiusButton.isEnabled = !busy && !editing && !translating && radiusApplicable()
         // A09：标记只在「编辑选区 + 无绘图工具」时显示，且中心必须落在选区内（上游 refreshMarkers）。
         val showQr=canShowQrMarkers()
         qrMarkers.visibility=if(showQr) View.VISIBLE else View.GONE
@@ -682,7 +661,6 @@ class ScreenshotCaptureOverlay(
         cell(row1,addRegionButton,dp(36)); cell(row1,subtractRegionButton,dp(36)); divider(row1)
         for(button in listOf(regionRectButton,regionPolylineButton,regionCurveButton,regionFreehandButton)) cell(row1,button,dp(36))
         for(button in listOf(recaptureButton,qrButton)) cell(row2,button,dp(36))
-        cell(row2,radiusButton,dp(72))
         divider(row2)
         cell(row2,hideBarButton,dp(36))
         cell(row2,recaptureDraftButton,dp(98))
@@ -755,37 +733,6 @@ class ScreenshotCaptureOverlay(
     private fun loadRegionShapePreference() = ScreenshotRegionShape.fromId(
         context.getSharedPreferences("screenshot-region-type", Context.MODE_PRIVATE)
             .getString("screenshot_selection/region_type", null))
-    private fun loadSelectionRadius() = context
-        .getSharedPreferences("screenshot-region-type", Context.MODE_PRIVATE)
-        .getInt("screenshot_selection/radius", 0).coerceIn(0, 256)
-    private fun selectionRadiusPx() = selectionRadius * context.resources.displayMetrics.density
-    /** 圆角只作用于非自定义选区；与上游 `cornerRadiusApplicable` 同条件。 */
-    private fun radiusApplicable() = captureRegion?.isCustom != true
-    private fun editSelectionRadius() {
-        if (busy || editing || translating) return
-        showValueEditor("选区圆角", selectionRadius.toString(), "确定") { value ->
-            val parsed = value.trim().toIntOrNull()
-            if (parsed == null) { showFeedback("圆角需为 0–256 的整数"); return@showValueEditor }
-            selectionRadius = parsed.coerceIn(0, 256)
-            context.getSharedPreferences("screenshot-region-type", Context.MODE_PRIVATE)
-                .edit().putInt("screenshot_selection/radius", selectionRadius).apply()
-            sync()
-        }
-    }
-    /** 导出前按圆角裁掉四角（上游 Radius 走结果合成，默认 0 时不做任何事）。 */
-    private fun applySelectionRadius(bitmap: Bitmap): Bitmap {
-        val radius = selectionRadiusPx()
-        if (radius <= 0f || !radiusApplicable()) return bitmap
-        val out = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(out)
-        val path = Path().apply {
-            addRoundRect(RectF(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat()),
-                radius, radius, Path.Direction.CW)
-        }
-        canvas.clipPath(path)
-        canvas.drawBitmap(bitmap, 0f, 0f, Paint(Paint.ANTI_ALIAS_FLAG))
-        return out
-    }
 
     /** A finished custom shape lands here: replace the selection, or feed the armed operation. */
     private fun commitRegionShape(vertices: List<PointF>, shape: ScreenshotRegionShape) {
@@ -1200,11 +1147,8 @@ class ScreenshotCaptureOverlay(
         val base=composeCurrent(region) ?: Bitmap.createBitmap(image,region.left,region.top,region.width(),region.height()).let {
             if(it===image) image.copy(Bitmap.Config.ARGB_8888,false) else it
         }
-        val result=if(shaped==null) base
-            else shaped.mask(if(base.isMutable) base else base.copy(Bitmap.Config.ARGB_8888,true),region)
-        val rounded=applySelectionRadius(result)
-        if(rounded!==result && result!==image) result.recycle()
-        return rounded
+        if(shaped==null) return base
+        return shaped.mask(if(base.isMutable) base else base.copy(Bitmap.Config.ARGB_8888,true),region)
     }
     private fun scanBarcode() {
         if(busy || translating || editing) return
@@ -1752,17 +1696,14 @@ class ScreenshotCaptureOverlay(
             // Save what the user sees: an edited result layer is exported, original view is not.
             val rendered=composeCurrent(region)
             val shaped=captureRegion
-            val rounded=selectionRadiusPx()>0f && radiusApplicable()
-            val base=when {
-                shaped==null -> rendered ?: if(rounded)
-                    Bitmap.createBitmap(image,region.left,region.top,region.width(),region.height()) else null
+            when {
+                shaped==null -> rendered
                 rendered!=null -> shaped.mask(if(rendered.isMutable) rendered else rendered.copy(Bitmap.Config.ARGB_8888,true),region)
                 else -> {
-                    val crop=Bitmap.createBitmap(image,region.left,region.top,region.width(),region.height())
-                    shaped.mask(if(crop.isMutable) crop else crop.copy(Bitmap.Config.ARGB_8888,true),region)
+                    val base=Bitmap.createBitmap(image,region.left,region.top,region.width(),region.height())
+                    shaped.mask(if(base.isMutable) base else base.copy(Bitmap.Config.ARGB_8888,true),region)
                 }
             }
-            if(base==null) null else applySelectionRadius(base).also { if(it!==base && base!==image) base.recycle() }
         } catch (error: Exception) {
             android.util.Log.w("VoxFix","SCREENSHOT_RENDER_FAILED",error)
             busy = false; status.text = "保存失败，请重试"; sync(); return
