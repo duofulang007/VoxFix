@@ -60,6 +60,8 @@ internal class ScreenRecorder(
         val bitrate: Int,
         val microphone: Boolean,
         val systemAudio: Boolean,
+        /** Upstream `separate_audio_tracks`: one AAC track per enabled source instead of one mix. */
+        val separateAudioTracks: Boolean = false,
         val format: ScreenRecordingOptions.Format = ScreenRecordingOptions.Format.MP4,
         val quality: Int = 80,
         val loopAnimated: Boolean = true
@@ -93,9 +95,15 @@ internal class ScreenRecorder(
     private var projectionCallback: MediaProjection.Callback? = null
 
     private var videoCodec: MediaCodec? = null
-    private var audioCodec: MediaCodec? = null
-    private var audioRecord: AudioRecord? = null
-    private var audioThread: Thread? = null
+    /** One AAC encoder per audio track: `mixed`, or `system` + `microphone` in separate mode. */
+    private class AudioTrackEncoder(val key: String, val codec: MediaCodec) {
+        var format: MediaFormat? = null
+        var muxerTrack = -1
+        var lastPtsUs = 0L
+    }
+    private val audioTracks = ArrayList<AudioTrackEncoder>()
+    private val audioRecords = ArrayList<AudioRecord>()
+    private var audioEngine: ScreenRecordingAudioEngine? = null
     private var muxer: MediaMuxer? = null
     private var animationWriter: ScreenAnimationWriter? = null
     private var pixelBuffer: ByteBuffer? = null
@@ -105,15 +113,9 @@ internal class ScreenRecorder(
 
     private val muxerLock = Any()
     private var videoFormat: MediaFormat? = null
-    private var audioFormat: MediaFormat? = null
     private var videoTrack = -1
-    private var audioTrack = -1
     private var muxerStarted = false
-    private var audioEnabled = false
-    private var audioSamples = 0L
-    private val sampleRate = 44_100
 
-    @Volatile private var audioRunning = false
     @Volatile private var paused = false
     @Volatile private var stopping = false
 
@@ -166,6 +168,9 @@ internal class ScreenRecorder(
             pauseStartNs = System.nanoTime()
             paused = true
         }
+        // The mixer drops audio while paused and holds its slot counter, so the timeline stays
+        // continuous instead of jumping by the paused duration.
+        audioEngine?.setPaused(true)
     }
 
     fun resume() {
@@ -177,6 +182,7 @@ internal class ScreenRecorder(
             paused = false
             lastDrawnNs = 0L
         }
+        audioEngine?.setPaused(false)
     }
 
     /** Stops and finalises the file. */
@@ -514,31 +520,101 @@ internal class ScreenRecorder(
         if (paused) pausedNs + (System.nanoTime() - pauseStartNs).coerceAtLeast(0) else pausedNs
     }
 
+    /**
+     * 采集音频：两路都可能开（上游 `microphone` 与 `system_audio` 是独立开关），按
+     * `separate_audio_tracks` 决定写一条混音轨还是每个音源各一条。任一路打不开就只保留另一路，
+     * 两路都失败时不建音轨，避免写出一条静音空轨冒充“有声音”。
+     */
     private fun startAudio() {
-        val source = if (config.microphone) openMicrophone() else openSystemAudio()
-        val record = source ?: return
-        audioRecord = record
-        val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, 1)
+        val opened = ArrayList<ScreenRecordingAudioEngine.Source>()
+        if (config.systemAudio) openSystemAudio()?.let {
+            opened += ScreenRecordingAudioEngine.Source(
+                ScreenRecordingAudioEngine.Kind.SYSTEM, it, it.channelCount)
+        }
+        if (config.microphone) openMicrophone()?.let {
+            opened += ScreenRecordingAudioEngine.Source(
+                ScreenRecordingAudioEngine.Kind.MICROPHONE, it, it.channelCount)
+        }
+        if (opened.isEmpty()) {
+            android.util.Log.w("VoxFix", "SCREEN_RECORD_AUDIO_UNAVAILABLE")
+            return
+        }
+        val system = opened.any { it.kind == ScreenRecordingAudioEngine.Kind.SYSTEM }
+        val microphone = opened.any { it.kind == ScreenRecordingAudioEngine.Kind.MICROPHONE }
+        for (key in ScreenRecordingAudio.trackKeys(system, microphone, config.separateAudioTracks)) {
+            createAudioEncoder(key)?.let { audioTracks += it }
+        }
+        if (audioTracks.isEmpty()) {
+            opened.forEach { runCatching { it.record.release() } }
+            return
+        }
+        audioRecords += opened.map { it.record }
+        val engine = ScreenRecordingAudioEngine(opened) { slot, samples -> encodeAudioSlot(slot, samples) }
+        audioEngine = engine
+        for (source in opened) runCatching { source.record.startRecording() }
+        engine.start()
+        android.util.Log.i("VoxFix", "SCREEN_RECORD_AUDIO sources=${opened.joinToString("+") { it.kind.trackKey }} " +
+            "tracks=${audioTracks.joinToString("+") { it.key }} separate=${config.separateAudioTracks}")
+    }
+
+    private fun createAudioEncoder(key: String): AudioTrackEncoder? = try {
+        // 上游 StreamingAudioConfig: 48 kHz / 2ch / 160 kbps（分轨两轨同码率）。
+        val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC,
+            ScreenRecordingAudio.SAMPLE_RATE, ScreenRecordingAudio.CHANNELS)
         format.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
-        format.setInteger(MediaFormat.KEY_BIT_RATE, 96_000)
-        format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16_384)
+        format.setInteger(MediaFormat.KEY_BIT_RATE, ScreenRecordingAudio.BITRATE)
+        format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, ScreenRecordingAudio.SLOT_BYTES)
         val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         codec.start()
-        audioCodec = codec
-        audioEnabled = true
-        audioRunning = true
-        record.startRecording()
-        audioThread = Thread({ audioLoop(record, codec) }, "voxfix-recorder-audio").apply {
-            isDaemon = true
-            start()
+        AudioTrackEncoder(key, codec)
+    } catch (error: Exception) {
+        android.util.Log.w("VoxFix", "SCREEN_RECORD_AUDIO_ENCODER_FAILED $key", error)
+        null
+    }
+
+    /** 每个 10 ms 槽写进每一轨：混音轨按上游饱和相加，分轨各自成轨（缺一路就补静音）。 */
+    private fun encodeAudioSlot(slotIndex: Long, samples: Map<ScreenRecordingAudioEngine.Kind, ShortArray>) {
+        val ptsUs = slotIndex * ScreenRecordingAudio.SLOT_MS * 1_000
+        val system = samples[ScreenRecordingAudioEngine.Kind.SYSTEM]
+        val microphone = samples[ScreenRecordingAudioEngine.Kind.MICROPHONE]
+        for (track in audioTracks) {
+            val pcm = when (track.key) {
+                ScreenRecordingAudio.TRACK_SYSTEM -> system ?: ShortArray(ScreenRecordingAudio.SLOT_SAMPLES)
+                ScreenRecordingAudio.TRACK_MICROPHONE -> microphone ?: ShortArray(ScreenRecordingAudio.SLOT_SAMPLES)
+                else -> ScreenRecordingAudio.mixSlot(system, microphone)
+            }
+            feedAudio(track, pcm, ptsUs)
         }
     }
 
+    private fun feedAudio(track: AudioTrackEncoder, pcm: ShortArray, ptsUs: Long) {
+        val codec = track.codec
+        try {
+            var index = codec.dequeueInputBuffer(10_000)
+            if (index < 0) {
+                drainAudio(track, false)
+                index = codec.dequeueInputBuffer(10_000)
+            }
+            if (index < 0) return
+            val buffer = codec.getInputBuffer(index) ?: return
+            buffer.clear()
+            buffer.order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            buffer.asShortBuffer().put(pcm)
+            codec.queueInputBuffer(index, 0, pcm.size * ScreenRecordingAudio.BYTES_PER_SAMPLE, ptsUs, 0)
+            track.lastPtsUs = ptsUs
+        } catch (error: IllegalStateException) {
+            android.util.Log.w("VoxFix", "SCREEN_RECORD_AUDIO_QUEUE_FAILED ${track.key}", error)
+        }
+        drainAudio(track, false)
+    }
+
     private fun openMicrophone(): AudioRecord? = try {
-        val minimum = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        val size = maxOf(minimum, sampleRate / 2)
-        AudioRecord(MediaRecorder.AudioSource.MIC, sampleRate, AudioFormat.CHANNEL_IN_MONO,
+        // 手机麦克风通常只有单声道，采样后由 `ScreenRecordingAudio.upmixMonoToStereo` 铺成双声道。
+        val minimum = AudioRecord.getMinBufferSize(ScreenRecordingAudio.SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        val size = maxOf(minimum, ScreenRecordingAudio.SLOT_BYTES * 4)
+        AudioRecord(MediaRecorder.AudioSource.MIC, ScreenRecordingAudio.SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT, size)
             .takeIf { it.state == AudioRecord.STATE_INITIALIZED }
     } catch (error: Exception) {
@@ -554,13 +630,14 @@ internal class ScreenRecorder(
                 .addMatchingUsage(AudioAttributes.USAGE_GAME)
                 .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
                 .build()
-            val minimum = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-            val size = maxOf(minimum, sampleRate / 2)
+            val minimum = AudioRecord.getMinBufferSize(ScreenRecordingAudio.SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT)
+            val size = maxOf(minimum, ScreenRecordingAudio.SLOT_BYTES * 4)
             AudioRecord.Builder()
                 .setAudioFormat(AudioFormat.Builder()
                     .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                    .setSampleRate(ScreenRecordingAudio.SAMPLE_RATE)
+                    .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
                     .build())
                 .setBufferSizeInBytes(size)
                 .setAudioPlaybackCaptureConfig(capture)
@@ -571,40 +648,6 @@ internal class ScreenRecorder(
             null
         }
     }
-
-    private fun audioLoop(record: AudioRecord, codec: MediaCodec) {
-        val pcm = ByteArray(maxOf(sampleRate / 2, 4096))
-        try {
-            while (audioRunning) {
-                val read = record.read(pcm, 0, pcm.size)
-                if (read <= 0) continue
-                if (paused) continue
-                var offset = 0
-                while (offset < read) {
-                    val index = codec.dequeueInputBuffer(10_000)
-                    if (index < 0) { drainAudio(false); continue }
-                    val buffer = codec.getInputBuffer(index) ?: break
-                    buffer.clear()
-                    val count = min(buffer.remaining(), read - offset)
-                    buffer.put(pcm, offset, count)
-                    val pts = audioSamples * 1_000_000L / sampleRate
-                    codec.queueInputBuffer(index, 0, count, pts, 0)
-                    audioSamples += count / 2
-                    offset += count
-                    drainAudio(false)
-                }
-            }
-            val index = codec.dequeueInputBuffer(50_000)
-            if (index >= 0) {
-                val pts = audioSamples * 1_000_000L / sampleRate
-                codec.queueInputBuffer(index, 0, 0, pts, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-            }
-            drainAudio(true)
-        } catch (error: Exception) {
-            android.util.Log.w("VoxFix", "SCREEN_RECORD_AUDIO_FAILED", error)
-        }
-    }
-
     private fun drainVideo(endOfStream: Boolean) {
         val codec = videoCodec ?: return
         val info = MediaCodec.BufferInfo()
@@ -635,8 +678,8 @@ internal class ScreenRecorder(
         }
     }
 
-    private fun drainAudio(endOfStream: Boolean) {
-        val codec = audioCodec ?: return
+    private fun drainAudio(track: AudioTrackEncoder, endOfStream: Boolean) {
+        val codec = track.codec
         val info = MediaCodec.BufferInfo()
         while (true) {
             val index = try { codec.dequeueOutputBuffer(info, if (endOfStream) 10_000 else 0) }
@@ -644,7 +687,7 @@ internal class ScreenRecorder(
             when {
                 index == MediaCodec.INFO_TRY_AGAIN_LATER -> if (!endOfStream) return
                 index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                    audioFormat = codec.outputFormat
+                    track.format = codec.outputFormat
                     startMuxerIfReady()
                 }
                 index >= 0 -> {
@@ -652,7 +695,7 @@ internal class ScreenRecorder(
                         if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) info.size = 0
                         if (info.size > 0) {
                             val buffer = codec.getOutputBuffer(index)
-                            if (buffer != null) writeSample(audioTrack, buffer, info)
+                            if (buffer != null) writeSample(track.muxerTrack, buffer, info)
                         }
                         if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
                             codec.releaseOutputBuffer(index, false)
@@ -669,9 +712,14 @@ internal class ScreenRecorder(
         if (muxerStarted) return
         val target = muxer ?: return
         val video = videoFormat ?: return
-        if (audioEnabled && audioFormat == null) return
+        // Every audio track has to contribute its output format before the muxer starts; adding a
+        // track afterwards would drop its samples silently.
+        if (audioTracks.any { it.format == null }) return
         videoTrack = target.addTrack(video)
-        audioFormat?.let { audioTrack = target.addTrack(it) }
+        for (track in audioTracks) {
+            val format = track.format ?: return
+            track.muxerTrack = target.addTrack(format)
+        }
         target.start()
         muxerStarted = true
     }
@@ -689,11 +737,14 @@ internal class ScreenRecorder(
         handler.removeCallbacks(animationTick)
         val file = outputFile
         val duration = durationMs()
-        audioRunning = false
-        try { audioRecord?.stop() } catch (_: Exception) { }
-        try { audioThread?.join(1200) } catch (_: InterruptedException) { }
-        audioRecord?.release()
-        audioRecord = null
+        // Stop the mixer first: it owns the records, so releasing them underneath it would crash.
+        audioEngine?.stop()
+        audioEngine = null
+        for (record in audioRecords) {
+            try { record.stop() } catch (_: Exception) { }
+            record.release()
+        }
+        audioRecords.clear()
         try { virtualDisplay?.release() } catch (_: Exception) { }
         virtualDisplay = null
         try { stSurface?.release() } catch (_: Exception) { }
@@ -705,9 +756,17 @@ internal class ScreenRecorder(
         val animation = animationWriter
         animationWriter = null
         val animatedOk = animation?.finish() ?: false
-        try { audioCodec?.stop() } catch (_: Exception) { }
-        audioCodec?.release()
-        audioCodec = null
+        for (track in audioTracks) {
+            try {
+                val index = track.codec.dequeueInputBuffer(50_000)
+                if (index >= 0) track.codec.queueInputBuffer(index, 0, 0, track.lastPtsUs,
+                    MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+            } catch (_: Exception) { }
+            drainAudio(track, true)
+            try { track.codec.stop() } catch (_: Exception) { }
+            track.codec.release()
+        }
+        audioTracks.clear()
         try { videoCodec?.stop() } catch (_: Exception) { }
         videoCodec?.release()
         videoCodec = null
@@ -743,14 +802,17 @@ internal class ScreenRecorder(
         ScreenRecordingGeometry.presentationTimeUs(System.nanoTime(), startNs, pausedNowNs()) / 1_000
 
     private fun releaseAll() {
-        audioRunning = false
         if (::handler.isInitialized) handler.removeCallbacks(animationTick)
         animationWriter?.abort()
         animationWriter = null
         pixelBuffer = null
-        try { audioRecord?.stop() } catch (_: Exception) { }
-        audioRecord?.release()
-        audioRecord = null
+        audioEngine?.stop()
+        audioEngine = null
+        for (record in audioRecords) {
+            try { record.stop() } catch (_: Exception) { }
+            record.release()
+        }
+        audioRecords.clear()
         try { virtualDisplay?.release() } catch (_: Exception) { }
         virtualDisplay = null
         try { stSurface?.release() } catch (_: Exception) { }
@@ -760,9 +822,11 @@ internal class ScreenRecorder(
         try { videoCodec?.stop() } catch (_: Exception) { }
         videoCodec?.release()
         videoCodec = null
-        try { audioCodec?.stop() } catch (_: Exception) { }
-        audioCodec?.release()
-        audioCodec = null
+        for (track in audioTracks) {
+            try { track.codec.stop() } catch (_: Exception) { }
+            track.codec.release()
+        }
+        audioTracks.clear()
         synchronized(muxerLock) {
             try { muxer?.release() } catch (_: Exception) { }
             muxer = null

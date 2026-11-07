@@ -57,6 +57,8 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
     private val stop = button("完成", accent = true)
     private val cancel = button("取消")
     private val microphone = button("麦克")
+    /** 上游工具栏把麦克风与系统声音做成两枚独立开关，手机同样两枚，不再用三态循环。 */
+    private val system = button("系统")
     private val settings = android.widget.ImageView(context).apply {
         setImageResource(R.drawable.snow_setting)
         setColorFilter(Color.WHITE, android.graphics.PorterDuff.Mode.SRC_IN)
@@ -142,6 +144,7 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         close.contentDescription = "关闭录屏设置"
         bar.addView(close)
         bar.addView(microphone)
+        bar.addView(system)
         bar.addView(annotation)
         bar.addView(settings)
         start.setOnClickListener { if (!counting) onStart?.invoke() }
@@ -150,11 +153,13 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         stop.contentDescription = "停止并保存录屏"
         cancel.contentDescription = "取消录屏"
         microphone.contentDescription = "麦克风开关"
+        system.contentDescription = "系统声音开关"
         settings.contentDescription = "录制设置"
         pause.setOnClickListener { togglePause() }
         stop.setOnClickListener { if (!finished) onStop?.invoke() }
         cancel.setOnClickListener { if (!finished) onCancel?.invoke() }
         microphone.setOnClickListener { toggleMicrophone() }
+        system.setOnClickListener { toggleSystemAudio() }
         settings.setOnClickListener { toggleSettings() }
         annotation.setOnClickListener { toggleAnnotation() }
         addView(bar, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
@@ -171,7 +176,8 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
      * Without this stage the settings button could never be reached, because the phone used to
      * start capturing the moment the toolbar record action was confirmed.
      */
-    fun showSetup(microphoneOn: Boolean, microphoneAvailable: Boolean) {
+    fun showSetup(options: ScreenRecordingOptions, audioAvailable: Boolean) {
+        this.options = options
         startedAt = 0
         paused = false
         pausedTotal = 0
@@ -192,12 +198,14 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         start.visibility = VISIBLE
         close.visibility = VISIBLE
         microphone.visibility = VISIBLE
+        system.visibility = VISIBLE
         settings.visibility = VISIBLE
         annotation.visibility = GONE
         annotationActive = false
         settings.isEnabled = true
         settings.alpha = 1f
-        setMicrophone(microphoneOn, microphoneAvailable)
+        setMicrophone(this.options.microphone, audioAvailable)
+        setSystemAudio(this.options.systemAudio, audioAvailable)
         handler.removeCallbacks(tick)
     }
 
@@ -232,7 +240,8 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         rebuildSettings()
     }
 
-    fun start(microphoneOn: Boolean, microphoneAvailable: Boolean, elapsedMs: Long = 0) {
+    fun start(options: ScreenRecordingOptions, audioAvailable: Boolean, elapsedMs: Long = 0) {
+        this.options = options
         startedAt = SystemClock.elapsedRealtime() - elapsedMs
         paused = false
         pausedTotal = 0
@@ -252,7 +261,8 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
             setColor(0xFFE53935.toInt())
         }
         dot.alpha = 1f
-        setMicrophone(microphoneOn, microphoneAvailable)
+        setMicrophone(this.options.microphone, audioAvailable)
+        setSystemAudio(this.options.systemAudio, audioAvailable)
         settings.isEnabled = false
         settings.alpha = 0.4f
         closeSettings()
@@ -270,6 +280,7 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         pause.visibility = GONE
         stop.visibility = GONE
         microphone.visibility = GONE
+        system.visibility = GONE
         settings.visibility = GONE
         annotation.visibility = GONE
         annotationActive = false
@@ -289,6 +300,7 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
                     pause.visibility = VISIBLE
                     stop.visibility = VISIBLE
                     microphone.visibility = VISIBLE
+                    system.visibility = VISIBLE
                     settings.visibility = VISIBLE
                     cancel.setOnClickListener { if (!finished) onCancel?.invoke() }
                     onDone()
@@ -314,10 +326,18 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
     }
 
     fun setMicrophone(enabled: Boolean, available: Boolean) {
-        microphone.isEnabled = available && !finished
-        microphone.alpha = if (available) 1f else 0.4f
-        microphone.setTextColor(if (enabled && available) 0xFF66BB6A.toInt() else Color.WHITE)
-        microphone.background = buttonBackground(enabled && available, accent = false)
+        paintToggle(microphone, enabled, available)
+    }
+
+    fun setSystemAudio(enabled: Boolean, available: Boolean) {
+        paintToggle(system, enabled, available)
+    }
+
+    private fun paintToggle(view: TextView, enabled: Boolean, available: Boolean) {
+        view.isEnabled = available && !finished
+        view.alpha = if (available) 1f else 0.4f
+        view.setTextColor(if (enabled && available) 0xFF66BB6A.toInt() else Color.WHITE)
+        view.background = buttonBackground(enabled && available, accent = false)
     }
 
     fun setPaused(value: Boolean) {
@@ -386,11 +406,30 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         onReleased?.invoke()
     }
 
+    /** 两枚开关互不覆盖：上游 `microphone` 与 `system_audio` 是独立布尔值。 */
     private fun toggleMicrophone() {
         if (finished || counting || !options.format.hasAudio) return
-        options = options.copy(microphone = !options.microphone, systemAudio = options.microphone)
-        setMicrophone(options.microphone, true)
-        refreshSettings()
+        options = options.copy(microphone = !options.microphone)
+        rebuildSettings()
+        onOptionsChanged?.invoke(options)
+    }
+
+    private fun toggleSystemAudio() {
+        if (finished || counting || !options.format.hasAudio) return
+        options = options.copy(systemAudio = !options.systemAudio)
+        rebuildSettings()
+        onOptionsChanged?.invoke(options)
+    }
+
+    /** 设置行里的「声音」：按 系统+麦克风 → 系统声音 → 麦克风 → 静音 循环，和两枚开关同步。 */
+    private fun cycleAudioSource() {
+        options = when {
+            options.microphone && options.systemAudio -> options.copy(microphone = false)
+            options.systemAudio -> options.copy(systemAudio = false, microphone = true)
+            options.microphone -> options.copy(microphone = false)
+            else -> options.copy(systemAudio = true)
+        }
+        rebuildSettings()
         onOptionsChanged?.invoke(options)
     }
 
@@ -479,9 +518,12 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
             rows.add(Triple("质量", { "${options.quality}" }, { cycleQuality() }))
         }
         if (options.format.hasAudio) {
-            rows.add(Triple("声音", {
-                if (options.microphone) "麦克风" else if (options.systemAudio) "系统声音" else "静音"
-            }, { cycleAudio() }))
+            // 麦克风与系统声音是工具条上的两枚开关（与上游一致），这一行只显示合并状态并给出分轨。
+            rows.add(Triple("声音", { options.audioSummary }, { cycleAudioSource() }))
+            rows.add(Triple("分轨", {
+                if (!options.audioEnabled) "无"
+                else if (options.separateAudioTracks) "${options.audioTrackCount} 轨" else "混音"
+            }, { cycleSeparate() }))
         }
         if (options.format.animated) {
             rows.add(Triple("循环", { if (options.loopAnimated) "开" else "关" }, { cycleLoop() }))
@@ -513,7 +555,9 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
 
     /** Animated formats drop the audio track, so the microphone button has to follow the format. */
     private fun rebuildSettings() {
-        setMicrophone(options.microphone && options.format.hasAudio, options.format.hasAudio)
+        val audio = options.format.hasAudio
+        setMicrophone(options.microphone && audio, audio)
+        setSystemAudio(options.systemAudio && audio, audio)
         buildSettings()
     }
 
@@ -591,13 +635,9 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         options = options.copy(loopAnimated = !options.loopAnimated)
     }
 
-    private fun cycleAudio() {
-        options = when {
-            options.microphone -> options.copy(microphone = false, systemAudio = true)
-            options.systemAudio -> options.copy(microphone = false, systemAudio = false)
-            else -> options.copy(microphone = true, systemAudio = false)
-        }
-        setMicrophone(options.microphone, true)
+    /** 分轨：上游 `separate_audio_tracks`，开启后每个音源各写一条音轨。 */
+    private fun cycleSeparate() {
+        options = options.copy(separateAudioTracks = !options.separateAudioTracks)
     }
 
     private fun cycleDelay() {

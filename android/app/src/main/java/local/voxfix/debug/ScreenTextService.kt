@@ -446,7 +446,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         }
         if (options.startDelaySeconds > 0 && control != null) {
             control.startCountdown(options.startDelaySeconds, {
-                control.start(options.audioEnabled && options.microphone, options.format.hasAudio)
+                control.start(options, options.format.hasAudio)
                 launch()
             }) {
                 runCatching(stopProjection)
@@ -455,7 +455,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
                 showHandle()
             }
         } else {
-            control?.start(options.audioEnabled && options.microphone, options.format.hasAudio)
+            control?.start(options, options.format.hasAudio)
             launch()
         }
     }
@@ -471,7 +471,9 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             frameRate = options.effectiveFrameRate,
             bitrate = ScreenRecordingGeometry.bitrate(width, height, options.effectiveFrameRate, options.quality),
             microphone = options.audioEnabled && options.microphone,
-            systemAudio = options.audioEnabled && options.systemAudio && !options.microphone,
+            // Both sources may run at once upstream (`microphone` and `system_audio` are独立开关).
+            systemAudio = options.audioEnabled && options.systemAudio,
+            separateAudioTracks = options.audioEnabled && options.separateAudioTracks,
             format = options.format,
             quality = options.quality,
             loopAnimated = options.loopAnimated
@@ -687,7 +689,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         showRecordingControl(options)
         // The idle bar needs a region to dock against; the area view only exists once recording
         // starts, so the setup frame owns that geometry until then.
-        recordingControl?.showSetup(options.audioEnabled && options.microphone, options.format.hasAudio)
+        recordingControl?.showSetup(options, options.format.hasAudio)
         val attached = setRecordingSetupAttached(true)
         if (!attached) {
             android.util.Log.w("VoxFix", "RECORDING_SETUP_NOT_ATTACHED")
@@ -765,7 +767,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         showRecordingArea(region, ScreenRecordingAreaView.State.RECORDING)
         showRecordingControl(options)
         val elapsed = (android.os.SystemClock.elapsedRealtime() - sharedStartedAtMs).coerceAtLeast(0)
-        recordingControl?.start(options.audioEnabled && options.microphone, options.format.hasAudio, elapsed)
+        recordingControl?.start(options, options.format.hasAudio, elapsed)
         watchRecordingRotation()
         main.post { recordingControl?.let { control ->
             recordingControlParams?.let { params -> placeRecordingControl(control, params) }

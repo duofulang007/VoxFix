@@ -20,6 +20,11 @@ internal data class ScreenRecordingOptions(
     val quality: Int = 80,
     val microphone: Boolean = false,
     val systemAudio: Boolean = true,
+    /**
+     * 上游 `screen_recording/separate_audio_tracks`（默认 false）：开启后每个启用的音源各写一条
+     * AAC 轨（`system` / `microphone`），关闭时两路混进一条（逐样本饱和相加）。
+     */
+    val separateAudioTracks: Boolean = false,
     val startDelaySeconds: Int = 0,
     // Upstream keeps separate export settings for animated images (`animated_image_clarity`,
     // `animated_image_frame_rate`, `loop_animated_images`): 720p, 10 fps and looping on by default.
@@ -58,6 +63,22 @@ internal data class ScreenRecordingOptions(
     val effectiveFrameRate: Int get() = if (format.animated) animatedFrameRate else frameRate
 
     val audioEnabled: Boolean get() = format.hasAudio && (microphone || systemAudio)
+
+    /** 会写进成片的音轨数：混音一轨，分轨按启用的音源各一轨（动画格式无音轨）。 */
+    val audioTrackCount: Int
+        get() = if (!audioEnabled) 0
+        else if (!separateAudioTracks) 1
+        else (if (systemAudio) 1 else 0) + (if (microphone) 1 else 0)
+
+    /** 设置行里的读法，和上游工具栏两枚开关一致：麦克风／系统声音分开显示。 */
+    val audioSummary: String
+        get() = when {
+            !format.hasAudio -> "无"
+            microphone && systemAudio -> "双源"
+            microphone -> "麦克风"
+            systemAudio -> "系统声音"
+            else -> "静音"
+        }
 
     companion object {
         val AnimatedClarities = listOf(Clarity.FULL_HD, Clarity.HD_720, Clarity.SD_480)
@@ -179,6 +200,7 @@ internal class ScreenRecordingPreferences(context: Context) {
             quality = prefs.getInt("quality", defaults.quality).coerceIn(0, 100),
             microphone = prefs.getBoolean("microphone", defaults.microphone),
             systemAudio = prefs.getBoolean("systemAudio", defaults.systemAudio),
+            separateAudioTracks = prefs.getBoolean("separateAudioTracks", defaults.separateAudioTracks),
             startDelaySeconds = prefs.getInt("startDelay", defaults.startDelaySeconds).coerceIn(0, 30),
             animatedClarity = runCatching {
                 ScreenRecordingOptions.Clarity.valueOf(prefs.getString("animatedClarity", null) ?: defaults.animatedClarity.name)
@@ -198,6 +220,7 @@ internal class ScreenRecordingPreferences(context: Context) {
             .putInt("quality", options.quality)
             .putBoolean("microphone", options.microphone)
             .putBoolean("systemAudio", options.systemAudio)
+            .putBoolean("separateAudioTracks", options.separateAudioTracks)
             .putInt("startDelay", options.startDelaySeconds)
             .putString("animatedClarity", options.animatedClarity.name)
             .putInt("animatedFrameRate", options.animatedFrameRate)
