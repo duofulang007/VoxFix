@@ -186,6 +186,34 @@ object ScreenshotPins {
             beforeThumbnail=null
             params.width=origin.width(); params.height=origin.height(); clamp(); fitButtons(); updateWindow()
         }
+        /** 未变换的裁切：旋转/翻转都以它为源重算，避免反复变换累积重采样损失。 */
+        private val baseImage=image
+        private var quarterTurns=0
+        private var flippedX=false
+        private var flippedY=false
+        private fun baseWidthFor(turns: Int)=if(turns%2==0) origin.width() else origin.height()
+        /**
+         * 上游 `applyImageOperation`：对图像做 90° 整数次旋转／镜像，窗口尺寸按**同一缩放比例**
+         * 换到新朝向（`orientedInitialWindowSize * scalePercent`）。
+         * 编辑贴图仍在原始截图纸上工作（`canvas`＋`document`），所以编辑结果会把贴图换回未旋转的朝向，
+         * 与原版一致；这里不把变换写进工程。
+         */
+        private fun applyTransform(turns: Int,h: Boolean,v: Boolean) {
+            if(closed || editor!=null) return
+            val percent=params.width*100f/baseWidthFor(quarterTurns)
+            quarterTurns=((turns%4)+4)%4; flippedX=h; flippedY=v
+            val matrix=android.graphics.Matrix().apply {
+                postRotate(quarterTurns*90f)
+                if(h || v) postScale(if(h) -1f else 1f,if(v) -1f else 1f)
+            }
+            val next=try { Bitmap.createBitmap(baseImage,0,0,baseImage.width,baseImage.height,matrix,true) }
+                catch(error: Throwable) { return }
+            val previous=image
+            image=next; picture.setImageBitmap(next)
+            if(previous!==baseImage && previous!==canvas && !previous.isRecycled) previous.recycle()
+            resize(Math.round(baseWidthFor(quarterTurns)*percent/100f).coerceAtLeast(1))
+            clamp(); updateWindow()
+        }
         private fun showMenu() {
             if(closed || popup!=null || editor!=null) return
             controls(false)
@@ -208,6 +236,12 @@ object ScreenshotPins {
             item("缩小 10%") { scaleTo(percent-10) }
             listOf(25,50,75).forEach { target -> item("缩放 $target%") { scaleTo(target) } }
             item("缩放 100%") { resetSize() }
+            // 上游 Process image → Rotate／Flip／Reset transform：以未变换的裁切为源重算，窗口按同一比例换向。
+            item("顺时针旋转") { applyTransform(quarterTurns+1,flippedX,flippedY) }
+            item("逆时针旋转") { applyTransform(quarterTurns-1,flippedX,flippedY) }
+            item("水平翻转") { applyTransform(quarterTurns,!flippedX,flippedY) }
+            item("垂直翻转") { applyTransform(quarterTurns,flippedX,!flippedY) }
+            if(quarterTurns!=0 || flippedX || flippedY) item("重置旋转/翻转") { applyTransform(0,false,false) }
             val readout=TextView(context).apply { text="透明度 ${(picture.alpha*100).toInt()}%"; textSize=13f; setTextColor(0xFF000000.toInt()) }
             body.addView(readout)
             body.addView(SeekBar(context).apply {
@@ -278,6 +312,17 @@ object ScreenshotPins {
         fun show() { manager.addView(root,params) }
         fun visible(value: Boolean) { popup?.dismiss(); controls(false); root.visibility=if(value && editor==null) View.VISIBLE else View.INVISIBLE }
         fun relayout() { popup?.dismiss(); resize(params.width); editor?.relayout(geometry()); runCatching { manager.updateViewLayout(root,params) } }
-        fun close() { if(closed) return; closed=true; popup?.dismiss(); editor?.close(); root.removeCallbacks(hideControls); runCatching { manager.removeViewImmediate(root) }; picture.setImageDrawable(null); image.recycle(); canvas?.let { if(!it.isRecycled) it.recycle() }; canvas=null; pins.remove(this) }
+        fun close() {
+            if(closed) return
+            closed=true; popup?.dismiss(); editor?.close(); root.removeCallbacks(hideControls)
+            runCatching { manager.removeViewImmediate(root) }
+            picture.setImageDrawable(null)
+            val current=image
+            if(!current.isRecycled) current.recycle()
+            // 旋转/翻转后 image 是派生的显示图，未变换的裁切单独回收。
+            if(baseImage!==current && !baseImage.isRecycled) baseImage.recycle()
+            canvas?.let { if(!it.isRecycled) it.recycle() }; canvas=null
+            pins.remove(this)
+        }
     }
 }

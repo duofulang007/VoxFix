@@ -87,6 +87,24 @@ object ScreenshotRefinementSmoke {
                     editor.relayout(Rect(0,0,region.width(),region.height()))
                     check(drawing.history.items==listOf(mark)) { "relayout discarded unfinished pin edits" }
                 } finally { editor.close(); result?.bitmap?.recycle() }
+                // T24：旋转／翻转载未变换的裁切上重算（上游 applyImageOperation），90° 后宽高互换，
+                // 重置变换回到原尺寸；窗口按同一比例换向。
+                val imageField=pinClass.getDeclaredField("image").apply { isAccessible=true }
+                val applyTransform={ turns: Int,h: Boolean,v: Boolean ->
+                    pinClass.getDeclaredMethod("applyTransform",Int::class.javaPrimitiveType,
+                        Boolean::class.javaPrimitiveType,Boolean::class.javaPrimitiveType)
+                        .apply { isAccessible=true }.invoke(pin,turns,h,v)
+                }
+                val before=(imageField.get(pin) as Bitmap)
+                applyTransform(1,false,false)
+                val rotated=(imageField.get(pin) as Bitmap)
+                check(rotated.width==before.height && rotated.height==before.width) {
+                    "旋转没有换向：${rotated.width}x${rotated.height} 原 ${before.width}x${before.height}"
+                }
+                applyTransform(0,false,false)
+                val restored=(imageField.get(pin) as Bitmap)
+                check(restored.width==before.width && restored.height==before.height) { "重置变换没有回到原尺寸" }
+                check(geometry().width()>0 && geometry().height()>0) { "重置变换后窗口尺寸非法：${geometry()}" }
                 if(region.left==240) {
                     overlay.javaClass.getDeclaredMethod("beginDrawingText",ScreenshotDrawingPoint::class.java,Integer::class.java)
                         .apply { isAccessible=true }.invoke(overlay,ScreenshotDrawingPoint(300f,600f),null)
