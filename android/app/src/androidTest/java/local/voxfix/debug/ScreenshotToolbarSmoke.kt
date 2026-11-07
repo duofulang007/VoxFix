@@ -154,6 +154,13 @@ object ScreenshotToolbarSmoke {
             // Verify the copy payload without overwriting the user's system clipboard.
             val layer = field(overlay,"textLayer") as ScreenshotTextLayer
             check(layer.copyText() == "第一行文字\n第二行文字") { "copy text=${layer.copyText()}" }
+            // 上游 `recognitionClipboardMimeData`：译文态取 `overlayTranslation.presentation`，
+            // 原文态取 `originalOcrText`；两者不能串。默认 formatting／punctuation 为空 ⇒ 变换恒等，
+            // 所以换行按识别结果原样保留。
+            val translationCopy = (field(overlay,"translationLayer") as ScreenshotTextLayer).copyText()
+            check(translationCopy.isNotBlank() && translationCopy != layer.copyText()) {
+                "译文复制内容不对：$translationCopy"
+            }
             evidence.add("copytext=ok")
 
             checkNotNull(action("显示原图")).performClick()
