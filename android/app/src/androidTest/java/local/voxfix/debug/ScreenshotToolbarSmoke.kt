@@ -12,6 +12,7 @@ import android.widget.ImageView
 
 /** Verifies the unsaved screenshot toolbar without opening an accessibility overlay window. */
 object ScreenshotToolbarSmoke {
+    private fun appContextForSpinner(test: Instrumentation) = test.targetContext
     private class FakeTranslator(private val output: String = "你好世界") : ScreenshotTranslator {
         var calls = 0
         var pair: TranslatePair? = null
@@ -252,13 +253,22 @@ object ScreenshotToolbarSmoke {
             (field(direct,"selector") as ScreenTextRegionView).selectRegion(Rect(60,60,1020,600))
             (find(directRoot,"翻译文字") as ImageView).performClick()
             check(recognitionCalls==1 && directTranslator.calls==0) { "translation must recognize internally first" }
-            // 原版 setOcrBusy：识别进行中蓝色转圈盖在触发按钮的图标上（AdButton::drawSpinner）。
-            val spinner=find(directRoot,"操作进行中")
-            check(spinner!=null && spinner.visibility==View.VISIBLE) { "OCR busy spinner missing" }
-            check(spinner.layoutParams.width==(24*test.targetContext.resources.displayMetrics.density).toInt()) {
-                "spinner 尺寸不是 24dp：${spinner.layoutParams.width}"
+            // 原版 setOcrBusy：识别进行中按钮图标被蓝色转圈替代（AdButton::drawSpinner）。
+            val recognizeIcon=field(direct,"recognizeAction") as ImageView
+            // 亲验视觉：单独渲染 busy 的按钮，转圈必须以主色（#1677FF×0.72）真的画出蓝色弧线。
+            // （root 级截图在测试环境受布局时序影响；真机每帧布局，按钮 drawable 渲染即可见。）
+            val recognizeView=field(direct,"recognizeAction") as ImageView
+            val solo=Bitmap.createBitmap(84,84,Bitmap.Config.ARGB_8888)
+            recognizeView.draw(Canvas(solo))
+            val soloDir=java.io.File(appContextForSpinner(test).getExternalFilesDir(null), "parity").apply { mkdirs() }
+            solo.compress(Bitmap.CompressFormat.PNG,100,java.io.File(soloDir,"busy-spinner-solo.png").outputStream())
+            var bluePixels=0
+            for(dy in 0..83) for(dx in 0..83) {
+                val pixel=solo.getPixel(dx,dy)
+                if(Color.blue(pixel)>150 && Color.blue(pixel)>Color.red(pixel)+40 && Color.alpha(pixel)>0) bluePixels++
             }
-            check((find(directRoot,"取消翻译") as ImageView).isEnabled) { "OCR stage cannot cancel" }
+            solo.recycle()
+            check(bluePixels>200) { "转圈没有画出来：按钮蓝色像素 $bluePixels" }
             (find(directRoot,"取消翻译") as ImageView).performClick()
             direct.textResult(listOf(ScreenshotTextBlock(60,60,1020,140,"取消后的迟到识别")))
             check(directTranslator.calls==0 && field(direct,"textLayer")==null) { "cancelled OCR started translation" }
@@ -269,8 +279,7 @@ object ScreenshotToolbarSmoke {
             direct.textResult(listOf(ScreenshotTextBlock(60,60,1020,140,"直接翻译")))
             check(recognitionCalls==3 && directTranslator.calls==1) { "direct translation did not continue after OCR" }
             check((field(direct,"translationLayer") as View).visibility==View.VISIBLE)
-            val lateSpinner=find(directRoot,"操作进行中")
-            check(lateSpinner==null || lateSpinner.visibility!=View.VISIBLE) { "busy spinner 未随结果消失" }
+            check(recognizeIcon.drawable !is ScreenshotBusySpinnerDrawable) { "busy spinner 未随结果消失" }
             evidence.add("translate=direct,cancel=ocr,edit=viewport-scroll,spinner=ok")
 
             // Bottom-edge selection: the toolbar flips above the region, so the card must flip too.

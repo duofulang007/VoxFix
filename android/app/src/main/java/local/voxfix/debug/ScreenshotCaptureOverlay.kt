@@ -424,8 +424,8 @@ class ScreenshotCaptureOverlay(
         }
     }
     private val qrButton=ImageView(context)
-    /** 原版 AdButton::setBusy：识别/翻译/二维码忙碌时蓝色转圈盖在按钮图标上。 */
-    private val busySpinner=ScreenshotBusySpinner(context)
+    /** 二维码按钮的忙碌转圈（qrButton 是普通 ImageView，不走 Action 的 busy）。 */
+    private val qrBusyDrawable=ScreenshotBusySpinnerDrawable(context)
     /** A09：二维码标记层。原版标记只在「编辑选区 + 移动工具」下显示，手机同条件。 */
     private val qrMarkers=ScreenshotQrMarkers(context).apply {
         visibility=View.GONE
@@ -1206,25 +1206,18 @@ class ScreenshotCaptureOverlay(
             qrHits.orEmpty(),crop,width,height,image.width,image.height))
     }
     /** 原版 setOcrBusy/setQrBusy/翻译 streaming：把蓝色转圈盖在对应按钮的图标之上。 */
+    /** 原版 setOcrBusy/setQrBusy/翻译 streaming：忙碌时对应按钮的图标被蓝色转圈替代。 */
     private fun updateBusySpinner() {
-        val target: android.view.View? = when {
-            translating -> translateAction
-            busy && busySource == "ocr" -> recognizeAction
-            (busy && busySource == "qr") || qrScanning -> qrButton.takeIf { it.visibility == View.VISIBLE }
-            else -> null
-        }?.takeIf { it.visibility == View.VISIBLE && it.width > 0 }
-        if (target == null) {
-            busySpinner.visibility = View.GONE
-            return
+        recognizeAction.setBusy(busy && busySource == "ocr")
+        translateAction.setBusy(translating)
+        val qrBusy = (busy && busySource == "qr") || qrScanning
+        if (qrBusy && qrButton.visibility == View.VISIBLE) {
+            if (qrButton.drawable !== qrBusyDrawable) {
+                qrBusyDrawable.start(); qrButton.setImageDrawable(qrBusyDrawable)
+            }
+        } else if (qrButton.drawable === qrBusyDrawable) {
+            qrBusyDrawable.stop(); qrButton.setImageResource(R.drawable.snow_barcode)
         }
-        val view = IntArray(2); target.getLocationInWindow(view)
-        val host = IntArray(2); root.getLocationInWindow(host)
-        if (busySpinner.parent == null) {
-            root.addView(busySpinner, FrameLayout.LayoutParams(dp(24), dp(24)))
-        }
-        busySpinner.visibility = View.VISIBLE
-        busySpinner.translationX = (view[0] - host[0] + target.paddingLeft).toFloat()
-        busySpinner.translationY = (view[1] - host[1] + target.paddingTop).toFloat()
     }
     private fun canShowQrMarkers() = qrVisible && moveMode && !busy && !editing && !translating &&
         annotationEditor==null && drawing.tool==null && regionOperation==null && picked!=null
@@ -1826,6 +1819,20 @@ class ScreenshotCaptureOverlay(
         run: () -> Unit
     ) : ImageView(context) {
         var active = false
+        private val idleIcon = icon
+        private val busyDrawable = ScreenshotBusySpinnerDrawable(context)
+        /** 原版 AdButton::setBusy：忙碌时按钮图标被蓝色转圈替代，结束后恢复。 */
+        fun setBusy(value: Boolean) {
+            if (value) {
+                if (drawable !== busyDrawable) {
+                    busyDrawable.start(); setImageDrawable(busyDrawable)
+                    // ImageView 级 ColorFilter 会残留到新 drawable，把蓝弧染白；转圈固定主色。
+                    colorFilter = null
+                }
+            } else if (drawable === busyDrawable) {
+                busyDrawable.stop(); setImageResource(idleIcon)
+            }
+        }
         init {
             setImageResource(icon); scaleType = ImageView.ScaleType.CENTER_INSIDE
             setPadding(dp((BUTTON-ICON)/2),dp((BUTTON-ICON)/2),dp((BUTTON-ICON)/2),dp((BUTTON-ICON)/2))
@@ -1834,6 +1841,12 @@ class ScreenshotCaptureOverlay(
             setOnClickListener { if (!disposed && !closeRequested) { toolMemory?.remember(action); run() } }
         }
         fun refreshTint() {
+            if (drawable is ScreenshotBusySpinnerDrawable) {
+                // 原版 busy 指示器固定主题色（busyIndicatorColor=主色×0.72），
+                // 不跟随按钮 disabled 变灰——灰弧在深色面板上看不见。
+                colorFilter = null
+                return
+            }
             val color = when {
                 !isEnabled -> COLOR_TEXT_DISABLED
                 danger -> COLOR_DANGER
