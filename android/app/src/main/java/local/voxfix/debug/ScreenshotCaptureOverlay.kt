@@ -91,7 +91,7 @@ class ScreenshotCaptureOverlay(
     private val background = ImageView(context).apply { scaleType = ImageView.ScaleType.FIT_XY; setImageBitmap(image) }
     private var picked: Rect? = null
     private var busy = false
-    /** 忙碌来源（原版按来源把转圈画在对应按钮上）：ocr=识别文字，qr=二维码识别。 */
+    /** 忙碌来源：ocr=识别文字，qr=二维码识别；转圈归属见 updateBusySpinner。 */
     private var busySource: String? = null
     /** 转圈最短显示时长：它只是交互反馈，不反映真实加载进度。 */
     private val SPINNER_MIN_MS = 900L
@@ -881,7 +881,18 @@ class ScreenshotCaptureOverlay(
             }
             val visible=column.map { id -> actions.first { it.action==id } }
             val remembered=toolMemory?.entry(column) ?: groupEntries[column.toSet()]
-            val entry=visible.firstOrNull { it.action==remembered } ?: visible.first()
+            // 忙碌时组触发位必须显示正在转圈的那个按钮（等价原版 setActiveTool 切活动工具）：
+            // 主动识别→识别按钮；翻译及其触发的自动识别阶段→翻译按钮
+            // （用户 2026-11-08：转圈独属翻译且必须可见，否则触发位停在别的图标上圈就"消失"了）。
+            val busyAction=when {
+                busy && busySource=="ocr" && !translateAfterRecognition -> ScreenshotAction.RECOGNIZE
+                busy && busySource=="ocr" -> ScreenshotAction.TRANSLATE
+                translating -> ScreenshotAction.TRANSLATE
+                else -> null
+            }
+            val entry=visible.firstOrNull { it.action==busyAction }
+                ?: visible.firstOrNull { it.action==remembered }
+                ?: visible.first()
             val cell=if(visible.size==1) entry else ScreenshotToolGroupView(context,entry,
                 "展开工具组："+visible.joinToString("、") { it.contentDescription }) { anchor -> showStack(anchor,visible) }
             cells.add(cell to false)
@@ -1210,9 +1221,11 @@ class ScreenshotCaptureOverlay(
     /** 原版 setOcrBusy/setQrBusy/翻译 streaming：把蓝色转圈盖在对应按钮的图标之上。 */
     /** 原版 setOcrBusy/setQrBusy/翻译 streaming：忙碌时对应按钮的图标被蓝色转圈替代。 */
     private fun updateBusySpinner() {
-        // 转圈只是交互动画：识别在识别按钮、翻译在翻译按钮、二维码在二维码按钮，各归各位。
-        recognizeAction.setBusy(busy && busySource == "ocr")
-        translateAction.setBusy(translating)
+        // 转圈归发起动作的按钮：识别在识别按钮、翻译在翻译按钮、二维码在二维码按钮。
+        // 例外（用户 2026-11-08 指定）：从翻译进入的自动识别阶段，圈也独属于翻译按钮——
+        // 点了翻译却让识别按钮转圈显得反知觉；这与原版 setOcrBusy 不同，属手机侧交互差异。
+        recognizeAction.setBusy(busy && busySource == "ocr" && !translateAfterRecognition)
+        translateAction.setBusy(translating || (busy && translateAfterRecognition))
         val qrBusy = (busy && busySource == "qr") || qrScanning
         if (qrBusy && qrButton.visibility == View.VISIBLE) {
             if (qrButton.drawable !== qrBusyDrawable) {

@@ -253,11 +253,11 @@ object ScreenshotToolbarSmoke {
             (field(direct,"selector") as ScreenTextRegionView).selectRegion(Rect(60,60,1020,600))
             (find(directRoot,"翻译文字") as ImageView).performClick()
             check(recognitionCalls==1 && directTranslator.calls==0) { "translation must recognize internally first" }
-            // 原版 setOcrBusy：识别进行中按钮图标被蓝色转圈替代（AdButton::drawSpinner）。
-            val recognizeIcon=field(direct,"recognizeAction") as ImageView
+            // 从翻译进入的自动识别阶段，转圈独属于翻译按钮（用户 2026-11-08 指定，手机侧差异）：
+            // 点了翻译不让识别按钮转圈，避免反知觉；样式仍为蓝圆底+白弧（AdButton::drawSpinner 等价）。
             // 亲验视觉：单独渲染 busy 的按钮，转圈必须以主色（#1677FF×0.72）真的画出蓝色弧线。
             // （root 级截图在测试环境受布局时序影响；真机每帧布局，按钮 drawable 渲染即可见。）
-            val recognizeView=field(direct,"recognizeAction") as ImageView
+            val recognizeView=field(direct,"translateAction") as ImageView
             val solo=Bitmap.createBitmap(84,84,Bitmap.Config.ARGB_8888)
             recognizeView.draw(Canvas(solo))
             val soloDir=java.io.File(appContextForSpinner(test).getExternalFilesDir(null), "parity").apply { mkdirs() }
@@ -272,6 +272,9 @@ object ScreenshotToolbarSmoke {
             solo.recycle()
             check(discPixels>1500) { "转圈缺少蓝色圆底：$discPixels" }
             check(whitePixels>60) { "转圈缺少白色圆弧：$whitePixels" }
+            // 忙碌期间（确定性时刻）：圈只在翻译按钮上，识别按钮不得转圈（转圈独属于翻译）。
+            check(field(direct,"translateAction")!!.let { (it as ImageView).drawable } is ScreenshotBusySpinnerDrawable) { "识别阶段翻译按钮应转圈" }
+            check((field(direct,"recognizeAction") as ImageView).drawable !is ScreenshotBusySpinnerDrawable) { "翻译触发的识别不应点亮识别按钮转圈" }
             (find(directRoot,"取消翻译") as ImageView).performClick()
             direct.textResult(listOf(ScreenshotTextBlock(60,60,1020,140,"取消后的迟到识别")))
             check(directTranslator.calls==0 && field(direct,"textLayer")==null) { "cancelled OCR started translation" }
@@ -282,8 +285,7 @@ object ScreenshotToolbarSmoke {
             direct.textResult(listOf(ScreenshotTextBlock(60,60,1020,140,"直接翻译")))
             check(recognitionCalls==3 && directTranslator.calls==1) { "direct translation did not continue after OCR" }
             check((field(direct,"translationLayer") as View).visibility==View.VISIBLE)
-            // 转圈只是交互动画且有 900ms 最短显示：结果到达后允许短暂残留，由 Handler 恢复。
-            check(recognizeIcon.drawable is ScreenshotBusySpinnerDrawable) { "最短显示期间转圈应保留" }
+            // 完成后的 900ms 最短显示由 Handler 定时恢复，属时序敏感窗口，不在此断言（忙碌期已确定性覆盖）。
             evidence.add("translate=direct,cancel=ocr,edit=viewport-scroll,spinner=ok")
 
             // Bottom-edge selection: the toolbar flips above the region, so the card must flip too.
