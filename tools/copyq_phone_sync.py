@@ -287,6 +287,7 @@ def get_serial() -> str | None:
               if "\tdevice" in line]
     chosen = next((s for s in online if s == SERIAL), None) \
         or next((s for s in online if s.startswith(WIFI_PREFIX)), None) \
+        or next((s for s in online if s.startswith(f"adb-{SERIAL}-")), None) \
         or (online[0] if online else None)
     if chosen != _serial_cache["value"]:
         log(f"adb 设备切换：{_serial_cache['value'] or '无'} → {chosen or '无（等待连接）'}")

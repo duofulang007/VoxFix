@@ -80,11 +80,18 @@ def adb_devices() -> list:
 
 
 def pick_serial(devices: list) -> str:
-    """优先 USB 设备，其次无线设备（形如 192.168.x.x:port）。"""
+    """优先 USB 设备，其次无线 IP:port，再次 mDNS 自动连接名。
+
+    重开无线调试后 adb 37 的 mDNS 自动连接序列号是服务名（形如
+    `adb-<USB序列号>-*._adb-tls-connect._tcp`），不是 IP:port（2026-11-09 实测）；
+    对 adb/scrcpy 的 -s 参数同样合法。"""
     if USB_SERIAL in devices:
         return USB_SERIAL
     for serial in devices:
         if ":" in serial:
+            return serial
+    for serial in devices:
+        if serial.startswith(f"adb-{USB_SERIAL}-"):
             return serial
     return ""
 
