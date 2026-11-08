@@ -13,12 +13,13 @@
   首次观测到标签时只记基线不推送（避免把历史条目一次性灌进手机）。
 
 手机 → 电脑（正向，原有）：
-  1. 文本：scrcpy 原生自动同步把手机复制写入 Windows 剪贴板；
+  1. 文本：scrcpy 原生自动同步把手机复制写入 Windows 剪贴板（事件式，不轮询）；
      仅当所有者进程是 scrcpy.exe（或无窗口模式 owner=None）时，
      写入 CopyQ「手机文本」标签。
   2. 图片：VoxFix 截图工具保存后图片落在
      /data/data/local.voxfix.debug/files/screenshot-clipboard/；
-     adb run-as（debug 包免 root）轮询新文件，拉取后写入 CopyQ「手机图片」标签。
+     adb run-as 事件驱动（inotifyd 监听 index 变化，兜底 15s 轮询），
+     拉取后写入 CopyQ「手机图片」标签；无在线设备时完全静默。
 
 防回流/防回环：
   a. 正向通道写入标签的条目哈希记入 seen 集合，反向通道跳过（手机内容不回流）。
@@ -56,7 +57,14 @@ TAB_TEXT = "手机文本"
 TAB_IMAGE = "手机图片"
 ALLOWED_OWNERS = {"scrcpy.exe"}
 TEXT_POLL_MS = 150
-IMAGE_POLL_SEC = 2.0
+# 图片通道（事件驱动，2026-11-08 晚改版）：
+#   设备在线时挂一条持久 `run-as inotifyd` 监听流，截图库目录有写入类事件才读一次 index；
+#   监听不可用/流断开时退回 IMAGE_FALLBACK_SEC 兜底轮询；无在线设备时完全静默（零流量零唤醒）。
+#   掩码字母为本机 toybox 实测：n 建 c 改 w 写后关闭 d 删 m/y 改名（AtomicFile 走 m+y）；
+#   读类事件 r/a/0 不监听——守护自己 cat index 也会产生读事件，不排除会自触发空转。
+IMAGE_WATCH_MASK = "ncwdmy"
+IMAGE_FALLBACK_SEC = 15.0
+REMOTE_STORE = f"/data/user/0/{PACKAGE}/files/screenshot-clipboard"
 # 反向推送
 IMPORT_DIR = "clipboard-import"
 PUSH_TEXT_LIMIT = 10000     # 与 VoxFix 键盘剪贴板历史单条上限一致
@@ -247,7 +255,10 @@ def text_loop(any_owner: bool) -> None:
 
 # ---------------- 图片通道 ----------------
 def adb(*args: str, binary: bool = False) -> bytes | str:
-    result = subprocess.run([ADB, "-s", get_serial(), *args],
+    serial = get_serial()
+    if serial is None:
+        raise RuntimeError("无在线设备")
+    result = subprocess.run([ADB, "-s", serial, *args],
                             capture_output=True, timeout=30,
                             creationflags=NO_WINDOW)
     if result.returncode != 0:
@@ -258,10 +269,13 @@ def adb(*args: str, binary: bool = False) -> bytes | str:
 _serial_cache = {"value": None, "checked": 0.0}
 
 
-def get_serial() -> str:
-    """优先 USB（6959dba1），不在则用无线（192.168.2.40:<port>）；每 10s 最多刷新一次。"""
+def get_serial() -> str | None:
+    """优先 USB（6959dba1），不在则用无线（192.168.2.40:<port>）；无设备返回 None。
+
+    每 10s 最多刷新一次 adb devices（本地命令，不碰手机）；返回 None 时调用方应静默等待，
+    不得对不存在的设备反复发起 adb 命令。"""
     now = time.monotonic()
-    if _serial_cache["value"] and now - _serial_cache["checked"] < 10:
+    if now - _serial_cache["checked"] < 10:
         return _serial_cache["value"]
     _serial_cache["checked"] = now
     try:
@@ -275,67 +289,122 @@ def get_serial() -> str:
         or next((s for s in online if s.startswith(WIFI_PREFIX)), None) \
         or (online[0] if online else None)
     if chosen != _serial_cache["value"]:
-        log(f"adb 设备切换：{_serial_cache['value']} → {chosen or '无（等待连接）'}")
+        log(f"adb 设备切换：{_serial_cache['value'] or '无'} → {chosen or '无（等待连接）'}")
     _serial_cache["value"] = chosen
-    return chosen or SERIAL
+    return chosen
+
+
+def image_scan(seen: set) -> None:
+    """读一次 index.json 并搬运新图（异常向上抛，由调用方决定重试节奏）。"""
+    raw = adb("shell", "run-as", PACKAGE, "cat", f"{STORE_DIR}/index.json")
+    items = json.loads(raw).get("items", [])
+    for item in items:
+        image_id = item.get("id", "")
+        revision = item.get("revision", 0)
+        kind = item.get("kind", "IMAGE")
+        key = f"{image_id}:{revision}"
+        if not image_id or key in seen:
+            continue
+        # 电脑推送导入的图片（source=pc）不回流：它们本来就在「手机图片」标签里，
+        # 回写会造成用户看到两条（原条目 + 回流副本）
+        if item.get("source") == "pc":
+            seen.add(key)
+            merged = load_state()
+            merged["images"] = sorted(seen)[-2000:]
+            save_state(merged)
+            continue
+        # PROJECT 的成品在 projects/<id>/<rev>/composite.png；IMAGE 在 <id>.png
+        rel = (f"projects/{image_id}/{revision}/composite.png"
+               if kind == "PROJECT" else f"{image_id}.png")
+        try:
+            data = adb("exec-out", "run-as", PACKAGE, "cat", f"{STORE_DIR}/{rel}", binary=True)
+            if data[:8] != b"\x89PNG\r\n\x1a\n":
+                log(f"图片 {image_id} 非 PNG 内容，跳过（{rel}）")
+                seen.add(key)
+                merged = load_state()
+                merged["images"] = sorted(seen)[-2000:]
+                save_state(merged)
+                continue
+            if copyq_write(TAB_IMAGE, "image/png", data):
+                seen.add(key)
+                merged = load_state()  # 与文本/推送线程共享一个文件，读-改-写防覆盖
+                merged["images"] = sorted(seen)[-2000:]
+                # 登记内容哈希：反向通道看到该条目时不回流手机
+                imgs = merged.get("seen_images", [])
+                imgs.append(hashlib.sha256(data).hexdigest())
+                merged["seen_images"] = imgs[-2000:]
+                save_state(merged)
+                log(f"图片 → {TAB_IMAGE}（{image_id[:8]}… {kind} r{revision}，{len(data) // 1024} KB）")
+        except Exception as error:
+            log(f"图片 {image_id} 拉取失败（有新事件时重试）: {error}")
+
+
+def start_inotify_stream():
+    """挂一条持久的 `run-as inotifyd` 事件流；启动即退或设备离线 → None（走兜底轮询）。"""
+    serial = get_serial()
+    if serial is None:
+        return None
+    try:
+        proc = subprocess.Popen(
+            [ADB, "-s", serial, "shell",
+             f"run-as {PACKAGE} inotifyd - {REMOTE_STORE}:{IMAGE_WATCH_MASK}"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            creationflags=NO_WINDOW)
+        time.sleep(0.5)
+        if proc.poll() is not None:  # 起动即退（设备不支持/参数不被接受）
+            return None
+        return proc
+    except Exception:
+        return None
+
+
+def consume_inotify(proc, seen: set) -> None:
+    """消费事件流直到 EOF（拔线/设备切换）。同一写入序列（临时文件+原子改名）
+    合并为一次扫描；扫描前等 0.6s 让 AtomicFile 写完再读 index。"""
+    next_ok = 0.0
+    while True:
+        line = proc.stdout.readline()
+        if not line:  # EOF：设备掉线或 adb 通道断开
+            return
+        now = time.monotonic()
+        if now < next_ok:
+            continue  # 同一批事件的剩余行，跳过（已扫描覆盖）
+        next_ok = now + 1.0
+        time.sleep(0.6)
+        try:
+            image_scan(seen)
+        except Exception as error:
+            log(f"图片事件扫描失败（稍后重试）: {error}")
 
 
 def image_loop() -> None:
     state = load_state()
     # 键为 "<id>:<revision>"；兼容旧版纯 id 记录（旧记录都是 IMAGE，revision 0）
     seen = {k if ":" in k else f"{k}:0" for k in state.get("images", [])}
-    failures = 0
-    log(f"图片轮询启动（{IMAGE_POLL_SEC}s，按 index.json，{PACKAGE}:{STORE_DIR}）")
+    log(f"图片通道启动（inotify 事件驱动，掩码 {IMAGE_WATCH_MASK}，"
+        f"兜底 {IMAGE_FALLBACK_SEC}s，{PACKAGE}:{STORE_DIR}）")
     while True:
-        time.sleep(IMAGE_POLL_SEC)
-        try:
-            raw = adb("shell", "run-as", PACKAGE, "cat", f"{STORE_DIR}/index.json")
-            items = json.loads(raw).get("items", [])
-        except Exception as error:
-            failures += 1
-            if failures % 10 == 1:
-                log(f"图片轮询：设备不可达或索引损坏（{error}），继续重试")
+        if get_serial() is None:
+            time.sleep(5.0)  # 无在线设备：静默待机，不产生任何手机侧流量
             continue
-        failures = 0
-        for item in items:
-            image_id = item.get("id", "")
-            revision = item.get("revision", 0)
-            kind = item.get("kind", "IMAGE")
-            key = f"{image_id}:{revision}"
-            if not image_id or key in seen:
-                continue
-            # 电脑推送导入的图片（source=pc）不回流：它们本来就在「手机图片」标签里，
-            # 回写会造成用户看到两条（原条目 + 回流副本）
-            if item.get("source") == "pc":
-                seen.add(key)
-                merged = load_state()
-                merged["images"] = sorted(seen)[-2000:]
-                save_state(merged)
-                continue
-            # PROJECT 的成品在 projects/<id>/<rev>/composite.png；IMAGE 在 <id>.png
-            rel = (f"projects/{image_id}/{revision}/composite.png"
-                   if kind == "PROJECT" else f"{image_id}.png")
+        try:
+            image_scan(seen)
+        except Exception:
+            time.sleep(IMAGE_FALLBACK_SEC)  # 设备刚掉线/索引暂不可读
+            continue
+        stream = start_inotify_stream()
+        if stream is None:
+            time.sleep(IMAGE_FALLBACK_SEC)  # 不支持事件监听 → 长间隔兜底轮询
+            continue
+        try:
+            consume_inotify(stream, seen)
+        except Exception as error:
+            log(f"inotify 流异常（重挂）: {error}")
+        finally:
             try:
-                data = adb("exec-out", "run-as", PACKAGE, "cat", f"{STORE_DIR}/{rel}", binary=True)
-                if data[:8] != b"\x89PNG\r\n\x1a\n":
-                    log(f"图片 {image_id} 非 PNG 内容，跳过（{rel}）")
-                    seen.add(key)
-                    merged = load_state()
-                    merged["images"] = sorted(seen)[-2000:]
-                    save_state(merged)
-                    continue
-                if copyq_write(TAB_IMAGE, "image/png", data):
-                    seen.add(key)
-                    merged = load_state()  # 与文本/推送线程共享一个文件，读-改-写防覆盖
-                    merged["images"] = sorted(seen)[-2000:]
-                    # 登记内容哈希：反向通道看到该条目时不回流手机
-                    imgs = merged.get("seen_images", [])
-                    imgs.append(hashlib.sha256(data).hexdigest())
-                    merged["seen_images"] = imgs[-2000:]
-                    save_state(merged)
-                    log(f"图片 → {TAB_IMAGE}（{image_id[:8]}… {kind} r{revision}，{len(data) // 1024} KB）")
-            except Exception as error:
-                log(f"图片 {image_id} 拉取失败（下轮重试）: {error}")
+                stream.kill()
+            except Exception:
+                pass
 
 
 LOCK_FILE = STATE_FILE.parent / "watcher.lock"
@@ -394,6 +463,9 @@ def push_file_to_phone(name: str, data: bytes, action: str) -> bool:
     全程真实文件，不走 stdin/base64，规避 CRLF 破坏，文本与图片同一套路径。
     """
     serial = get_serial()
+    if serial is None:
+        log(f"推送落盘跳过（{name}）: 无在线设备，插回后重试")
+        return False
     remote = f"/data/local/tmp/voxfix-import-{name}"
     target = f"files/{IMPORT_DIR}/{name}"
     tmp = STATE_FILE.parent / f"push-{name}"
