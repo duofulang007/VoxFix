@@ -304,6 +304,14 @@ def image_loop() -> None:
             key = f"{image_id}:{revision}"
             if not image_id or key in seen:
                 continue
+            # 电脑推送导入的图片（source=pc）不回流：它们本来就在「手机图片」标签里，
+            # 回写会造成用户看到两条（原条目 + 回流副本）
+            if item.get("source") == "pc":
+                seen.add(key)
+                merged = load_state()
+                merged["images"] = sorted(seen)[-2000:]
+                save_state(merged)
+                continue
             # PROJECT 的成品在 projects/<id>/<rev>/composite.png；IMAGE 在 <id>.png
             rel = (f"projects/{image_id}/{revision}/composite.png"
                    if kind == "PROJECT" else f"{image_id}.png")
@@ -554,36 +562,62 @@ def push_loop() -> None:
             if count is not None and baseline.get(TAB_IMAGE) != count:
                 first = TAB_IMAGE not in baseline
                 all_ok = True
-                if not first or count > 0:
-                    if copyq_tab_export(TAB_IMAGE, export_tmp):
-                        state = load_state()
-                        seen = set(state.get("seen_images", []))
-                        for data in extract_pngs(open(export_tmp, "rb").read()):
-                            digest = hashlib.sha256(data).hexdigest()
-                            if digest in seen:
-                                continue
-                            if first:
-                                seen.add(digest)
-                                continue
-                            if len(data) > PUSH_MAX_IMAGE:
-                                log(f"图片过大不推送（{len(data) // 1024} KB），与手机图片页上限一致")
-                                seen.add(digest)
-                                record_seen("images", digest)
-                                continue
-                            name = f"pc-{int(time.time() * 1000)}.png"
-                            if push_file_to_phone(name, data, ACTION_IMPORT_IMAGE):
-                                seen.add(digest)
-                                record_seen("images", digest)
-                                log(f"「{TAB_IMAGE}」新图 → 手机「图片」页（{len(data) // 1024} KB）")
-                            else:
-                                all_ok = False  # 失败不推进基线，下轮重试
-                        if first:
-                            save_state({**load_state(), "seen_images": list(seen)[-2000:]})
-                            log(f"「{TAB_IMAGE}」基线已登记（不推送）")
-                    else:
+                # 每轮处理一个新条目：推送 + 规范化（写回标准 image/png 条目、删原
+                # 自定义格式条目，消除 CopyQ 的 <数据> 显示）。规范化会增删条目，
+                # 所以重复导出重扫，直到没有新哈希。
+                for _ in range(count + 4):
+                    if not copyq_tab_export(TAB_IMAGE, export_tmp):
                         all_ok = False
+                        break
+                    state = load_state()
+                    seen = set(state.get("seen_images", []))
+                    target = None
+                    for pos, data in enumerate(extract_pngs(open(export_tmp, "rb").read())):
+                        digest = hashlib.sha256(data).hexdigest()
+                        if digest in seen:
+                            continue
+                        if first:
+                            seen.add(digest)  # 基线：已有条目只登记不推送
+                            record_seen("images", digest)
+                            continue
+                        target = (pos, data, digest)
+                        break
+                    if target is None:
+                        if first:
+                            log(f"「{TAB_IMAGE}」基线已登记（不推送）")
+                        break
+                    pos, data, digest = target
+                    if len(data) > PUSH_MAX_IMAGE:
+                        log(f"图片过大不推送（{len(data) // 1024} KB），与手机图片页上限一致")
+                        seen.add(digest)
+                        record_seen("images", digest)
+                        continue
+                    name = f"pc-{int(time.time() * 1000)}.png"
+                    if not push_file_to_phone(name, data, ACTION_IMPORT_IMAGE):
+                        all_ok = False  # 失败不登记 seen，下轮重试
+                        break
+                    seen.add(digest)
+                    record_seen("images", digest)
+                    # 规范化为标准条目：write 插到顶部（已实测），原条目移到 pos+1
+                    write = subprocess.run([COPYQ, "tab", TAB_IMAGE, "write", "image/png", "-"],
+                                           input=data, capture_output=True, timeout=30,
+                                           creationflags=NO_WINDOW)
+                    if write.returncode != 0:
+                        all_ok = False
+                        log(f"「{TAB_IMAGE}」新图已推手机，但规范化写入失败（下轮重试）")
+                        break
+                    remove = subprocess.run([COPYQ, "tab", TAB_IMAGE, "remove", str(pos + 1)],
+                                            capture_output=True, timeout=15,
+                                            creationflags=NO_WINDOW)
+                    if remove.returncode != 0:
+                        all_ok = False
+                        log(f"「{TAB_IMAGE}」新图已推手机，但移除原 <数据> 条目失败"
+                            f"（index {pos + 1}）")
+                        break
+                    log(f"「{TAB_IMAGE}」新图 → 手机「图片」页（{len(data) // 1024} KB），"
+                        f"原 <数据> 条目已转为标准图片条目")
                 if all_ok:
-                    baseline[TAB_IMAGE] = count
+                    baseline[TAB_IMAGE] = copyq_tab_count(TAB_IMAGE) or count
         except Exception as error:
             log(f"图片标签推送异常（忽略继续）: {error}")
 
