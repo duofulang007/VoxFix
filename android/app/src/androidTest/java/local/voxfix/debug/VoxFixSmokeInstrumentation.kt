@@ -75,6 +75,9 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
             if (modelCompare == "screenshot-color-picker") {
                 output.putString("result", ScreenshotColorPickerSmoke.run(this)); finish(Activity.RESULT_OK,output); return
             }
+            if (modelCompare == "screenshot-parity-render") {
+                output.putString("result", ScreenshotParityRenderSmoke.run(this)); finish(Activity.RESULT_OK,output); return
+            }
             if (modelCompare == "screenshot-parity-foundation") {
                 output.putString("result", ScreenshotParityFoundationSmoke.run(this)); finish(Activity.RESULT_OK,output); return
             }
@@ -225,6 +228,7 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
                 modelCompare == "screenshot-selection-resize" -> "SCREENSHOT_SELECTION_RESIZE_FAIL"
                 modelCompare == "screenshot-linear-handles" -> "SCREENSHOT_LINEAR_HANDLES_FAIL"
                 modelCompare == "screenshot-color-picker" -> "SCREENSHOT_COLOR_PICKER_FAIL"
+                modelCompare == "screenshot-parity-render" -> "SCREENSHOT_PARITY_RENDER_FAIL"
                 modelCompare == "screenshot-parity-foundation" -> "SCREENSHOT_PARITY_FOUNDATION_FAIL"
                 modelCompare == "screenshot-selected" -> "SCREENSHOT_SELECTED_TOOLS_FAIL"
                 modelCompare == "screenshot-editing" -> "SCREENSHOT_OBJECT_EDITING_FAIL"
