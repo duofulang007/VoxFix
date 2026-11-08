@@ -43,30 +43,30 @@ try{
     const rows=page.locator('.clip-text');
     assert.equal(await rows.count(),2,'Both clips are listed');
     const pcRow=rows.filter({hasText:'电脑发来的内容'}),localRow=rows.filter({hasText:'手机复制的'});
-    assert.equal(await pcRow.locator('.clip-source-tag').count(),1,'PC row shows the 电脑 tag');
-    assert.equal((await pcRow.locator('.clip-source-tag').textContent()).trim(),'电脑');
-    assert.equal(await localRow.locator('.clip-source-tag').count(),0,'Local copy shows no tag');
+    assert.equal(await pcRow.locator('.clip-source-ribbon').count(),1,'PC row shows the 电脑 tag');
+    assert.equal((await pcRow.locator('.clip-source-ribbon').textContent()).trim(),'电脑');
+    assert.equal(await localRow.locator('.clip-source-ribbon').count(),0,'Local copy shows no tag');
     const stored=await page.evaluate(()=>JSON.parse(localStorage.getItem('voxfix-pc-clips-v1')));
     assert.deepEqual(stored,['电脑发来的内容'],'PC mark persists to its own storage key');
     await page.reload();
     await page.waitForFunction(()=>typeof voxfixReset==='function');
     await click('clipboard');
-    assert.equal(await rows.filter({hasText:'电脑发来的内容'}).locator('.clip-source-tag').count(),1,'Tag survives reload');
+    assert.equal(await rows.filter({hasText:'电脑发来的内容'}).locator('.clip-source-ribbon').count(),1,'Tag survives reload');
   });
   await check('PC-imported image shows the 电脑 chip on its tile, local images do not',async({page})=>{
     await page.route('https://voxfix.local/screenshots/**',route=>route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>'}));
     await page.evaluate(()=>voxfixOpenImages());
     const cards=page.locator('.clip-image-tile');
     assert.equal(await cards.count(),2);
-    assert.equal(await cards.filter({has:page.locator('[data-value="'+'a'.repeat(32)+'"]')}).locator('.clip-source-float').count(),1,'PC image tile has floating 电脑 chip');
-    assert.equal(await cards.filter({has:page.locator('[data-value="'+'b'.repeat(32)+'"]')}).locator('.clip-source-float').count(),0,'Local image tile has none');
-    const text=await cards.locator('.clip-source-float').first().textContent();
+    assert.equal(await cards.filter({has:page.locator('[data-value="'+'a'.repeat(32)+'"]')}).locator('.clip-source-ribbon').count(),1,'PC image tile has corner 电脑 ribbon');
+    assert.equal(await cards.filter({has:page.locator('[data-value="'+'b'.repeat(32)+'"]')}).locator('.clip-source-ribbon').count(),0,'Local image tile has none');
+    const text=await cards.locator('.clip-source-ribbon').first().textContent();
     assert.equal(text.trim(),'电脑');
   });
   await check('fromPc with empty text never records a mark',async({page,click})=>{
     await page.evaluate(()=>voxfixClipboard('','empty-sig',false,true));
     await click('clipboard');
-    assert.equal(await page.locator('.clip-source-tag').count(),0);
+    assert.equal(await page.locator('.clip-source-ribbon').count(),0);
     assert.equal(await page.evaluate(()=>localStorage.getItem('voxfix-pc-clips-v1')),null);
   });
   if(failures.length){console.error(failures.join('\n'));process.exit(1);}

@@ -16,5 +16,5 @@ android {
 }
 dependencies {
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
-    implementation(files("../../.android/screen-ocr-eval-20261103/onnxruntime-android-1.20.0.aar"))
+    implementation(files("../../.android/app-tools/onnxruntime-android-1.20.0.aar"))
 }

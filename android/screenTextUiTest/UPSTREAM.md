@@ -21,6 +21,9 @@ Evaluation only; nothing here changes the production app's ML Kit or voice runti
 
 `tools/prepare_screen_ocr_eval.py` downloads, verifies and stages these files under ignored
 `.android/screen-ocr-eval-20261103/`; models and native runtime binaries must not be committed.
+The ONNX Runtime AAR is staged separately at ignored `.android/app-tools/` by the
+`tools/build_android.ps1` bootstrap (checksum-pinned), so a fresh clone can build
+`screenTextUiTest` without re-running the eval preparation.
 The independent test APK explicitly removes INTERNET permission, and asserts that it is absent.
 Only public model preparation needs network; on-device inference is local.
 

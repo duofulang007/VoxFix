@@ -8,7 +8,7 @@ VoxFix 是可在系统中独立选择的 Android 输入法（`local.voxfix.debug
 
 - **键盘**：原生 WebView 承载 `preview/`，优先维护 26 键；中文拼音使用 librime 1.17.0，支持个人词库、候选记忆、备份与合并导入。
 - **离线语音**：SenseVoice Small R5 INT8＋silero VAD＋CT-Transformer；定稿 → CTC 热词救援 → 个人词典 → 标点。长按空格 240ms 进入，上滑取消、松手定稿；支持常驻、逐字呈现和长录音内部接续。键盘出现即预热，空闲 5 分钟释放。不保存日常录音或转写。
-- **编辑与剪贴板**：滑轨长按锁定、自定义编辑框、八方向盘及宿主选区弹出；剪贴板拆词、全历史检索与候选引用，工具栏长按拖动排序。
+- **编辑与剪贴板**：滑轨长按锁定、自定义编辑框、八方向盘及宿主选区弹出；剪贴板拆词、全历史检索与候选引用，工具栏长按拖动排序；超长条目向左拖动跟手查看（位移记忆＋松手惯性，存储原文不变）；图片重复复制自动置顶；电脑推送条目带「电脑」角标，支持电脑↔手机剪贴板双向同步（`tools/` 伴生工具，经 scrcpy 与 CopyQ，见 [AGENTS.md](AGENTS.md) 当前进度）。
 - **屏幕取字**：独立无障碍服务、侧边弧形入口、整屏/框选与结果保护；主包由 ML Kit 定位行、PP-OCRv6 small 识别并做段落排序，不上传截图。独立 OCR 对照宿主在 `android/screenTextUiTest/`。
 - **截图工程**：参考 Snow Shot 1.1.8，支持绘图、滤镜、文字/序号、贴图、单对象反复编辑与工具栏自定义；图片并入剪贴板，保存工程后可重开，裁剪另存保留工程。所有工具可从选框外起笔，导出只裁框内。见[实现与验收](docs/截图可编辑工程-实现与验收-2026-11-04.md)。
 - **Snow Shot 逐项复刻（进行中）**：目标为全部 44 项（T01–T28 工具动作、A01–A16 辅助入口）。已接画笔、形状、直线、箭头、橡皮、高亮、聚光灯、序号、文字、水印、非矩形选区，以及 T22 的多选、混合态、八向边角缩放、插点、拖段、层级／对齐／分布／复制与移动／缩放吸附；智能选择支持连续点按换目标与文字行／段落细化，智能条已精简、工具栏与贴图编辑条贴选区；T27 手机长截屏已接手动跟拍、自动滚动和实时裁边，成品进图片剪贴板；T28 录屏已接选区 MP4 录制、麦克风／系统音、暂停恢复、相册保存、导出设置面板、延迟倒计时、打开录制文件夹、录制区域边框与录制前设置阶段（蓝框可调选区，区域裁切真机已确认）。T28 录屏已接选区 MP4 录制、麦克风／系统音、暂停恢复、相册保存、导出设置面板、延迟倒计时、打开录制文件夹、录制区域边框与录制前设置阶段，GIF/APNG/WebP 动画导出与混音/分轨已真机验证。T08、T15、T16、T22、T28 代码面均已收口，剩余为原版同尺度叠图与真人走查；A07 捕捉光标已判定不做（Android 无指针捕捉能力）。识别/翻译/识码进行中在对应按钮上显示忙碌转圈。B 线原版叠图管线已建成（经 MCP 驱动本机原版 1.1.8），已出 T08 画笔首对叠图。进度与未闭环项以[交接最后两节](docs/SnowShot复刻接续交接-2026-11-04.md)为准；自动化口径是 JVM 463 项与 K60 28 组截图套件，**套件通过不等于原版叠图或真人通过**。
@@ -26,7 +26,7 @@ VoxFix 是可在系统中独立选择的 Android 输入法（`local.voxfix.debug
 | `android/app/src/test/` / `androidTest/` | JVM 自检与隔离安卓测试 |
 | `android/screenTextUiTest/` | 独立、无联网权限的 OCR 对照宿主 |
 | `preview/` | APK 共用键盘前端、网页回归、参考图 |
-| `tools/` | 构建、模型/词库准备及评测脚本 |
+| `tools/` | 构建、模型/词库准备、评测脚本及手机伴生工具（插拔自动投屏、剪贴板同步守护） |
 | `docs/` | 当前约定与验收；旧方案在 `archive/`，待决策稿在 `design/` |
 
 ## 准备与构建
@@ -46,13 +46,13 @@ pwsh -ExecutionPolicy Bypass -File tools/build_android.ps1
 ## 验证与网页打包
 
 ```powershell
-$env:NODE_PATH = 'C:/Users/23221/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules'
+$env:NODE_PATH = 'C:/Users/23221/.workbuddy/binaries/node/versions/22.22.2-6/node_modules/@playwright/cli/node_modules'
 node preview/clipboard-images.test.mjs
 node tools/check_module_boundaries.mjs
 .venv/Scripts/python.exe tools/build_preview.py
 ```
 
-`preview/*.test.mjs` 共 45 套，其中 38 套不依赖手机，7 套 `*-device` 需要 USB 与 WebView 调试端口转发。只跑受影响功能；修改共用状态、渲染或事件委托时跑全量非真机回归。网页测试使用 Playwright＋Edge。
+`preview/*.test.mjs` 共 47 套，其中 40 套不依赖手机，7 套 `*-device` 需要 USB 与 WebView 调试端口转发。只跑受影响功能；修改共用状态、渲染或事件委托时跑全量非真机回归。网页测试使用 Playwright＋Edge。
 
 开发预览使用本地 HTTP 下的 `preview/index.html`；根目录 `键盘试用页.html` 是分发产物。前端改完由 agent 打包，不使用监听模式。结构检查目前允许 `app.mjs` 的体积预警，达到 3000 行或 250 KB 必须拆分；`test-lexicon.mjs` 是测试共用模块，不进产物。
 

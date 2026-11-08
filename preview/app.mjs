@@ -250,6 +250,7 @@ function addPhraseItem(group,text){
 }
 let snippetEdit=null,snippetUndo=null,groupUndo=null;
 let clipMenu=null,clipHold=null,clipSuppressUntil=0,learningChain=[];
+let clipDrag=null,clipFling=0;
 const personalLexicon=createPersonalLexicon(nativeIme,error=>toast('个人词库保存失败：'+error.message));
 personalLexicon.initialized.then(()=>{refreshAssociations();render();}).catch(error=>toast('个人词库加载失败，已有记录保留：'+error.message));
 let gesture = null, candidateSuppressUntil=0, toastTimer, nativeComposition = false;
@@ -947,11 +948,15 @@ function openPhraseGroupEditor(index=-1){
 }
 function clipRow(text,i,managing){
   const picked=managing&&state.clipSelected.includes(text);
-  const cls=managing?(picked?'clip-text clip-pick picked':'clip-text clip-pick'):'clip-text';
+  const pc=pcClips.includes(text);
+  const base=managing?(picked?'clip-text clip-pick picked':'clip-text clip-pick'):'clip-text';
+  const cls=pc?`${base} clip-pc`:base;
   const action=managing?'clip-pick':'paste';
-  // 「电脑」标签放在条目文字后面（尾部），不挡正文开头
-  const tag=pcClips.includes(text)?'<span class="clip-source-tag">电脑</span>':'';
-  const body=managing?`<span class="pick-box" aria-hidden="true">${picked?'✓':''}</span><span class="pick-text">${esc(text)}</span>${tag}`:`${esc(text)}${tag}`;
+  // 「电脑」来源标签：与图片块同款的左上角斜向色带（风格统一，不遮挡正文）
+  const tag=pc?'<span class="clip-source-ribbon">电脑</span>':'';
+  // 正文包一层 .clip-row-text：默认 inline（外层 button 的省略号照常生效），
+  // 超长拖动查看时才切 inline-block 跟手位移；data-value 始终是原始文本，存储与粘贴不受影响。
+  const body=managing?`<span class="pick-box" aria-hidden="true">${picked?'✓':''}</span><span class="pick-text">${esc(text)}</span>${tag}`:`<span class="clip-row-text">${esc(text)}</span>${tag}`;
   return button(text,action,text,cls,body).replace(`data-action="${action}"`,`data-action="${action}" data-index="${i}"`);
 }
 function clipConfirmPanel(){ return sheet(state.clipConfirm.title,[['clip-confirm-ok','确定','danger']]); }
@@ -1023,7 +1028,7 @@ function imageAction(action,value){
     if(action==='image-send'&&row){if(!nativeIme?.screenshotInsert)throw Error('请在手机 VoxFix 输入法中插入图片');nativeIme.screenshotInsert(row.id);return;}
     if(action==='image-open'&&screenshotRows.some(item=>item.id===value)){screenshotPreview=value;screenshotCrop=null;screenshotRemove=null;}
     if(action==='image-back'){screenshotPreview=null;screenshotCrop=null;resetImageSelection();}
-    if(action==='image-copy'&&row){const result=screenshotCall('screenshotCopy',row.id);if(!result.ok)throw Error('复制失败，请重试');toast('已复制图片，可在原应用粘贴');}
+    if(action==='image-copy'&&row){const result=screenshotCall('screenshotCopy',row.id);if(!result.ok)throw Error('复制失败，请重试');screenshotEpoch++;refreshScreenshots();toast('已复制图片，可在原应用粘贴');}
     if(action==='image-manage'){screenshotManage=!screenshotManage;screenshotSelected=[];screenshotRemove=null;screenshotDelete=null;}
     if(action==='image-toggle'&&screenshotRows.some(item=>item.id===value))screenshotSelected=screenshotSelected.includes(value)?screenshotSelected.filter(id=>id!==value):[...screenshotSelected,value];
     if(action==='image-select-all')screenshotSelected=screenshotSelected.length===screenshotRows.length?[]:screenshotRows.map(item=>item.id);
@@ -1045,13 +1050,13 @@ function imageAction(action,value){
 function resetImageSelection(){screenshotManage=false;screenshotSelected=[];screenshotRemove=null;screenshotDelete=null;clearImageHold();}
 function imageHeader(tabs){
   if(screenshotManage)return `<div class="panel-title clip-header image-header image-managing"><div class="clip-header-leading">${ctl('image-manage','退出图片选择','close')}</div><span class="title-note" aria-live="polite">已选 ${screenshotSelected.length} 张</span><div class="clip-header-actions">${button(screenshotSelected.length===screenshotRows.length?'取消全选':'全选','image-select-all','','text-action','',screenshotRows.length?'':' disabled')}${button('删除所选图片','image-delete-selected','','ctl danger',icon('trash'),screenshotSelected.length?'':' disabled')}</div></div>`;
-  if(screenshotPreview){const row=screenshotRows.find(item=>item.id===screenshotPreview);return `<div class="panel-title clip-header image-header"><div class="clip-header-leading">${ctl('image-back','返回图片列表','back')}</div><div class="image-preview-title">${screenshotCrop?'裁剪图片':'图片预览'}<span>${row?`${row.width} × ${row.height}`:''}</span></div><div class="clip-header-actions">${ctl('return','返回键盘','hide')}</div></div>`;}
+  if(screenshotPreview){const row=screenshotRows.find(item=>item.id===screenshotPreview);return `<div class="panel-title clip-header image-header"><div class="clip-header-leading">${ctl('image-back','返回图片列表','back')}</div><div class="image-preview-title">${screenshotCrop?'裁剪图片':'图片预览'}</div><div class="clip-header-actions">${ctl('return','返回键盘','hide')}</div></div>`;}
   return `<div class="panel-title clip-header image-header"><div class="clip-header-leading">${ctl('return','返回键盘','hide')}</div>${tabs}<div class="clip-header-actions">${button('批量选择图片','image-manage','','ctl',icon('select-text'),screenshotRows.length&&!screenshotError?'':' disabled')}</div></div>`;
 }
 function imageCard(item){
   const selected=screenshotSelected.includes(item.id),remove=screenshotRemove===item.id;
-  const tag=item.source==='pc'?'<span class="clip-source-tag clip-source-float">电脑</span>':'';
-  return `<div class="clip-image-tile${selected?' picked':''}">${tag}${button(`${screenshotManage?'选择':'查看'}图片 ${item.width}×${item.height}`,screenshotManage?'image-toggle':'image-open',item.id,'clip-image-card',`<img src="${screenshotUrl(item.id,'thumb')}" loading="lazy" draggable="false" alt="截图缩略图"><span class="image-dimensions">${item.width} × ${item.height}</span>${screenshotManage?`<span class="image-pick" aria-hidden="true">${selected?icon('check'):''}</span>`:''}`,screenshotManage?`aria-pressed="${selected}"`:'')}${remove&&!screenshotManage?button('删除这张图片','image-delete',item.id,'image-remove',icon('close')):''}</div>`;
+  const tag=item.source==='pc'?'<span class="clip-source-ribbon">电脑</span>':'';
+  return `<div class="clip-image-tile${selected?' picked':''}">${tag}${button(`${screenshotManage?'选择':'查看'}图片`,screenshotManage?'image-toggle':'image-open',item.id,'clip-image-card',`<img src="${screenshotUrl(item.id,'thumb')}" loading="lazy" draggable="false" alt="截图缩略图">${screenshotManage?`<span class="image-pick" aria-hidden="true">${selected?icon('check'):''}</span>`:''}`,screenshotManage?`aria-pressed="${selected}"`:'')}${remove&&!screenshotManage?button('删除这张图片','image-delete',item.id,'image-remove',icon('close')):''}</div>`;
 }
 function imageDeleteConfirmation(){return `<div class="clip-menu-backdrop image-confirm-backdrop" data-action="image-cancel"><div class="image-confirm" role="dialog" aria-modal="true" aria-label="确认删除图片"><strong>删除这 ${screenshotDelete.length} 张图片？</strong><p>删除后无法恢复</p><div>${button('取消','image-cancel','','text-action')}${button('确定删除','image-delete-confirm','','text-action danger')}</div></div></div>`;}
 function clearImageHold(){clearTimeout(imageHold?.timer);imageHold=null;}
@@ -1545,7 +1550,7 @@ function deleteText(keepPanel=false) {
   if(nativeIme&&!localInput&&!state.comp)nativeIme.compose('');
   if(!state.comp && !associatedWords.length && state.page==='candidates'){state.page='letters';render();}
 }
-function showPage(page) { endClipboardSplit();if(state.voice&&!(state.voice.tap&&!localInput&&['numbers','symbols'].includes(page))) cancelVoice();clipMenu=null;state.clipGroupMenu=null;state.clipConfirm=null;clearTimeout(clipHold?.timer);clipHold=null;if(['letters','numbers','symbols'].includes(state.page))state.returnPage=state.page;if(page==='symbols'){const origin=['letters','numbers'].includes(state.page)?state.page:state.returnPage;if(origin!=='symbols')state.symbolReturn=origin;}state.popup=null;state.page=page;state.hidden=false;render(); }
+function showPage(page) { endClipboardSplit();if(state.voice&&!(state.voice.tap&&!localInput&&['numbers','symbols'].includes(page))) cancelVoice();clipMenu=null;state.clipGroupMenu=null;state.clipConfirm=null;clearTimeout(clipHold?.timer);clipHold=null;clipDrag=null;if(clipFling){cancelAnimationFrame(clipFling);clipFling=0;}if(['letters','numbers','symbols'].includes(state.page))state.returnPage=state.page;if(page==='symbols'){const origin=['letters','numbers'].includes(state.page)?state.page:state.returnPage;if(origin!=='symbols')state.symbolReturn=origin;}state.popup=null;state.page=page;state.hidden=false;render(); }
 function showTab(name) { if(nativeIme&&name==='custom'){$('custom-panel').hidden=false;nativeSettings.showModal();return;} $('try-panel').hidden=name!=='try'; $('custom-panel').hidden=name!=='custom'; document.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected',b.dataset.tab===name)); }
 function startVoice(tap=false) {
   if(state.voice)return;
@@ -2113,6 +2118,70 @@ keyboard.addEventListener('pointerdown',e=>{
   hold.timer=setTimeout(()=>{if(clipHold!==hold||state.clipTab!==hold.tab)return;const index=hold.text===undefined?-1:currentList().indexOf(hold.text);if(hold.text!==undefined&&index<0)return;hold.fired=true;consumedClick={id:hold.id,until:Date.now()+700};clipSuppressUntil=Date.now()+700;openClipMenu(index);},500);
 });
 keyboard.addEventListener('pointermove',e=>{if(clipHold&&e.pointerId===clipHold.id&&Math.hypot(e.clientX-clipHold.x,e.clientY-clipHold.y)>10){clearTimeout(clipHold.timer);clipHold=null;}});
+// 剪贴板条目超长省略时，在条目上向左拖动＝跟手查看全部内容（不自动播放）：
+// 横移 24px 且以横向为主才判定；只有内容确实溢出显示区才进入；
+// 换行在显示层由 nowrap 合并为空格连贯阅读，data-value 保存原始文本，粘贴不受影响。
+// 同一页面内位移有记忆：松手停在当前位置，下次拖动从原位移续拖（像候选栏拖动），
+// 切页面/切标签等重渲染后自动回到开头；拖动全程抑制误触粘贴。
+// 松手带惯性：按最近 120ms 位移采样算速度，指数衰减滚动，触边界或速度耗尽即停。
+function startClipFling(drag){
+  const now=performance.now(),recent=(drag.samples||[]).filter(p=>now-p.t<=120);
+  if(recent.length<2)return;
+  const a=recent[0],b=recent[recent.length-1],dt=b.t-a.t;
+  if(dt<=0)return;
+  let v=Math.max(-3,Math.min(3,(b.offset-a.offset)/dt));
+  if(Math.abs(v)<0.05)return;
+  const text=drag.text,max=drag.max;
+  let offset=b.offset,last=now;
+  const step=()=>{
+    if(!text.isConnected){clipFling=0;return;}
+    const now2=performance.now(),dt2=Math.min(32,now2-last);
+    last=now2;offset+=v*dt2;v*=Math.exp(-dt2/320);
+    if(offset<=0||offset>=max||Math.abs(v)<0.02){
+      text.style.transform=`translateX(${-Math.min(max,Math.max(0,offset))}px)`;
+      clipFling=0;return;
+    }
+    text.style.transform=`translateX(${-offset}px)`;
+    clipFling=requestAnimationFrame(step);
+  };
+  clipFling=requestAnimationFrame(step);
+}
+keyboard.addEventListener('pointerdown',e=>{
+  if(e.button!==0||state.page!=='clipboard'||state.clipTab==='images')return;
+  if(clipFling){cancelAnimationFrame(clipFling);clipFling=0;}
+  const row=e.target.closest('.clip-text');if(!row||row.classList.contains('clip-pick'))return;
+  const text=row.querySelector('.clip-row-text'),kept=/translateX\(-([\d.]+)px\)/.exec(text?.style.transform||'');
+  clipDrag={id:e.pointerId,row,startX:e.clientX,startY:e.clientY,engaged:false,startOffset:kept?Number(kept[1]):0};
+});
+keyboard.addEventListener('pointermove',e=>{
+  const drag=clipDrag;if(!drag||drag.id!==e.pointerId)return;
+  const dx=e.clientX-drag.startX,dy=e.clientY-drag.startY;
+  if(!drag.engaged){
+    if(Math.abs(dx)<24||Math.abs(dx)<=Math.abs(dy))return;
+    if(drag.row.scrollWidth<=drag.row.clientWidth+2){clipDrag=null;return;}
+    drag.engaged=true;consumedClick={id:drag.id,until:Date.now()+60000};
+    try{drag.row.setPointerCapture(drag.id);}catch{}
+    drag.row.classList.add('clip-scrolling');
+    drag.text=drag.row.querySelector('.clip-row-text');
+    drag.max=Math.max(0,drag.row.scrollWidth-drag.row.clientWidth);
+    drag.anchorDx=dx;drag.samples=[];
+    clearTimeout(clipHold?.timer);
+  }
+  // 从上次停留的位移续拖：本次手势内的横移量相对锚点增减，夹紧在 [0, 末尾]。
+  const offset=Math.min(drag.max,Math.max(0,drag.startOffset-(dx-drag.anchorDx)));
+  drag.text.style.transform=`translateX(${-offset}px)`;
+  const now=performance.now(),samples=drag.samples;
+  while(samples.length&&now-samples[0].t>120)samples.shift();
+  samples.push({t:now,offset});
+});
+for(const event of ['pointerup','pointercancel'])keyboard.addEventListener(event,e=>{
+  if(!clipDrag||clipDrag.id!==e.pointerId)return;
+  if(clipDrag.engaged){
+    consumedClick={id:clipDrag.id,until:Date.now()+500};
+    if(event==='pointerup')startClipFling(clipDrag);
+  }
+  clipDrag=null;
+});
 // 常用语分组：长按 pill 打开“重命名 / 删除分组”，轻点仍然是切换分组。
 keyboard.addEventListener('pointerdown',e=>{
   if(e.button!==0)return;

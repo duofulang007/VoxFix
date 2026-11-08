@@ -221,7 +221,17 @@ class ScreenshotStore(private val context: Context) {
     fun uri(id: String): Uri { validateId(id); return Uri.parse("content://${context.packageName}.screenshots/$id") }
     fun copy(id: String) {
         check(file(id).isFile) { "截图文件不存在" }
+        touchToFront(id)
         context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newUri(context.contentResolver,"VoxFix 截图",uri(id)))
+    }
+
+    /** 重复复制已有图片时把它挪到列表最前（与文本剪贴板「最近复制置顶」一致）。 */
+    private fun touchToFront(id: String) = synchronized(lock) {
+        val old = readEntries()
+        val index0 = old.indexOfFirst { it.id == id }
+        if (index0 <= 0) return@synchronized
+        val moved = old[index0].copy(createdAt = System.currentTimeMillis())
+        writeEntries(listOf(moved) + old.filterIndexed { i,_ -> i != index0 })
     }
     fun share(id: String) {
         check(file(id).isFile) { "截图文件不存在" }
