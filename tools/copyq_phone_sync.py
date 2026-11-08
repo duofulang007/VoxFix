@@ -1,36 +1,38 @@
 #!/usr/bin/env python3
 """手机剪贴板 ⇄ 电脑 双向搬运（VoxFix + scrcpy + CopyQ）。
 
-电脑 → 手机（反向，2026-11-08 新增）：
-  监听 Windows 剪贴板，仅当所有者进程不是 scrcpy（即用户在电脑上复制）时：
-  1. 文本：写入手机 files/clipboard-import/ 后发 IMPORT_TEXT 广播，
-     VoxFix 接收器写系统剪贴板（描述标签「VoxFix · 电脑」），键盘剪贴板页
-     自动记入历史并带「电脑」标签；单条上限 10000 字符（与键盘历史一致）。
-  2. 图片：经 Pillow 取出位图转 PNG 推送，VoxFix 解码校验后入「图片」页；
-     解码失败（文本混入）一律丢弃——手机图片页绝不出现文本。
+电脑 → 手机（反向，2026-11-08 改为标签驱动）：
+  只推送用户在 CopyQ 里**主动添加**到「手机文本」「手机图片」标签的条目，
+  电脑上随意复制的内容不进手机：
+  1. 文本：轮询标签条数，新增时 `copyq read` 取文本（≤10000 字符）推给手机，
+     键盘剪贴板页记入历史并带「电脑」标签。
+  2. 图片：CopyQ v16 的 CLI/脚本读不出二进制条目（read/copy 均返回空，实测），
+     但 `exporttab` 导出文件含原始 PNG 字节——条数变化时导出并用
+     PNG magic+IEND 走链提取，新图推给手机，VoxFix 解码校验后入「图片」页
+     （解码失败即丢弃，图片页绝不出现文本）。
+  首次观测到标签时只记基线不推送（避免把历史条目一次性灌进手机）。
 
 手机 → 电脑（正向，原有）：
   1. 文本：scrcpy 原生自动同步把手机复制写入 Windows 剪贴板；
-     本脚本监听剪贴板变化，仅当所有者进程是 scrcpy.exe（或无窗口模式 owner=None）时，
-     把文本写入 CopyQ「手机文本」标签。
+     仅当所有者进程是 scrcpy.exe（或无窗口模式 owner=None）时，
+     写入 CopyQ「手机文本」标签。
   2. 图片：VoxFix 截图工具保存后图片落在
-     /data/data/local.voxfix.debug/files/screenshot-clipboard/<32hex>.png；
-     本脚本用 adb run-as（debug 包免 root）轮询新文件，
-     拉取后写入 CopyQ「手机图片」标签。
+     /data/data/local.voxfix.debug/files/screenshot-clipboard/；
+     adb run-as（debug 包免 root）轮询新文件，拉取后写入 CopyQ「手机图片」标签。
 
-防回环（三层）：
-  a. 来源判定：反向推送只认"非 scrcpy 来源"；正向搬运只认 scrcpy/None 来源。
-  b. 回声过滤：反向推送过的文本哈希记录在 state，scrcpy 把手机剪贴板同步回来时
-     不进「手机文本」标签，只清理 CopyQ 主历史里的回声副本。
-  c. 图片不进系统剪贴板（直接入 ScreenshotStore），无回声路径。
+防回流/防回环：
+  a. 正向通道写入标签的条目哈希记入 seen 集合，反向通道跳过（手机内容不回流）。
+  b. 反向推送过的文本哈希也在 seen 集合：scrcpy 回声不进「手机文本」，只清主历史副本。
+  c. 反向推送不监听 Windows 剪贴板，PC 随意复制与手机完全无关。
 
 用法：
   python tools/copyq_phone_sync.py            # 前台运行，Ctrl+C 停止
   python tools/copyq_phone_sync.py --any-owner  # 测试用：不校验所有者进程
-状态文件：.android/copyq-phone-sync/state.json（已搬运图片 id、推送哈希记录，防重复/防回环）
+状态文件：.android/copyq-phone-sync/state.json（seen 集合防回流/防重复）
 """
 
 import argparse
+import atexit
 import ctypes
 import ctypes.wintypes as wt
 import hashlib
@@ -59,7 +61,7 @@ IMAGE_POLL_SEC = 2.0
 IMPORT_DIR = "clipboard-import"
 PUSH_TEXT_LIMIT = 10000     # 与 VoxFix 键盘剪贴板历史单条上限一致
 PUSH_MAX_IMAGE = 16 * 1024 * 1024  # 与 ScreenshotStore 单图上限一致
-PUSH_ECHO_SEC = 600         # 反向推送文本的回声判定窗口
+TAB_POLL_SEC = 2.0          # 标签条数轮询间隔
 STATE_FILE = Path(__file__).resolve().parent.parent / ".android" / "copyq-phone-sync" / "state.json"
 
 # VoxFix ClipboardImportReceiver 的广播 action（与 android 端常量一一对应）
@@ -92,7 +94,7 @@ def load_state() -> dict:
     try:
         return json.loads(STATE_FILE.read_text("utf-8"))
     except Exception:
-        return {"images": [], "text_hash": "", "pushed_text": {}, "pushed_image_hash": ""}
+        return {"images": [], "text_hash": "", "seen_text": [], "seen_images": []}
 
 
 def save_state(state: dict) -> None:
@@ -222,17 +224,18 @@ def text_loop(any_owner: bool) -> None:
             if digest == state.get("text_hash"):
                 log("文本与上次相同 → 去重跳过（CopyQ 主历史仍会记账）")
                 continue  # 连续相同内容去重
-            # 回声过滤：最近由本脚本推送到手机的文本，经 scrcpy 同步回来时不进「手机文本」，
-            # 只清理 CopyQ 主历史里的回声副本（保持主历史纯净，也避免电脑→手机→电脑假手机来源）。
-            pushed = load_state().get("pushed_text", {})
-            pushed_at = pushed.get(digest)
-            if pushed_at and time.time() - pushed_at < PUSH_ECHO_SEC:
-                log(f"电脑推送回声 → 跳过「{TAB_TEXT}」，仅清理主历史副本：{text[:40].replace(chr(10), chr(92) + 'n')}")
+            # 回流/回声过滤：该内容已在「手机文本」标签里（正向写入或反向推送过），
+            # 不重复入标签，只清理 CopyQ 主历史的副本（保持主剪贴板纯净）。
+            if digest in load_state().get("seen_text", []):
+                log(f"文本已在「{TAB_TEXT}」标签 → 跳过，仅清理主历史副本：{text[:40].replace(chr(10), chr(92) + 'n')}")
                 copyq_main_remove_match(text)
                 continue
             if copyq_write(TAB_TEXT, "text/plain", text.encode("utf-8")):
-                merged = load_state()  # 与图片线程共享一个文件，读-改-写防覆盖
+                merged = load_state()  # 与图片/推送线程共享一个文件，读-改-写防覆盖
                 merged["text_hash"] = digest
+                seen = merged.get("seen_text", [])
+                seen.append(digest)
+                merged["seen_text"] = seen[-1000:]
                 save_state(merged)
                 preview = text[:40].replace("\n", "\\n")
                 log(f"文本 → {TAB_TEXT}（{len(text)} 字符，来自 {owner}）：{preview}")
@@ -315,12 +318,46 @@ def image_loop() -> None:
                     continue
                 if copyq_write(TAB_IMAGE, "image/png", data):
                     seen.add(key)
-                    merged = load_state()  # 与文本线程共享一个文件，读-改-写防覆盖
+                    merged = load_state()  # 与文本/推送线程共享一个文件，读-改-写防覆盖
                     merged["images"] = sorted(seen)[-2000:]
+                    # 登记内容哈希：反向通道看到该条目时不回流手机
+                    imgs = merged.get("seen_images", [])
+                    imgs.append(hashlib.sha256(data).hexdigest())
+                    merged["seen_images"] = imgs[-2000:]
                     save_state(merged)
                     log(f"图片 → {TAB_IMAGE}（{image_id[:8]}… {kind} r{revision}，{len(data) // 1024} KB）")
             except Exception as error:
                 log(f"图片 {image_id} 拉取失败（下轮重试）: {error}")
+
+
+LOCK_FILE = STATE_FILE.parent / "watcher.lock"
+
+
+def acquire_lock() -> bool:
+    """单实例锁：伴生的 WMI 存活检测有竞态，可能拉起第二个守护；
+    这里用 O_EXCL 锁文件兜底，持有者活着则新实例直接退出。"""
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        return True
+    except FileExistsError:
+        try:
+            old = int(LOCK_FILE.read_text().strip())
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {old}"],
+                                 capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace",
+                                 creationflags=NO_WINDOW).stdout
+            if str(old) in out:
+                return False
+        except (OSError, ValueError):
+            pass
+        try:
+            LOCK_FILE.unlink()
+        except OSError:
+            pass
+        return acquire_lock()
 
 
 def main() -> None:
@@ -329,8 +366,12 @@ def main() -> None:
     args = parser.parse_args()
     if Path(COPYQ).is_file() is False:
         sys.exit(f"copyq 不存在: {COPYQ}")
+    if not acquire_lock():
+        log("已有剪贴板守护在运行，本次退出")
+        return
+    atexit.register(lambda: LOCK_FILE.unlink(missing_ok=True))
     threading.Thread(target=image_loop, daemon=True).start()
-    threading.Thread(target=push_loop, args=(args.any_owner,), daemon=True).start()
+    threading.Thread(target=push_loop, daemon=True).start()
     try:
         text_loop(args.any_owner)
     except KeyboardInterrupt:
@@ -353,10 +394,13 @@ def push_file_to_phone(name: str, data: bytes, action: str) -> bool:
         subprocess.run([ADB, "-s", serial, "push", str(tmp), remote],
                        capture_output=True, timeout=60,
                        creationflags=NO_WINDOW)
-        result = subprocess.run(
-            [ADB, "-s", serial, "shell", "run-as", PACKAGE, "sh", "-c",
-             f"mkdir -p files/{IMPORT_DIR} && cat {remote} > {target}"],
-            capture_output=True, timeout=30, creationflags=NO_WINDOW)
+        # 整条远端命令必须是单个 argv：adb 会把多个参数用空格拼给远端 sh，
+        # sh -c 的引号撑不过去（mkdir Needs 1 argument 实测）。
+        remote_cmd = (f"run-as {PACKAGE} sh -c "
+                      f"'mkdir -p files/{IMPORT_DIR} && cat {remote} > {target}'")
+        result = subprocess.run([ADB, "-s", serial, "shell", remote_cmd],
+                                capture_output=True, timeout=30,
+                                creationflags=NO_WINDOW)
         if result.returncode != 0:
             log(f"推送落盘失败（{name}）: {result.stderr.decode('utf-8', 'replace')[:200]}")
             return False
@@ -378,80 +422,170 @@ def push_file_to_phone(name: str, data: bytes, action: str) -> bool:
             pass
 
 
-def record_pushed_text(digest: str) -> None:
+def record_seen(kind: str, digest: str) -> None:
+    """把内容哈希记入对应标签的已见集合（防回流/防重复）。"""
     merged = load_state()
-    pushed = merged.get("pushed_text", {})
-    pushed[digest] = time.time()
-    now = time.time()
-    pushed = {key: value for key, value in pushed.items()
-              if now - value < PUSH_ECHO_SEC * 6}
-    merged["pushed_text"] = dict(sorted(pushed.items(), key=lambda kv: kv[1])[-50:])
+    key = f"seen_{kind}"
+    seen = merged.get(key, [])
+    seen.append(digest)
+    merged[key] = seen[-2000:]
     save_state(merged)
 
 
-def push_loop(any_owner: bool) -> None:
-    """电脑剪贴板 → 手机。scrcpy/无来源（手机回传）一律跳过，这是第一层防回环。"""
+def copyq_tab_count(tab: str) -> int | None:
     try:
-        from PIL import Image, ImageGrab  # type: ignore
-        pillow_ready = True
+        out = subprocess.run([COPYQ, "tab", tab, "count"], capture_output=True,
+                             timeout=10, creationflags=NO_WINDOW)
+        if out.returncode != 0:
+            return None
+        return int(out.stdout.decode("utf-8", "replace").strip() or "0")
     except Exception:
-        pillow_ready = False
-        log("未安装 Pillow，图片推送关闭（pip install pillow 后重启脚本生效）；文本推送不受影响")
-    last_seq = user32.GetClipboardSequenceNumber()
-    log(f"电脑→手机推送启动（文本≤{PUSH_TEXT_LIMIT} 字符，图片={'开' if pillow_ready else '关'}，"
-        f"来源过滤={'关(测试)' if any_owner else '跳过 scrcpy/无来源'}）")
+        return None
+
+
+def copyq_tab_read(tab: str, index: int) -> bytes | None:
+    try:
+        out = subprocess.run([COPYQ, "tab", tab, "read", str(index)],
+                             capture_output=True, timeout=10,
+                             creationflags=NO_WINDOW)
+        if out.returncode != 0:
+            return None
+        return out.stdout
+    except Exception:
+        return None
+
+
+def copyq_tab_export(tab: str, target: str) -> bool:
+    """exporttab 导出整个标签；v16 的 CLI read/copy 取不出二进制条目（实测返回空），
+    导出文件里才有原始 PNG 字节。命令 rc=0 时文件是异步落盘的，需轮询等待。"""
+    try:
+        out = subprocess.run([COPYQ, "tab", tab, "exporttab", str(target)],
+                             capture_output=True, timeout=30,
+                             creationflags=NO_WINDOW)
+        if out.returncode != 0:
+            log(f"exporttab 失败（{tab}，path={target}）: {out.stderr.decode('utf-8', 'replace')[:150]}")
+            return False
+        for _ in range(15):  # 最多等 3s，文件由 CopyQ 主进程异步写出
+            if os.path.isfile(target) and os.path.getsize(target) > 0:
+                return True
+            time.sleep(0.2)
+        log(f"exporttab 后文件未出现（{target.name}），下轮重试")
+        return False
+    except Exception as error:
+        log(f"exporttab 异常（{tab}）: {error}")
+        return False
+
+
+def extract_pngs(blob: bytes) -> list[bytes]:
+    """按 PNG magic + IEND 走链提取所有完整 PNG。"""
+    import struct
+    magic = b"\x89PNG\r\n\x1a\n"
+    images, i = [], 0
     while True:
-        time.sleep(TEXT_POLL_MS / 1000.0)
+        j = blob.find(magic, i)
+        if j < 0:
+            break
+        pos = j + 8
+        ok = False
+        while pos + 8 <= len(blob):
+            length = struct.unpack(">I", blob[pos:pos + 4])[0]
+            ctype = blob[pos + 4:pos + 8]
+            pos += 12 + length
+            if ctype == b"IEND":
+                images.append(blob[j:pos])
+                ok = True
+                break
+            if length > len(blob):
+                break
+        i = pos if ok else j + 8
+    return images
+
+
+def push_loop() -> None:
+    """CopyQ「手机文本/手机图片」标签 → 手机。只推用户主动放进标签的新条目；
+    电脑上随意复制不进手机（本线程不读 Windows 剪贴板）。"""
+    baseline: dict[str, int] = {}
+    # 正斜杠：反斜杠会被 CopyQ 脚本解析器当转义序列吃掉（\t → TAB 实测）
+    export_tmp = STATE_FILE.parent.as_posix() + "/tab-export.tmp"
+    log(f"标签推送启动（只推「{TAB_TEXT}」「{TAB_IMAGE}」标签新增条目；"
+        f"文本≤{PUSH_TEXT_LIMIT} 字符；首次观测只记基线不推送）")
+    while True:
+        time.sleep(TAB_POLL_SEC)
+        # ---- 文本标签 ----
         try:
-            seq = user32.GetClipboardSequenceNumber()
-            if seq == last_seq:
-                continue
-            last_seq = seq
-            owner = owner_process_name()
-            if not any_owner and (owner is None or owner in ALLOWED_OWNERS):
-                continue  # 手机回传路径，归 text_loop 处理
-            image: "Image.Image | None" = None
-            if pillow_ready:
-                grabbed = ImageGrab.grabclipboard()
-                if isinstance(grabbed, Image.Image):
-                    image = grabbed
-                elif isinstance(grabbed, list):
-                    log(f"复制的是文件列表（{len(grabbed)} 项），推送通道不支持，跳过")
-                    continue
-            if image is not None:
-                buffer = io.BytesIO()
-                image.save(buffer, "PNG")
-                data = buffer.getvalue()
-                digest = hashlib.sha256(data).hexdigest()
+            count = copyq_tab_count(TAB_TEXT)
+            if count is not None and baseline.get(TAB_TEXT) != count:
+                first = TAB_TEXT not in baseline
                 state = load_state()
-                if digest == state.get("pushed_image_hash"):
-                    continue  # 同一张图重复复制，跳过
-                if len(data) > PUSH_MAX_IMAGE:
-                    log(f"图片过大不推送（{len(data) // 1024} KB > {PUSH_MAX_IMAGE // 1024} KB），手机图片页上限一致")
-                    continue
-                name = f"pc-{int(time.time() * 1000)}.png"
-                if push_file_to_phone(name, data, ACTION_IMPORT_IMAGE):
-                    merged = load_state()
-                    merged["pushed_image_hash"] = digest
-                    save_state(merged)
-                    log(f"图片 → 手机「图片」页（{image.width}×{image.height}，{len(data) // 1024} KB，来自 {owner}）")
-                continue
-            text = read_clipboard_text()
-            if not text:
-                continue
-            digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-            state = load_state()
-            if state.get("pushed_text", {}).get(digest):
-                continue  # 刚推送过又出现在电脑剪贴板（回声落点），跳过
-            truncated = len(text) > PUSH_TEXT_LIMIT
-            payload = text[:PUSH_TEXT_LIMIT] if truncated else text
-            name = f"pc-{int(time.time() * 1000)}.txt"
-            if push_file_to_phone(name, payload.encode("utf-8"), ACTION_IMPORT_TEXT):
-                record_pushed_text(digest)
-                preview = payload[:40].replace("\n", "\\n")
-                log(f"文本 → 手机「文本」页（{len(payload)} 字符{'，已截断' if truncated else ''}，来自 {owner}）：{preview}")
-        except Exception as error:  # 剪贴板被占用、adb 掉线等，下一轮再试
-            log(f"推送通道异常（忽略继续）: {error}")
+                seen = set(state.get("seen_text", []))
+                all_ok = True
+                for i in range(count):
+                    data = copyq_tab_read(TAB_TEXT, i)
+                    if not data:
+                        continue
+                    digest = hashlib.sha256(data).hexdigest()
+                    if digest in seen:
+                        continue
+                    if first:
+                        seen.add(digest)  # 基线：已有条目只登记不推送
+                        continue
+                    text = data.decode("utf-8", "replace")
+                    truncated = len(text) > PUSH_TEXT_LIMIT
+                    payload = text[:PUSH_TEXT_LIMIT] if truncated else text
+                    name = f"pc-{int(time.time() * 1000)}.txt"
+                    if push_file_to_phone(name, payload.encode("utf-8"), ACTION_IMPORT_TEXT):
+                        seen.add(digest)
+                        record_seen("text", digest)
+                        preview = payload[:40].replace("\n", "\\n")
+                        log(f"「{TAB_TEXT}」第 {i} 条 → 手机「文本」页（{len(payload)} 字符"
+                            f"{'，已截断' if truncated else ''}）：{preview}")
+                    else:
+                        all_ok = False  # 失败不推进基线，下轮重试
+                if first:
+                    save_state({**load_state(), "seen_text": list(seen)[-1000:]})
+                    log(f"「{TAB_TEXT}」基线 {count} 条已登记（不推送）")
+                if all_ok:
+                    baseline[TAB_TEXT] = count
+        except Exception as error:
+            log(f"文本标签推送异常（忽略继续）: {error}")
+        # ---- 图片标签 ----
+        try:
+            count = copyq_tab_count(TAB_IMAGE)
+            if count is not None and baseline.get(TAB_IMAGE) != count:
+                first = TAB_IMAGE not in baseline
+                all_ok = True
+                if not first or count > 0:
+                    if copyq_tab_export(TAB_IMAGE, export_tmp):
+                        state = load_state()
+                        seen = set(state.get("seen_images", []))
+                        for data in extract_pngs(open(export_tmp, "rb").read()):
+                            digest = hashlib.sha256(data).hexdigest()
+                            if digest in seen:
+                                continue
+                            if first:
+                                seen.add(digest)
+                                continue
+                            if len(data) > PUSH_MAX_IMAGE:
+                                log(f"图片过大不推送（{len(data) // 1024} KB），与手机图片页上限一致")
+                                seen.add(digest)
+                                record_seen("images", digest)
+                                continue
+                            name = f"pc-{int(time.time() * 1000)}.png"
+                            if push_file_to_phone(name, data, ACTION_IMPORT_IMAGE):
+                                seen.add(digest)
+                                record_seen("images", digest)
+                                log(f"「{TAB_IMAGE}」新图 → 手机「图片」页（{len(data) // 1024} KB）")
+                            else:
+                                all_ok = False  # 失败不推进基线，下轮重试
+                        if first:
+                            save_state({**load_state(), "seen_images": list(seen)[-2000:]})
+                            log(f"「{TAB_IMAGE}」基线已登记（不推送）")
+                    else:
+                        all_ok = False
+                if all_ok:
+                    baseline[TAB_IMAGE] = count
+        except Exception as error:
+            log(f"图片标签推送异常（忽略继续）: {error}")
 
 
 if __name__ == "__main__":

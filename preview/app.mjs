@@ -949,8 +949,9 @@ function clipRow(text,i,managing){
   const picked=managing&&state.clipSelected.includes(text);
   const cls=managing?(picked?'clip-text clip-pick picked':'clip-text clip-pick'):'clip-text';
   const action=managing?'clip-pick':'paste';
+  // 「电脑」标签放在条目文字后面（尾部），不挡正文开头
   const tag=pcClips.includes(text)?'<span class="clip-source-tag">电脑</span>':'';
-  const body=managing?`<span class="pick-box" aria-hidden="true">${picked?'✓':''}</span>${tag}<span class="pick-text">${esc(text)}</span>`:`${tag}${esc(text)}`;
+  const body=managing?`<span class="pick-box" aria-hidden="true">${picked?'✓':''}</span><span class="pick-text">${esc(text)}</span>${tag}`:`${esc(text)}${tag}`;
   return button(text,action,text,cls,body).replace(`data-action="${action}"`,`data-action="${action}" data-index="${i}"`);
 }
 function clipConfirmPanel(){ return sheet(state.clipConfirm.title,[['clip-confirm-ok','确定','danger']]); }
