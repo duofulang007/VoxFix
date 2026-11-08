@@ -91,6 +91,8 @@ class ScreenshotCaptureOverlay(
     private val background = ImageView(context).apply { scaleType = ImageView.ScaleType.FIT_XY; setImageBitmap(image) }
     private var picked: Rect? = null
     private var busy = false
+    /** 忙碌来源（原版按来源把转圈画在对应按钮上）：ocr=识别文字，qr=二维码识别。 */
+    private var busySource: String? = null
     private var recapturing = false
     internal val isRecapturing get() = recapturing
     internal var onRecaptureRequested: (() -> Unit)? = null
@@ -422,6 +424,8 @@ class ScreenshotCaptureOverlay(
         }
     }
     private val qrButton=ImageView(context)
+    /** 原版 AdButton::setBusy：识别/翻译/二维码忙碌时蓝色转圈盖在按钮图标上。 */
+    private val busySpinner=ScreenshotBusySpinner(context)
     /** A09：二维码标记层。原版标记只在「编辑选区 + 移动工具」下显示，手机同条件。 */
     private val qrMarkers=ScreenshotQrMarkers(context).apply {
         visibility=View.GONE
@@ -598,6 +602,7 @@ class ScreenshotCaptureOverlay(
         if(showQr) refreshQrMarkers() else if(!qrVisible) qrMarkers.setMarkers(emptyList())
         val qrLabel=if(qrVisible) "隐藏二维码标记" else "显示二维码标记"
         qrButton.contentDescription=qrLabel; qrButton.tooltipText=qrLabel
+        updateBusySpinner()
         if(showSelection && regionOperation==null) picked?.let {
             status.text=selectionSize(it)
             status.contentDescription="${selectionSize(it)}，点击切换单位"
@@ -1154,10 +1159,10 @@ class ScreenshotCaptureOverlay(
         if(busy || translating || editing) return
         val bitmap=try { currentImage() } catch(error: Exception) { showFeedback("无法读取选区，请重试"); return }
         val token=++actionGeneration
-        busy=true; sync()
+        busy=true; busySource="qr"; sync()
         ScreenshotBarcode.scan(bitmap,{ hits ->
             if(token==actionGeneration && !disposed) {
-                busy=false
+                busy=false; busySource=null
                 // 主栏识码同时留下标记数据，选区栏的显隐开关随后可直接用。
                 qrHits=hits
                 val codes=hits.map { it.text }.distinct()
@@ -1182,10 +1187,10 @@ class ScreenshotCaptureOverlay(
         }
         val bitmap=try { currentImage() } catch(error: Exception) { showFeedback("无法读取选区，请重试"); return }
         val token=++actionGeneration
-        busy=true; sync()
+        busy=true; busySource="qr"; sync()
         ScreenshotBarcode.scan(bitmap,{ hits ->
             if(token==actionGeneration && !disposed) {
-                busy=false; qrHits=hits
+                busy=false; busySource=null; qrHits=hits
                 if(hits.isEmpty()) showFeedback("未识别到二维码或条码，可重新框选") else qrVisible=true
                 sync()
             }
@@ -1199,6 +1204,27 @@ class ScreenshotCaptureOverlay(
         if (crop==null || width<=0 || height<=0) { qrMarkers.setMarkers(emptyList()); return }
         qrMarkers.setMarkers(ScreenshotQrMarkers.centersFor(
             qrHits.orEmpty(),crop,width,height,image.width,image.height))
+    }
+    /** 原版 setOcrBusy/setQrBusy/翻译 streaming：把蓝色转圈盖在对应按钮的图标之上。 */
+    private fun updateBusySpinner() {
+        val target: android.view.View? = when {
+            translating -> translateAction
+            busy && busySource == "ocr" -> recognizeAction
+            (busy && busySource == "qr") || qrScanning -> qrButton.takeIf { it.visibility == View.VISIBLE }
+            else -> null
+        }?.takeIf { it.visibility == View.VISIBLE && it.width > 0 }
+        if (target == null) {
+            busySpinner.visibility = View.GONE
+            return
+        }
+        val view = IntArray(2); target.getLocationInWindow(view)
+        val host = IntArray(2); root.getLocationInWindow(host)
+        if (busySpinner.parent == null) {
+            root.addView(busySpinner, FrameLayout.LayoutParams(dp(24), dp(24)))
+        }
+        busySpinner.visibility = View.VISIBLE
+        busySpinner.translationX = (view[0] - host[0] + target.paddingLeft).toFloat()
+        busySpinner.translationY = (view[1] - host[1] + target.paddingTop).toFloat()
     }
     private fun canShowQrMarkers() = qrVisible && moveMode && !busy && !editing && !translating &&
         annotationEditor==null && drawing.tool==null && regionOperation==null && picked!=null
@@ -1288,11 +1314,12 @@ class ScreenshotCaptureOverlay(
         setEditing(false)
         translateAfterRecognition = forTranslation
         discardRecognition = false
-        busy = true; status.text = "正在识别…"; status.visibility = View.VISIBLE
+        busy = true; busySource = "ocr"
+        status.text = "正在识别…"; status.visibility = View.VISIBLE
         sync(); recognize(Rect(region))
     }
     fun textResult(blocks: List<ScreenshotTextBlock>) {
-        busy = false
+        busy = false; busySource = null
         val translateNext = translateAfterRecognition
         translateAfterRecognition = false
         if (discardRecognition) {

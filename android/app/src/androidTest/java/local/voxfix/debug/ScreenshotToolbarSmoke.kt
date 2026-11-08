@@ -252,6 +252,12 @@ object ScreenshotToolbarSmoke {
             (field(direct,"selector") as ScreenTextRegionView).selectRegion(Rect(60,60,1020,600))
             (find(directRoot,"翻译文字") as ImageView).performClick()
             check(recognitionCalls==1 && directTranslator.calls==0) { "translation must recognize internally first" }
+            // 原版 setOcrBusy：识别进行中蓝色转圈盖在触发按钮的图标上（AdButton::drawSpinner）。
+            val spinner=find(directRoot,"操作进行中")
+            check(spinner!=null && spinner.visibility==View.VISIBLE) { "OCR busy spinner missing" }
+            check(spinner.layoutParams.width==(24*test.targetContext.resources.displayMetrics.density).toInt()) {
+                "spinner 尺寸不是 24dp：${spinner.layoutParams.width}"
+            }
             check((find(directRoot,"取消翻译") as ImageView).isEnabled) { "OCR stage cannot cancel" }
             (find(directRoot,"取消翻译") as ImageView).performClick()
             direct.textResult(listOf(ScreenshotTextBlock(60,60,1020,140,"取消后的迟到识别")))
@@ -263,7 +269,9 @@ object ScreenshotToolbarSmoke {
             direct.textResult(listOf(ScreenshotTextBlock(60,60,1020,140,"直接翻译")))
             check(recognitionCalls==3 && directTranslator.calls==1) { "direct translation did not continue after OCR" }
             check((field(direct,"translationLayer") as View).visibility==View.VISIBLE)
-            evidence.add("translate=direct,cancel=ocr,edit=viewport-scroll")
+            val lateSpinner=find(directRoot,"操作进行中")
+            check(lateSpinner==null || lateSpinner.visibility!=View.VISIBLE) { "busy spinner 未随结果消失" }
+            evidence.add("translate=direct,cancel=ocr,edit=viewport-scroll,spinner=ok")
 
             // Bottom-edge selection: the toolbar flips above the region, so the card must flip too.
             val bottomTranslator = FakeTranslator("The meeting starts at 9:30 AM in Room 1204. Please bring the monthly report and confirm the budget before Friday.")
