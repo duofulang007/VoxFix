@@ -7,22 +7,25 @@ import android.graphics.ColorFilter
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.drawable.Drawable
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 
 /**
- * 忙碌转圈 Drawable，逐条对齐原版 `AdButton::drawSpinner`（ant_design_qt button.cpp:1943-1952）：
- * - 270° 圆弧，起始角 = 90 − 共享相位；相位 = (nowMs % spinnerCycleMs) × 360 / 1000（默认周期 1000ms）；
- * - side = max(8, min(w,h) − 2)（逻辑像素），线宽 = clamp(min(w,h) × 0.08, 1, 2)，圆帽圆角；
- * - 颜色 = 按钮文字色 × 0.72 alpha；原版工具栏文字即主题主色（用户观察到的"蓝色转圈"）。
- * 作为按钮图标使用（原版语义：busy 时图标被转圈替代），scheduleSelf 循环重绘。
+ * 忙碌转圈（用户对照原版确认的样式）：**蓝色圆底 + 白色圆弧旋转**。
+ * 只是交互动画，不反映真实进度；配合各按钮的"最短显示时长"使用（见 Action.setBusy）。
+ * 弧：270°，起始角 = 90 − 相位；相位 = (nowMs % 1000) × 360 / 1000（原版 spinnerCycleMs 默认 1000）。
  */
 internal class ScreenshotBusySpinnerDrawable(context: Context) : Drawable() {
     private val density = context.resources.displayMetrics.density
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val discPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = DISC
+    }
+    private val arcPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-        color = COLOR
+        color = Color.WHITE
     }
     private var running = false
     private val ticker = object : Runnable {
@@ -45,23 +48,26 @@ internal class ScreenshotBusySpinnerDrawable(context: Context) : Drawable() {
         val w = bounds.width().toFloat(); val h = bounds.height().toFloat()
         val min = minOf(w, h)
         if (min <= 0f) return
-        val side = maxOf(8f * density, min - 2f * density)
-        val stroke = (min / density * 0.08f).coerceIn(1f, 2f) * density
-        paint.strokeWidth = stroke
         val cx = w / 2f; val cy = h / 2f
+        val radius = min / 2f - density
+        canvas.drawCircle(cx, cy, radius, discPaint)
+        arcPaint.strokeWidth = 2f * density
+        val arcRadius = radius * 0.62f
         val angle = ((SystemClock.uptimeMillis() % CYCLE_MS) * 360 / CYCLE_MS).toInt()
-        canvas.drawArc(cx - side / 2f, cy - side / 2f, cx + side / 2f, cy + side / 2f,
-            (90 - angle).toFloat(), -270f, false, paint)
+        canvas.drawArc(cx - arcRadius, cy - arcRadius, cx + arcRadius, cy + arcRadius,
+            (90 - angle).toFloat(), -270f, false, arcPaint)
     }
 
-    override fun setAlpha(alpha: Int) { paint.alpha = alpha }
-    override fun setColorFilter(filter: ColorFilter?) { paint.colorFilter = filter }
+    override fun setAlpha(alpha: Int) {
+        discPaint.alpha = alpha; arcPaint.alpha = alpha
+    }
+    override fun setColorFilter(filter: ColorFilter?) {}
     @Deprecated("Deprecated in Java")
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
 
     companion object {
         const val CYCLE_MS = 1000L
-        /** 颜色 = 主色 #1677FF × 0.72 alpha（原版 busyIndicatorColor = 文字色 × 0.72）。 */
-        val COLOR = Color.argb(Math.round(255 * 0.72f), 0x16, 0x77, 0xFF)
+        /** 蓝色圆底 = 主题主色 #1677FF；弧为白色。 */
+        val DISC = Color.rgb(0x16, 0x77, 0xFF)
     }
 }

@@ -93,6 +93,8 @@ class ScreenshotCaptureOverlay(
     private var busy = false
     /** 忙碌来源（原版按来源把转圈画在对应按钮上）：ocr=识别文字，qr=二维码识别。 */
     private var busySource: String? = null
+    /** 转圈最短显示时长：它只是交互反馈，不反映真实加载进度。 */
+    private val SPINNER_MIN_MS = 900L
     private var recapturing = false
     internal val isRecapturing get() = recapturing
     internal var onRecaptureRequested: (() -> Unit)? = null
@@ -1208,6 +1210,7 @@ class ScreenshotCaptureOverlay(
     /** 原版 setOcrBusy/setQrBusy/翻译 streaming：把蓝色转圈盖在对应按钮的图标之上。 */
     /** 原版 setOcrBusy/setQrBusy/翻译 streaming：忙碌时对应按钮的图标被蓝色转圈替代。 */
     private fun updateBusySpinner() {
+        // 转圈只是交互动画：识别在识别按钮、翻译在翻译按钮、二维码在二维码按钮，各归各位。
         recognizeAction.setBusy(busy && busySource == "ocr")
         translateAction.setBusy(translating)
         val qrBusy = (busy && busySource == "qr") || qrScanning
@@ -1821,16 +1824,25 @@ class ScreenshotCaptureOverlay(
         var active = false
         private val idleIcon = icon
         private val busyDrawable = ScreenshotBusySpinnerDrawable(context)
-        /** 原版 AdButton::setBusy：忙碌时按钮图标被蓝色转圈替代，结束后恢复。 */
+        private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
+        private var busyShownAt = 0L
+        private val restoreBusy = Runnable { restoreIcon() }
+        /** 忙碌结束后的图标恢复；转圈只是交互动画，太短也要看得见（最短显示 900ms）。 */
+        private fun restoreIcon() {
+            busyDrawable.stop(); setImageResource(idleIcon)
+        }
         fun setBusy(value: Boolean) {
+            uiHandler.removeCallbacks(restoreBusy)
             if (value) {
                 if (drawable !== busyDrawable) {
+                    busyShownAt = android.os.SystemClock.uptimeMillis()
                     busyDrawable.start(); setImageDrawable(busyDrawable)
-                    // ImageView 级 ColorFilter 会残留到新 drawable，把蓝弧染白；转圈固定主色。
+                    // ImageView 级 ColorFilter 会残留到新 drawable；转圈自带蓝底白弧，不吃染色。
                     colorFilter = null
                 }
             } else if (drawable === busyDrawable) {
-                busyDrawable.stop(); setImageResource(idleIcon)
+                val elapsed = android.os.SystemClock.uptimeMillis() - busyShownAt
+                uiHandler.postDelayed(restoreBusy, (SPINNER_MIN_MS - elapsed).coerceAtLeast(0))
             }
         }
         init {

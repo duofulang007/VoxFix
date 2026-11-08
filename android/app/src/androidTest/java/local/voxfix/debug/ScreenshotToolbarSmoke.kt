@@ -262,13 +262,16 @@ object ScreenshotToolbarSmoke {
             recognizeView.draw(Canvas(solo))
             val soloDir=java.io.File(appContextForSpinner(test).getExternalFilesDir(null), "parity").apply { mkdirs() }
             solo.compress(Bitmap.CompressFormat.PNG,100,java.io.File(soloDir,"busy-spinner-solo.png").outputStream())
-            var bluePixels=0
+            // 样式（用户对照原版确认）：蓝色圆底 + 白色圆弧。
+            var discPixels=0; var whitePixels=0
             for(dy in 0..83) for(dx in 0..83) {
                 val pixel=solo.getPixel(dx,dy)
-                if(Color.blue(pixel)>150 && Color.blue(pixel)>Color.red(pixel)+40 && Color.alpha(pixel)>0) bluePixels++
+                if(pixel==Color.rgb(0x16,0x77,0xFF)) discPixels++
+                if(Color.red(pixel)>240 && Color.green(pixel)>240 && Color.blue(pixel)>240) whitePixels++
             }
             solo.recycle()
-            check(bluePixels>200) { "转圈没有画出来：按钮蓝色像素 $bluePixels" }
+            check(discPixels>1500) { "转圈缺少蓝色圆底：$discPixels" }
+            check(whitePixels>60) { "转圈缺少白色圆弧：$whitePixels" }
             (find(directRoot,"取消翻译") as ImageView).performClick()
             direct.textResult(listOf(ScreenshotTextBlock(60,60,1020,140,"取消后的迟到识别")))
             check(directTranslator.calls==0 && field(direct,"textLayer")==null) { "cancelled OCR started translation" }
@@ -279,7 +282,8 @@ object ScreenshotToolbarSmoke {
             direct.textResult(listOf(ScreenshotTextBlock(60,60,1020,140,"直接翻译")))
             check(recognitionCalls==3 && directTranslator.calls==1) { "direct translation did not continue after OCR" }
             check((field(direct,"translationLayer") as View).visibility==View.VISIBLE)
-            check(recognizeIcon.drawable !is ScreenshotBusySpinnerDrawable) { "busy spinner 未随结果消失" }
+            // 转圈只是交互动画且有 900ms 最短显示：结果到达后允许短暂残留，由 Handler 恢复。
+            check(recognizeIcon.drawable is ScreenshotBusySpinnerDrawable) { "最短显示期间转圈应保留" }
             evidence.add("translate=direct,cancel=ocr,edit=viewport-scroll,spinner=ok")
 
             // Bottom-edge selection: the toolbar flips above the region, so the card must flip too.
