@@ -14,7 +14,8 @@ internal class ScreenshotKeyboard(context: Context) {
     val store = ScreenshotStore(context)
     fun list(): JSONObject = JSONObject().put("items", JSONArray().apply {
         store.entries().forEach { put(JSONObject().put("id",it.id).put("width",it.width).put("height",it.height)
-            .put("createdAt",it.createdAt).put("kind",it.kind.name.lowercase()).put("editable",true)) }
+            .put("createdAt",it.createdAt).put("kind",it.kind.name.lowercase()).put("editable",true)
+            .put("source",it.source)) }
     })
     fun route(uri: Uri): WebResourceResponse? {
         if (uri.scheme != "https" || uri.host != "voxfix.local" || !uri.path.orEmpty().startsWith("/screenshots/")) return null

@@ -232,6 +232,11 @@ let phraseGroups = [{name:'常用语',items:['常用语示例','example@example.
 let nativeClipSignature='';
 if(nativeIme){clips=[];phraseGroups=[{name:'常用语',items:[]}];}
 try{const saved=JSON.parse(localStorage.getItem('voxfix-snippets-v1'));if(saved){clips=validateSnippets(saved.clips);phraseGroups=migratePhraseGroups(saved.phrases);if(/^[a-f0-9]{64}$/.test(saved.clipSignature||''))nativeClipSignature=saved.clipSignature;}}catch{/* Keep malformed stored data untouched. */}
+// 「电脑」来源标记：由电脑推送导入的文本条目集合。平行于 clips 存放（voxfix-pc-clips-v1），
+// 不改 snippets 结构；同内容在手机上再次复制不摘牌（标记记录内容来源）。
+let pcClips=[];
+try{const saved=JSON.parse(localStorage.getItem('voxfix-pc-clips-v1'));if(Array.isArray(saved))pcClips=saved.filter(item=>typeof item==='string');}catch{/* 损坏数据视为无标记 */}
+const savePcClips=()=>{try{localStorage.setItem('voxfix-pc-clips-v1',JSON.stringify(pcClips.slice(-200)));}catch{/* 空间不足时标记不入盘，渲染回退为无标签 */}};
 function currentGroup(){return phraseGroups[Math.min(state.clipGroup,phraseGroups.length-1)]||phraseGroups[0];}
 function currentList(){return state.clipTab==='images'?[]:state.clipTab==='clipboard'?clips:currentGroup().items;}
 function allPhrases(){return flattenPhrases(phraseGroups);}
@@ -944,7 +949,8 @@ function clipRow(text,i,managing){
   const picked=managing&&state.clipSelected.includes(text);
   const cls=managing?(picked?'clip-text clip-pick picked':'clip-text clip-pick'):'clip-text';
   const action=managing?'clip-pick':'paste';
-  const body=managing?`<span class="pick-box" aria-hidden="true">${picked?'✓':''}</span><span class="pick-text">${esc(text)}</span>`:esc(text);
+  const tag=pcClips.includes(text)?'<span class="clip-source-tag">电脑</span>':'';
+  const body=managing?`<span class="pick-box" aria-hidden="true">${picked?'✓':''}</span>${tag}<span class="pick-text">${esc(text)}</span>`:`${tag}${esc(text)}`;
   return button(text,action,text,cls,body).replace(`data-action="${action}"`,`data-action="${action}" data-index="${i}"`);
 }
 function clipConfirmPanel(){ return sheet(state.clipConfirm.title,[['clip-confirm-ok','确定','danger']]); }
@@ -1043,7 +1049,8 @@ function imageHeader(tabs){
 }
 function imageCard(item){
   const selected=screenshotSelected.includes(item.id),remove=screenshotRemove===item.id;
-  return `<div class="clip-image-tile${selected?' picked':''}">${button(`${screenshotManage?'选择':'查看'}图片 ${item.width}×${item.height}`,screenshotManage?'image-toggle':'image-open',item.id,'clip-image-card',`<img src="${screenshotUrl(item.id,'thumb')}" loading="lazy" draggable="false" alt="截图缩略图"><span class="image-dimensions">${item.width} × ${item.height}</span>${screenshotManage?`<span class="image-pick" aria-hidden="true">${selected?icon('check'):''}</span>`:''}`,screenshotManage?`aria-pressed="${selected}"`:'')}${remove&&!screenshotManage?button('删除这张图片','image-delete',item.id,'image-remove',icon('close')):''}</div>`;
+  const tag=item.source==='pc'?'<span class="clip-source-tag clip-source-float">电脑</span>':'';
+  return `<div class="clip-image-tile${selected?' picked':''}">${tag}${button(`${screenshotManage?'选择':'查看'}图片 ${item.width}×${item.height}`,screenshotManage?'image-toggle':'image-open',item.id,'clip-image-card',`<img src="${screenshotUrl(item.id,'thumb')}" loading="lazy" draggable="false" alt="截图缩略图"><span class="image-dimensions">${item.width} × ${item.height}</span>${screenshotManage?`<span class="image-pick" aria-hidden="true">${selected?icon('check'):''}</span>`:''}`,screenshotManage?`aria-pressed="${selected}"`:'')}${remove&&!screenshotManage?button('删除这张图片','image-delete',item.id,'image-remove',icon('close')):''}</div>`;
 }
 function imageDeleteConfirmation(){return `<div class="clip-menu-backdrop image-confirm-backdrop" data-action="image-cancel"><div class="image-confirm" role="dialog" aria-modal="true" aria-label="确认删除图片"><strong>删除这 ${screenshotDelete.length} 张图片？</strong><p>删除后无法恢复</p><div>${button('取消','image-cancel','','text-action')}${button('确定删除','image-delete-confirm','','text-action danger')}</div></div></div>`;}
 function clearImageHold(){clearTimeout(imageHold?.timer);imageHold=null;}
@@ -2314,8 +2321,9 @@ if(nativeIme){
   globalThis.voxfixVoiceListening=()=>{const session=state.voice;if(!session||!['loading','cancel'].includes(session.phase))return;session.micReady=true;session.phase=gesture?.cancel?'cancel':'listening';paintVoice();};
   globalThis.voxfixVoiceText=text=>{const session=state.voice;if(!session?.local||session.local!==editor)return;session.text=text;if(session.phase!=='cancel')applyText(voiceResult(session.snapshot,text));};
   globalThis.voxfixVoiceLevel=level=>setVoiceLevel(level/12);
-  globalThis.voxfixClipboard=(text,signature=text,explicit=false)=>{
+  globalThis.voxfixClipboard=(text,signature=text,explicit=false,fromPc=false)=>{
     latestClipboard=privateField?'':text;syncClipboardReference();
+    if(fromPc&&text.trim()&&!pcClips.includes(text)){pcClips=[...pcClips,text];savePcClips();}
     if(privateField||!explicit&&signature===nativeClipSignature)return;
     const previous=clips,previousSignature=nativeClipSignature;
     nativeClipSignature=signature;

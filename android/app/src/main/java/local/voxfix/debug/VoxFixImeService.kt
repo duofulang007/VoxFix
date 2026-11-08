@@ -510,9 +510,11 @@ open class VoxFixImeService : InputMethodService() {
         val clipboard = getSystemService(ClipboardManager::class.java)
         val clip = clipboard.primaryClip
         val text = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString().orEmpty().take(10000)
+        // 描述标签 == PC_CLIP_LABEL（电脑推送导入）时，前端给这条记录画「电脑」来源标签。
+        val fromPc = clip?.description?.label == ClipboardImportReceiver.PC_CLIP_LABEL
         val eventKey = "$text\u0000${clip?.description?.timestamp ?: 0L}"
         val signature = java.security.MessageDigest.getInstance("SHA-256").digest(eventKey.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
-        script("globalThis.voxfixClipboard?.(${JSONObject.quote(text)},${JSONObject.quote(signature)},$explicit)")
+        script("globalThis.voxfixClipboard?.(${JSONObject.quote(text)},${JSONObject.quote(signature)},$explicit,$fromPc)")
     }
 
     override fun onStartInput(info: EditorInfo, restarting: Boolean) {

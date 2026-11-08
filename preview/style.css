@@ -187,6 +187,9 @@
 .clip-image-card{display:block;width:100%;padding:5px;min-width:0;text-align:center;border-radius:6px;user-select:none;-webkit-touch-callout:none;touch-action:pan-y}
 .clip-image-card img{display:block;width:100%;height:88px;object-fit:contain;border-radius:5px}
 .clip-image-card .image-dimensions{font-size:11px;color:var(--muted)}
+/* 「电脑」来源标签：电脑推送导入的剪贴板条目（文本行内、图片悬浮左上角），风格对齐 group-pill/tabs-pill 的胶囊基调 */
+.clip-source-tag{flex:0 0 auto;display:inline-block;vertical-align:1px;margin-right:7px;padding:1px 7px;border:1px solid var(--line);border-radius:999px;background:var(--func-bg);color:var(--muted);font-size:10px;line-height:1.5;white-space:nowrap}
+.clip-source-float{position:absolute;left:7px;top:7px;z-index:1;margin-right:0;background:var(--key-bg)}
 .image-pick{position:absolute;right:7px;top:7px;width:21px;height:21px;border:1.5px solid var(--muted);border-radius:50%;background:var(--key-bg);color:white;display:grid;place-items:center}
 .picked .image-pick{background:var(--accent);border-color:var(--accent)}
 .keyboard .image-pick svg{width:16px;height:16px}

@@ -25,7 +25,9 @@ class ScreenshotStore(private val context: Context) {
     enum class Kind { IMAGE, PROJECT }
     data class Entry(
         val id: String, val createdAt: Long, val width: Int, val height: Int, val bytes: Long,
-        val kind: Kind = Kind.IMAGE, val revision: Int = 0
+        val kind: Kind = Kind.IMAGE, val revision: Int = 0,
+        /** 来源标记：空=手机本地截图，"pc"=电脑推送导入（前端据此画「电脑」标签）。 */
+        val source: String = ""
     )
     private val directory = File(context.filesDir, "screenshot-clipboard")
     private val projects get() = File(directory, "projects")
@@ -45,14 +47,16 @@ class ScreenshotStore(private val context: Context) {
             Entry(row.getString("id").also(::validateId), row.getLong("createdAt"), row.getInt("width"), row.getInt("height"),
                 row.getLong("bytes"),
                 if (version >= 2) runCatching { Kind.valueOf(row.optString("kind","IMAGE")) }.getOrDefault(Kind.IMAGE) else Kind.IMAGE,
-                if (version >= 2) row.optInt("revision",0) else 0)
+                if (version >= 2) row.optInt("revision",0) else 0,
+                row.optString("source",""))
         }
     }
 
     private fun writeEntries(entries: List<Entry>) {
         val rows = JSONArray()
         entries.forEach { rows.put(JSONObject().put("id",it.id).put("createdAt",it.createdAt).put("width",it.width)
-            .put("height",it.height).put("bytes",it.bytes).put("kind",it.kind.name).put("revision",it.revision)) }
+            .put("height",it.height).put("bytes",it.bytes).put("kind",it.kind.name).put("revision",it.revision)
+            .put("source",it.source)) }
         val stream = index.startWrite()
         try {
             stream.write(JSONObject().put("version",2).put("items",rows).toString().toByteArray(Charsets.UTF_8))
@@ -66,7 +70,7 @@ class ScreenshotStore(private val context: Context) {
         check(others.sumOf { it.bytes } + entry.bytes <= 128L * 1024 * 1024) { "截图剪贴板已满，请先删除不需要的截图" }
     }
 
-    fun save(image: Bitmap): Entry {
+    fun save(image: Bitmap, source: String = ""): Entry {
         require(image.width > 0 && image.height > 0 && image.width.toLong() * image.height <= 16_000_000) { "截图尺寸过大，请缩小选区" }
         check(directory.isDirectory || directory.mkdirs()) { "无法创建截图剪贴板" }
         val id = UUID.randomUUID().toString().replace("-", "")
@@ -82,7 +86,7 @@ class ScreenshotStore(private val context: Context) {
             val preview = thumbnailBitmap(image)
             try { FileOutputStream(thumb).use { check(preview.compress(Bitmap.CompressFormat.WEBP,80,it)) { "缩略图保存失败" } } }
             finally { if (preview !== image) preview.recycle() }
-            val entry = Entry(id,System.currentTimeMillis(),image.width,image.height,original.length())
+            val entry = Entry(id,System.currentTimeMillis(),image.width,image.height,original.length(),source=source)
             synchronized(lock) {
                 val old = readEntries()
                 budget(old,entry,null)

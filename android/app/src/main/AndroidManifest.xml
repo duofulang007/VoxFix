@@ -25,6 +25,12 @@
         <activity android:name=".DictionaryActivity" android:exported="false" />
         <provider android:name=".MemeContentProvider" android:authorities="${applicationId}.memes" android:exported="false" android:grantUriPermissions="true" />
         <provider android:name=".ScreenshotContentProvider" android:authorities="${applicationId}.screenshots" android:exported="false" android:grantUriPermissions="true" />
+        <receiver android:name=".ClipboardImportReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="local.voxfix.debug.IMPORT_TEXT" />
+                <action android:name="local.voxfix.debug.IMPORT_IMAGE" />
+            </intent-filter>
+        </receiver>
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
