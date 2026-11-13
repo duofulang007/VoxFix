@@ -19,13 +19,21 @@ internal class ScreenshotStitch(private val frameWidth: Int, private val frameHe
         private set
     var height = 0
         private set
+    /** Native diagnostics from the last push: [event,w,h,hasOffset,offset,score,second,coverage,fixed,inliers,features]. */
+    var lastMetrics: IntArray? = null
+        private set
     private val frameExtent = if (horizontal) frameWidth else frameHeight
-    private val maxExtent = minOf(20_000, 16_000_000 / if (horizontal) frameHeight else frameWidth)
+    // 2026-11-09 用户要求扩大单次截取面积：瓦片画布按像素驻留内存（extent×宽×4 字节），
+    // 1080 宽下 40000 行 ≈ 160MB 原生内存，K60 可承受；渲染按带（BAND_ROWS）出图不受影响。
+    private val maxExtent = minOf(40_000, 40_000_000 / if (horizontal) frameHeight else frameWidth)
+    /** 当前宽度的单段上限（px），UI 用于显示“已拼接 / 上限”。 */
+    val limitExtent get() = maxExtent
     private val extent get() = if (horizontal) width else height
     val atLimit get() = extent > 0 && extent + frameExtent > maxExtent
 
     fun push(buffer: ByteBuffer, rowStride: Int, offset: Int): Int {
         val frame = checkNotNull(pushFrame(handle, buffer, rowStride, offset, horizontal)) { "长截图拼接失败" }
+        lastMetrics = frame
         width = frame[1]; height = frame[2]
         return frame[0]
     }

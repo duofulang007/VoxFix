@@ -43,6 +43,16 @@ def build(folder, name, crates, dependencies=""):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(data)
 
+    # VOXFIX 手机侧扩展：实时采集的位移连续性先验（覆盖上游 estimator.rs）。
+    # 见 docs/长截屏三档滚动-实现原理与优化-2026-11-09.md §6.1；上游文件每次从
+    # 固定提交重抽，此覆盖随后重新应用，保证可重复构建。
+    overlay = ROOT / "tools" / "snow-stitch-mobile" / "estimator.rs"
+    if overlay.exists():
+        for crate in crates:
+            crate_target = build_dir / "crates" / crate / "src" / "estimator.rs"
+            if crate_target.exists():
+                crate_target.write_bytes(overlay.read_bytes())
+
     manifest = build_dir / "Cargo.toml"
     members = ", ".join(f'"crates/{crate}"' for crate in crates)
     manifest.write_text(

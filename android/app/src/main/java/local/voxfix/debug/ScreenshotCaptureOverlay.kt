@@ -1,5 +1,6 @@
 package local.voxfix.debug
 
+import android.animation.ValueAnimator
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -12,15 +13,22 @@ import android.graphics.PorterDuff
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
+import android.os.SystemClock
+import android.view.GestureDetector
+import android.view.VelocityTracker
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
+import kotlin.math.abs
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.OverScroller
 import android.widget.Space
 import android.widget.TextView
 
@@ -78,6 +86,61 @@ class ScreenshotCaptureOverlay(
         const val COLOR_PANEL = 0xFF1C1C1E.toInt()
     }
     private fun dp(n: Int) = (n * context.resources.displayMetrics.density).toInt()
+    /**
+     * 画布基准尺寸 = 整幅（contain）。之后所有缩放都走 View 变换（scaleX/scaleY），
+     * 不触发 relayout，所以能跟手；子图层（选框/绘制/文字）的「图片→视图」线性映射
+     * 一个字节都不用改——系统会把触摸坐标按变换反算，放大后画笔照样落在正确像素上。
+     */
+    private fun applyCanvasBase(w: Int, h: Int) {
+        if (w <= 0 || h <= 0 || image.width <= 0 || image.height <= 0) return
+        val fit = ScreenshotCanvasFit.of(image.width, image.height, w, h)
+        canvasFit = fit
+        // 窗口尺寸中途变化（旋转/分屏/键盘）会改变 maxZoom：旧 zoom 可能越界，先夹回合法区间，
+        // 否则捏合的 coerceIn 区间与档位错位，会卡在「缩不回去」的状态。
+        zoom = ScreenshotCanvasZoom.clamp(zoom, maxZoom)
+        // 单位按整幅宽度冻结：缩放不改变已存笔画的像素粗细与字号。
+        drawing.freezeUnits((image.width * fit.containScale).toInt().coerceAtLeast(1))
+        val targetW = maxOf(1,(image.width*fit.containScale).toInt())
+        val targetH = maxOf(1,(image.height*fit.containScale).toInt())
+        val params = (content.layoutParams as? FrameLayout.LayoutParams)
+            ?: FrameLayout.LayoutParams(targetW,targetH)
+        if (params.width != targetW || params.height != targetH || params.gravity != Gravity.CENTER) {
+            params.width = targetW; params.height = targetH; params.gravity = Gravity.CENTER
+            content.layoutParams = params
+        }
+        // 换窗口尺寸时保留「看到哪一块」的相对位置，而不是跳回整幅。
+        // content.left 要等这一帧 layout 完才有值，变换必须在布局后再算一遍，
+        // 否则居中偏移会被重复计入 translation，画布整体跑偏。
+        applyTransform()
+        content.post {
+            if (!disposed) {
+                // 首次布局把内容放到视口中央；之后的位置交给人手，不再自动归位。
+                if (!canvasPositioned) {
+                    canvasPositioned = true
+                    val rw = root.width.toFloat(); val rh = root.height.toFloat()
+                    content.translationX = (rw - content.width * zoom) / 2f - content.left
+                    content.translationY = (rh - content.height * zoom) / 2f - content.top
+                }
+                applyTransform()
+            }
+        }
+        if (fit.canFitWidth && !zoomHinted) {
+            zoomHinted = true
+            root.post { if (!disposed) showFeedback("双指缩放可看细节，双击在整幅与满宽之间切换") }
+        }
+    }
+    private var zoomHinted = false
+    private var canvasPositioned = false
+    private var canvasFit: ScreenshotCanvasFit.Fit? = null
+    /** 1f = 整幅；上限由「适应宽度」倍数推出，长图也能放到 1:1 以上。 */
+    private var zoom = 1f
+    private var zoomAnimator: ValueAnimator? = null
+    /** 双击动画/惯性仍在跑时，任何新的 zoom/translation 写者都要先停掉它：
+     *  动画每帧绝对写 translation，与捏合/拖动的增量写叠加就是重影与「捏不动」。 */
+    private fun cancelZoomAnimation() { zoomAnimator?.cancel() }
+    private val maxZoom: Float get() = ScreenshotCanvasZoom.maxZoom(canvasFit)
+    /** 「适应宽度」对应的缩放倍数（整幅为 1）。 */
+    private val widthZoom: Float get() = ScreenshotCanvasZoom.widthZoom(canvasFit)
     private val root: FrameLayout = object : FrameLayout(context) {
         override fun dispatchTouchEvent(event: MotionEvent): Boolean { interaction(); return super.dispatchTouchEvent(event) }
         override fun onMeasure(widthSpec: Int, heightSpec: Int) {
@@ -85,9 +148,358 @@ class ScreenshotCaptureOverlay(
             if (width > 0 && toolbarAvailable != width-bars.left-bars.right-dp(16)) rebuildToolbar(width)
             super.onMeasure(widthSpec,heightSpec)
         }
+        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+            super.onSizeChanged(w,h,oldw,oldh)
+            applyCanvasBase(w,h)
+        }
     }
-    // Background, selection and results move together when the keyboard covers the edited line.
-    private val content = FrameLayout(context)
+    /**
+     * 画布手势：双指捏合缩放 + 双指平移，单指在放大后拖动平移，双击切换整幅/满宽。
+     * 与编辑工具的交接：双指优先，子层收到 CANCEL（绘图层会丢弃当前这一笔）；
+     * 单指仅在「没有绘制工具，或工具是 SELECT」时接管，避免和画线/框选抢。
+     */
+    private val content: FrameLayout = object : FrameLayout(context) {
+        private var downX = 0f
+        private var downY = 0f
+        private var lastX = 0f
+        private var lastY = 0f
+        private var panning = false
+        private var twoFinger = false
+        private var lastFocusX = 0f
+        private var lastFocusY = 0f
+        private var lastTapAt = 0L
+        private var lastTapX = 0f
+        private var lastTapY = 0f
+        /** 本次按下是否够格记为一次「画布点按」：只有画布手势准入成立（无工具、非编辑态等）
+         *  才参与双击判定。SELECT 下点选元素的两次点按不会再去触发整幅↔满宽跳变。 */
+        private var tapEligible = false
+        // 惯性滑动：长图一甩就滚过去，和看照片一致。速度来自 VelocityTracker（屏幕像素/s），
+        // OverScroller 只负责衰减曲线；到边界时 translation 被 clamp 顶住，检测到不再移动就停。
+        private val flingScroller = OverScroller(context)
+        private val flingVelocity = VelocityTracker.obtain()
+        private var flingLastX = 0
+        private var flingLastY = 0
+        override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    // 检测器需要完整的 DOWN → POINTER_DOWN → MOVE 序列才能建立跨度。
+                    scaleDetector.onTouchEvent(event)
+                    // 按下即打断惯性，手指接住画面；并从头收集速度。
+                    cancelZoomAnimation()
+                    flingScroller.abortAnimation()
+                    flingVelocity.clear(); flingVelocity.addMovement(event)
+                    gestureActive = true
+                    downX = event.x; downY = event.y; lastX = event.x; lastY = event.y
+                    panning = false; twoFinger = false
+                    tapEligible = canPanCanvas() && !busy && !editing
+                    // 双击＝整幅 ↔ 满宽。手势要在拦截层判定：单指未被拦截时子层消费事件，
+                    // 外面那层 GestureDetector 根本收不到第二次 DOWN。
+                    val now = SystemClock.uptimeMillis()
+                    val doubleTap = now - lastTapAt < 280L &&
+                        abs(event.x - lastTapX) < dp(32) && abs(event.y - lastTapY) < dp(32)
+                    if (doubleTap) {
+                        lastTapAt = 0L
+                        handleDoubleTap(event.x, event.y)
+                        return true
+                    }
+                    return false
+                }
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    if (event.pointerCount >= 2) {
+                        // 拦截后 POINTER_DOWN 不会再进 onTouchEvent，必须在这里喂一次，
+                        // 否则 ScaleGestureDetector 拿不到初始跨度，双指只剩平移、没有缩放。
+                        scaleDetector.onTouchEvent(event)
+                        twoFinger = true
+                        lastFocusX = focusX(event); lastFocusY = focusY(event)
+                        // 第二根手指按下就接管：正在画的一笔由子层 CANCEL 丢弃，不会留半截。
+                        return true
+                    }
+                    return false
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (twoFinger) return true
+                    if (panning) return true
+                    if (!canPanCanvas()) return false
+                    val dx = event.x - downX; val dy = event.y - downY
+                    val slop = ViewConfiguration.get(context).scaledTouchSlop
+                    if (dx * dx + dy * dy > slop * slop) {
+                        panning = true
+                        lastX = event.x; lastY = event.y
+                        return true
+                    }
+                    return false
+                }
+                MotionEvent.ACTION_UP -> {
+                    // 只有够格的画布点按才参与双击判定：intercept 层总能收到 UP（哪怕被子层消费），
+                    // SELECT 下连续两次点选元素若不设门槛会被误判成双击，画布突然跳档。
+                    if (tapEligible && !panning && !twoFinger) {
+                        lastTapAt = SystemClock.uptimeMillis(); lastTapX = event.x; lastTapY = event.y
+                    }
+                    tapEligible = false
+                    panning = false; twoFinger = false
+                    gestureActive = false
+                    placeControls()
+                    return false
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    tapEligible = false
+                    panning = false; twoFinger = false
+                    gestureActive = false
+                    placeControls()
+                    return false
+                }
+            }
+            return false
+        }
+        override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+            super.onLayout(changed, l, t, r, b)
+            // 居中偏移是父布局给的；位置一变 translation 的基准就变了，必须按新偏移重算。
+            if (changed) post { if (!disposed) applyTransform() }
+        }
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            // POINTER_DOWN 已在拦截层喂过：这里再喂一次会让检测器重复建立跨度。
+            if (event.actionMasked != MotionEvent.ACTION_POINTER_DOWN) scaleDetector.onTouchEvent(event)
+            flingVelocity.addMovement(event)
+            when (event.actionMasked) {
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    twoFinger = event.pointerCount >= 2
+                    lastFocusX = focusX(event); lastFocusY = focusY(event)
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (twoFinger) {
+                        // 双指整体移动 = 平移；缩放交给 scaleDetector（它只报比例变化）。
+                        val fx = focusX(event); val fy = focusY(event)
+                        panByScreen((fx - lastFocusX) * zoom, (fy - lastFocusY) * zoom)
+                        lastFocusX = fx; lastFocusY = fy
+                        return true
+                    }
+                    if (panning) {
+                        // dx/dy 是内容局部坐标（系统按 scale 反算过），乘 zoom 换成屏幕像素。
+                        panByScreen((event.x - lastX) * zoom, (event.y - lastY) * zoom)
+                        // VERBOSE 才输出：INFO 级每帧一条会自己把拖动拖慢。
+                        if (android.util.Log.isLoggable("VoxFix", android.util.Log.VERBOSE)) {
+                            android.util.Log.v("VoxFix", "CANVAS_DY ty=${content.translationY} zoom=$zoom")
+                        }
+                        lastX = event.x; lastY = event.y
+                        return true
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_POINTER_UP -> {
+                    // 抬起一根后剩下的那根继续拖，不跳。
+                    if (event.pointerCount <= 2) {
+                        twoFinger = false
+                        val remaining = if (event.actionIndex == 0) 1 else 0
+                        lastX = event.getX(remaining); lastY = event.getY(remaining)
+                        panning = canPanCanvas()
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_UP -> {
+                    val wasZoomed = twoFinger
+                    twoFinger = false
+                    if (panning && !wasZoomed && canPanCanvas()) {
+                        // 松手甩出去：OverScroller 按系统的摩擦曲线衰减，速度够才启动。
+                        flingVelocity.computeCurrentVelocity(1000, 10000f)
+                        val vx = flingVelocity.xVelocity
+                        val vy = flingVelocity.yVelocity
+                        // VERBOSE：INFO 每次松手一条不算重，但保持全文件一致，只在排障时打开。
+                        if (android.util.Log.isLoggable("VoxFix", android.util.Log.VERBOSE)) {
+                            android.util.Log.v("VoxFix", "CANVAS_FLING vx=$vx vy=$vy")
+                        }
+                        if (abs(vx) > 100f || abs(vy) > 100f) startFling(vx.toInt(), vy.toInt())
+                    }
+                    panning = false
+                    flingVelocity.clear()
+                    gestureActive = false
+                    placeControls()
+                    return true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    twoFinger = false; panning = false
+                    flingScroller.abortAnimation()
+                    flingVelocity.clear()
+                    gestureActive = false
+                    placeControls()
+                    return true
+                }
+            }
+            return true
+        }
+        /**
+         * 惯性帧循环。不能用 computeScroll：content 没有背景（willNotDraw=true），
+         * invalidate 不触发绘制管线，fling 会原地不动；postOnAnimation 是自驱的，每帧回调。
+         * 到边界（translation 被 clamp 顶住）就停，不贴着墙打转。
+         */
+        private fun startFling(vx: Int, vy: Int) {
+            flingLastX = 0; flingLastY = 0
+            // 双击动画还在跑就先停：绝对写 translation 与 fling 的增量写不能同时存在。
+            cancelZoomAnimation()
+            gestureActive = true
+            flingScroller.fling(0, 0, vx, vy, -1_000_000, 1_000_000, -1_000_000, 1_000_000)
+            postOnAnimation { flingTick() }
+        }
+        private fun flingTick() {
+            if (!flingScroller.computeScrollOffset()) {
+                gestureActive = false
+                placeControls()
+                return
+            }
+            val dx = flingScroller.currX - flingLastX
+            val dy = flingScroller.currY - flingLastY
+            flingLastX = flingScroller.currX; flingLastY = flingScroller.currY
+            val beforeX = content.translationX
+            val beforeY = content.translationY
+            panByScreen(dx.toFloat(), dy.toFloat())
+            val stuckX = dx != 0 && content.translationX == beforeX
+            val stuckY = dy != 0 && content.translationY == beforeY
+            if ((stuckX && stuckY) || (stuckX && dy == 0) || (stuckY && dx == 0)) {
+                flingScroller.abortAnimation()
+                gestureActive = false
+                placeControls()
+                return
+            }
+            postOnAnimation { flingTick() }
+        }
+        private fun focusX(event: MotionEvent): Float {
+            var sum = 0f
+            for (i in 0 until event.pointerCount) sum += event.getX(i)
+            return sum / event.pointerCount.coerceAtLeast(1)
+        }
+        private fun focusY(event: MotionEvent): Float {
+            var sum = 0f
+            for (i in 0 until event.pointerCount) sum += event.getY(i)
+            return sum / event.pointerCount.coerceAtLeast(1)
+        }
+    }
+    /** 双指捏合：以双指中心为锚点缩放，手感与看照片一致。 */
+    private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScale(detector: ScaleGestureDetector): Boolean {
+            if (busy) return false
+            // 捏合开始即接管：双击动画若还在跑，它的绝对写入会和这里的增量写打架
+            // （表现为重影/捏不动）。写者唯一化——先停动画，本次手势成为唯一来源。
+            cancelZoomAnimation()
+            gestureActive = true
+            val next = ScreenshotCanvasZoom.pinchTarget(zoom, detector.scaleFactor, maxZoom)
+            if (next == zoom) return true
+            val ratio = next / zoom
+            // focusX/focusY 是内容局部坐标（系统已按 scale 反算过），
+            // 要让焦点下的像素不动，平移只需补上 focus*(1-ratio)——不要再减去 content.left。
+            applyCanvasState(next,
+                content.translationX + detector.focusX * (1f - ratio),
+                content.translationY + detector.focusY * (1f - ratio))
+            return true
+        }
+    })
+    /** 双击：整幅 ↔ 适应宽度；两者相同（普通截图）时不做无意义的缩放。 */
+    /**
+     * 单指平移的准入：无工具时整条手势交给画布（含惯性）。
+     * SELECT 时不拦截——点到对象由选择逻辑接管，点到空白由绘图层经 onCanvasPan 转发平移，
+     * 这样"拖对象"和"拖画布"互不抢。
+     */
+    private fun canPanCanvas(): Boolean =
+        drawing.tool == null && !editing && annotationEditor == null && stackPopup == null &&
+            regionOperation == null && !moveMode && !selector.selectionInProgress
+
+    /** 双击：整幅 ↔ 满宽，以双击点为锚点放大，和看照片一致。 */
+    private fun handleDoubleTap(x: Float, y: Float) {
+        if (busy || editing) return
+        val target = ScreenshotCanvasZoom.doubleTapTarget(zoom, canvasFit) ?: return
+        animateZoom(target, x, y)
+    }
+
+    /**
+     * 屏幕像素平移。单指拖动先把局部 dx 乘 zoom（见 onTouchEvent）；
+     * 双指平移、惯性 fling 的增量本来就是屏幕像素，直接传进来。
+     * 平移也是 touch 驱动的写者：拖动接手时先停掉可能还在跑的双击动画，并持有 gestureActive
+     * （动画取消回调会把它复位，这里重新置位，保证手势期间 placeControls 不插进来重排）。
+     */
+    private fun panByScreen(dx: Float, dy: Float) {
+        cancelZoomAnimation()
+        gestureActive = true
+        applyCanvasState(zoom, content.translationX + dx, content.translationY + dy)
+    }
+    /** zoom 与 translation 的唯一落点：clamp + applyTransform 只在这里发生，捏合/拖动/双击动画共用。 */
+    private fun applyCanvasState(newZoom: Float, tx: Float, ty: Float) {
+        zoom = ScreenshotCanvasZoom.clamp(newZoom, maxZoom)
+        content.translationX = tx
+        content.translationY = ty
+        applyTransform()
+    }
+    /** 松手吸附已移除：吸附会在整幅与满宽之间来回跳，编辑长图时根本没法停在中间比例。
+     *  档位切换只通过双击显式触发。 */
+    /** [focusX]/[focusY] 是内容局部坐标（双击点、或默认画布中心），动画期间保持该点不动。 */
+    private fun animateZoom(target: Float, focusX: Float = content.width / 2f, focusY: Float = content.height / 2f) {
+        cancelZoomAnimation()
+        val start = zoom
+        if (start <= 0f || target <= 0f) { applyCanvasState(target, content.translationX, content.translationY); placeControls(); return }
+        val baseX = content.translationX
+        val baseY = content.translationY
+        gestureActive = true
+        zoomAnimator = ValueAnimator.ofFloat(start, target).apply {
+            duration = 220
+            addUpdateListener {
+                val value = it.animatedValue as Float
+                val ratio = value / start
+                applyCanvasState(value, baseX + focusX * (1f - ratio), baseY + focusY * (1f - ratio))
+            }
+            // 自然结束与被取消（捏合/拖动接管）都会走到这里：gestureActive 复位与控制栏
+            // 重排收口在一个地方，取消路径不再泄漏 gestureActive（否则 placeControls 永远不跑）。
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    gestureActive = false
+                    placeControls()
+                }
+            })
+            start()
+        }
+    }
+    /**
+     * 应用变换并夹住边界。区间是连续的：内容左/上边缘的屏幕位置被限制在
+     * 「min(0, 视口-内容) … max(0, 视口-内容)」，跨过"内容恰好占满视口"的临界点时
+     * 不再在「居中/贴边」两个分支之间跳变——那个跳变就是用户看到的抽搐。
+     */
+    private fun applyTransform() {
+        val rw = root.width.toFloat()
+        val rh = root.height.toFloat()
+        if (rw <= 0f || rh <= 0f) return
+        content.pivotX = 0f; content.pivotY = 0f
+        content.scaleX = zoom; content.scaleY = zoom
+        // 选框把手等屏幕尺寸 UI 依赖当前缩放，保持它们视觉大小恒定。
+        drawing.viewZoom = zoom
+        val scaledW = content.width * zoom
+        val scaledH = content.height * zoom
+        val leftBase = content.left.toFloat()
+        val topBase = content.top.toFloat()
+        val loX = minOf(0f, rw - scaledW); val hiX = maxOf(0f, rw - scaledW)
+        val loY = minOf(0f, rh - scaledH); val hiY = maxOf(0f, rh - scaledH)
+        content.translationX = (leftBase + content.translationX).coerceIn(loX, hiX) - leftBase
+        content.translationY = (topBase + content.translationY).coerceIn(loY, hiY) - topBase
+        // 手势进行中不整栏重排：placeControls 要 measure 二级栏两次并 requestLayout，
+        // 每帧跑一遍就是缩放/拖动抽搐与"重影"（掉帧把旧帧留在屏幕上）的主因。
+        // 双击动画期间 gestureActive 可能已被松手复位，用 isRunning 再挡一层。
+        if (!gestureActive && zoomAnimator?.isRunning != true) scheduleControls()
+    }
+    /** 手势结束后的整栏重排走这里；手势中由各入口置位。 */
+    private var gestureActive = false
+    private var controlsSyncQueued = false
+    private fun scheduleControls() {
+        if (controlsSyncQueued) return
+        controlsSyncQueued = true
+        root.post {
+            controlsSyncQueued = false
+            if (!disposed) placeControls()
+        }
+    }
+    // 画布在 root 中的原点与比例：root↔图片坐标的所有换算都走这里，
+    // 否则画布被缩放/平移后，工具栏和状态条会锚在错误位置。
+    private fun canvasLeft() = content.left.toFloat() + content.translationX
+    private fun canvasTop() = content.top.toFloat() + content.translationY
+    private fun canvasScaleX() = if (image.width > 0) content.width * zoom / image.width else 1f
+    private fun canvasScaleY() = if (image.height > 0) content.height * zoom / image.height else 1f
+    private fun canvasX(imageX: Int) = canvasLeft() + imageX * canvasScaleX()
+    private fun canvasY(imageY: Int) = canvasTop() + imageY * canvasScaleY()
     private val background = ImageView(context).apply { scaleType = ImageView.ScaleType.FIT_XY; setImageBitmap(image) }
     private var picked: Rect? = null
     private var busy = false
@@ -174,6 +586,68 @@ class ScreenshotCaptureOverlay(
     }.apply {
         orientation=LinearLayout.VERTICAL; background=surface(PANEL_RADIUS); elevation=dp(6).toFloat()
         contentDescription="当前工具详细操作"; visibility=View.GONE
+    }
+    /**
+     * 二级栏的头部：左边把手可拖动，右边是显眼的「收起」。
+     * 收起后面板让位，主栏下方保留一个「详细设置 ▴」把它叫回来，避免入口消失。
+     */
+    private var secondaryCollapsed = false
+    private var secondaryWanted = false
+    private var secondaryManual: android.graphics.Point? = null
+    private var secondaryDragBaseX = 0f
+    private var secondaryDragBaseY = 0f
+    private var secondaryDragFromX = 0f
+    private var secondaryDragFromY = 0f
+    private val secondaryGrip = TextView(context).apply {
+        text = "⋮⋮"; textSize = 14f; setTextColor(COLOR_TEXT)
+        gravity = Gravity.CENTER; setPadding(dp(10),0,dp(10),0)
+        contentDescription = "拖动详细栏"
+    }
+    private val secondaryCollapse = TextView(context).apply {
+        text = "收起 ▾"; textSize = 12f; setTextColor(COLOR_PRIMARY)
+        setPadding(dp(12),dp(5),dp(12),dp(5)); background = surface(PANEL_RADIUS)
+        isClickable = true; isFocusable = true
+        contentDescription = "收起详细设置"; tooltipText = contentDescription
+        setOnClickListener { setSecondaryCollapsed(true) }
+    }
+    private val secondaryHeader = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(4),dp(4),dp(8),dp(2))
+        addView(secondaryGrip, LinearLayout.LayoutParams(-2,-1))
+        addView(View(context), LinearLayout.LayoutParams(0,1,1f))
+        addView(secondaryCollapse, LinearLayout.LayoutParams(-2,dp(30)))
+        setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    secondaryDragFromX = event.rawX; secondaryDragFromY = event.rawY
+                    secondaryDragBaseX = secondaryPanel.translationX; secondaryDragBaseY = secondaryPanel.translationY
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    secondaryManual = android.graphics.Point(
+                        (secondaryDragBaseX + event.rawX - secondaryDragFromX).toInt(),
+                        (secondaryDragBaseY + event.rawY - secondaryDragFromY).toInt())
+                    placeControls(); true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
+                else -> false
+            }
+        }
+    }
+    /** 收起后的重新展开入口，和「显示选择栏」同款，保证二级栏不会变成死路。 */
+    private val secondaryRestore = TextView(context).apply {
+        text = "详细设置 ▴"; textSize = 12f; setTextColor(COLOR_PRIMARY)
+        setPadding(dp(10),dp(6),dp(10),dp(6)); background = surface(PANEL_RADIUS)
+        elevation = dp(6).toFloat(); isClickable = true; isFocusable = true
+        contentDescription = "展开详细设置"; tooltipText = contentDescription
+        visibility = View.GONE
+        setOnClickListener { setSecondaryCollapsed(false) }
+    }
+    private fun setSecondaryCollapsed(value: Boolean) {
+        if (secondaryCollapsed == value) return
+        secondaryCollapsed = value
+        if (!value) secondaryManual = null   // 重新展开时回到「贴着一级栏」，不留在被拖走的位置
+        sync()
     }
     private val resultActions=LinearLayout(context).apply {
         gravity=Gravity.CENTER_VERTICAL; setPadding(dp(8),dp(4),dp(8),dp(4)); visibility=View.GONE
@@ -297,7 +771,6 @@ class ScreenshotCaptureOverlay(
             sync()
         }
     }
-
     private fun selectionSize(rect: Rect): String {
         if (!logicalUnits) return "选区 ${rect.width()} × ${rect.height()} px"
         val density = context.resources.displayMetrics.density
@@ -447,6 +920,8 @@ class ScreenshotCaptureOverlay(
         isHorizontalScrollBarEnabled=false; visibility=View.GONE
     }
     init {
+        // 等比画布缩小后四周会露出画布外的区域，统一用纯黑，避免透出宿主应用造成「画面错乱」。
+        root.setBackgroundColor(0xFF000000.toInt())
         root.addView(content,FrameLayout.LayoutParams(-1,-1))
         drawing.colorSamplingBase={ if(resultLayer.visibility==View.VISIBLE) (if(showingTranslation) translationLayer else textLayer)?.render(Rect(0,0,image.width,image.height)) else null }
         content.addView(background,FrameLayout.LayoutParams(-1,-1))
@@ -465,6 +940,8 @@ class ScreenshotCaptureOverlay(
         root.addView(smartBar,FrameLayout.LayoutParams(-2,-2))
         detailBody.addView(drawingStyles,LinearLayout.LayoutParams(0,-2,1f))
         detailBody.addView(selectSideActions,LinearLayout.LayoutParams(dp(76),-2))
+        // 头部放在最上面：拖动把手 + 收起按钮（收起后由 secondaryRestore 叫回来）。
+        secondaryPanel.addView(secondaryHeader,0,LinearLayout.LayoutParams(-1,dp(36)))
         secondaryPanel.addView(detailBody,LinearLayout.LayoutParams(-1,-2))
         initSelectionActions()
         selectActionsScroll.addView(selectActions,android.widget.FrameLayout.LayoutParams(-2,-2))
@@ -479,6 +956,7 @@ class ScreenshotCaptureOverlay(
         resultActionsScroll.addView(resultActions,android.widget.FrameLayout.LayoutParams(-2,-2))
         secondaryPanel.addView(resultActionsScroll,LinearLayout.LayoutParams(-1,-2))
         root.addView(secondaryPanel,FrameLayout.LayoutParams(dp(320),-2))
+        root.addView(secondaryRestore,FrameLayout.LayoutParams(-2,-2))
         root.addView(hideBarRestore,FrameLayout.LayoutParams(-2,-2))
         drawing.onTextRequest = { point,index ->
             beginDrawingText(point,index)
@@ -507,9 +985,20 @@ class ScreenshotCaptureOverlay(
         drawing.savedFontUnit=document.fontUnit
         drawing.history.load(document.objects, document.watermark ?: ScreenshotWatermark())
         drawing.invalidate()
-        picked?.let { selector.selectRegion(Rect(it)) }
-        captureRegion?.let { if (it.isCustom) selector.showRegion(it.path()) else selector.showParts(it.rects) }
-        drawing.tool=ScreenshotDrawingTool.SELECT
+        // 编辑已有图片时不要再画「选区框 + 遮罩」：那层框会把整张图圈起来，
+        // 看上去像"整个屏幕都被选中了"。picked 仍保留（保存裁切与绘图范围要用）。
+        picked?.let { drawing.region = Rect(it) }
+        // 恢复上次的工具与样式：用户上次在画箭头/写字，重开就还是那支笔。
+        // 没记录工具时保持「无工具」：打开长图第一件事是滑动浏览，别让 SELECT 挡住平移。
+        // 顺序不能反：先设工具（setter 会按 本地记忆/默认值 取样式并把上一支笔存入缓存），
+        // 再用文档里的 activeStyle 覆盖——反过来的话 setter 会把文档样式顶成旧记忆。
+        // 文档样式随后留在 toolStyles 里，后续任何一次切走再切回都拿得回来。
+        drawing.tool = document.activeTool?.let { name ->
+            runCatching { ScreenshotDrawingTool.valueOf(name) }.getOrNull()
+        }
+        document.activeStyle?.let { drawing.restoreStyle(it) }
+        drawing.onCanvasPan = ::panByScreen
+        rebuildDrawingStyles()
         status.visibility=View.GONE
         val text=document.text ?: return
         if(text.blocks.isEmpty()) return
@@ -530,15 +1019,26 @@ class ScreenshotCaptureOverlay(
         showingTranslation=text.mode==ScreenshotTextMode.TRANSLATION && translationLayer!=null
         if(showingTranslation) { textLayer?.visibility=View.GONE; showPairBar() } else translationLayer?.visibility=View.GONE
         resultLayer.visibility=View.VISIBLE
-        selector.visibility=View.VISIBLE
+        // 选区层只服务"新截图框选"，编辑已有图片时整层隐藏：画面上只剩图片本身与工具。
+        selector.visibility=View.GONE
     }
     /** The style card only exists when the active tool really has options; an empty card is a white bar. */
     private fun drawingStyleCardVisible(): Boolean =
         drawing.tool!=null && annotationEditor==null &&
             (drawingStyles.getChildAt(0) as? ScreenshotDrawingControls)?.hasContent==true
+    /** 模块开关关闭的工具从工具条消失；其余可见性规则不变。 */
+    private fun moduleHiddenActions(): Set<ScreenshotAction> {
+        val hidden = HashSet<ScreenshotAction>()
+        if (!Modules.isOn(context, Module.TRANSLATE)) hidden.add(ScreenshotAction.TRANSLATE)
+        if (!Modules.isOn(context, Module.RECORD)) hidden.add(ScreenshotAction.RECORD)
+        if (!Modules.isOn(context, Module.SCROLL)) hidden.add(ScreenshotAction.SCROLL)
+        if (!Modules.isOn(context, Module.WATERMARK)) hidden.add(ScreenshotAction.WATERMARK)
+        return hidden
+    }
     private fun state() = ScreenshotToolbarState(
         picked != null,textLayer != null,busy,editing,showingOriginal,translating || translateAfterRecognition,showingTranslation,
-        drawing.history.canUndo || drawing.history.canRedo
+        drawing.history.canUndo || drawing.history.canRedo, moduleHiddenActions(),
+        projectMode = project != null
     )
     private fun sync() {
         val state = state()
@@ -546,7 +1046,8 @@ class ScreenshotCaptureOverlay(
         recognizeAction.active=resultTool==ScreenshotAction.RECOGNIZE
         editAction.active = editing
         translateAction.active = resultTool==ScreenshotAction.TRANSLATE
-        if (busy || editing || translating || resultTool!=null || moveMode) drawing.tool = null
+        // 识别/编辑/选区态下不允许绘图工具驻留；幂等 guard 防御未来的回调链改动。
+        if ((busy || editing || translating || resultTool!=null || moveMode) && drawing.tool!=null) drawing.tool = null
         drawingActions.forEach { it.active = ScreenshotDrawingTools.actions[drawing.tool] == it.action }
         // 上游「显示原图」只隐藏识别内容容器，画布上的对象照常可见。
         drawing.visibility = if (showingTranslation || translating || editing) View.INVISIBLE else View.VISIBLE
@@ -610,8 +1111,11 @@ class ScreenshotCaptureOverlay(
             status.contentDescription="${selectionSize(it)}，点击切换单位"
             status.visibility=if(selectionReadoutHidden) View.GONE else View.VISIBLE
         }
-        secondaryPanel.visibility=if(annotationEditor==null && (drawingStyles.visibility==View.VISIBLE || resultActions.visibility==View.VISIBLE ||
-            selectActionsScroll.visibility==View.VISIBLE || pairBar?.visibility==View.VISIBLE)) View.VISIBLE else View.GONE
+        secondaryWanted = annotationEditor==null && (drawingStyles.visibility==View.VISIBLE || resultActions.visibility==View.VISIBLE ||
+            selectActionsScroll.visibility==View.VISIBLE || pairBar?.visibility==View.VISIBLE)
+        // 收起只是把面板藏起来，入口换成主栏下方的「详细设置 ▴」，不是把功能丢掉。
+        secondaryPanel.visibility = if (secondaryWanted && !secondaryCollapsed) View.VISIBLE else View.GONE
+        secondaryRestore.visibility = if (secondaryWanted && secondaryCollapsed) View.VISIBLE else View.GONE
         if (working || showingTranslation) status.visibility = View.GONE
         if (qrMarkers.visibility==View.VISIBLE) refreshQrMarkers()
         syncSmartSelection()
@@ -674,7 +1178,9 @@ class ScreenshotCaptureOverlay(
     }
     /** Edit-selection mode mirrors Snow Shot's move tool: the bar owns the add/subtract controls. */
     private fun toggleMoveMode() {
-        if(busy || translating || editing) return
+        // 再编辑模式下选区层已隐藏（restoreProject 里 selector.visibility=GONE），
+        // 编辑选区只会得到一条按钮全部无效的操作条：双保险拦截（可见性已在 ToolbarState 挡了）。
+        if(busy || translating || editing || project!=null) return
         moveMode=!moveMode
         if(!moveMode) setRegionOperation(null)
         else {
@@ -932,8 +1438,8 @@ class ScreenshotCaptureOverlay(
             grid.addView(row)
         }
         val safeBottom = root.height-maxOf(bars.bottom,imeBottom)-dp(8)
-        val regionTop = picked?.let { it.top*root.height/image.height } ?: toolbar.translationY.toInt()
-        val regionBottom = picked?.let { it.bottom*root.height/image.height } ?: regionTop
+        val regionTop = picked?.let { canvasY(it.top).toInt() } ?: toolbar.translationY.toInt()
+        val regionBottom = picked?.let { canvasY(it.bottom).toInt() } ?: regionTop
         val toolbarAbove = toolbar.translationY+toolbarHeight <= regionTop
         val toolbarBelow = toolbar.translationY >= regionBottom
         val topEdge = if (toolbarAbove) toolbar.translationY.toInt() else regionTop
@@ -984,7 +1490,11 @@ class ScreenshotCaptureOverlay(
     }
     private fun selectDrawing(tool: ScreenshotDrawingTool) {
         if (busy || translating || editing || picked == null) return
-        if(moveMode) { moveMode=false; setRegionOperation(null) }
+        // 切工具前必须退出区域加/减（不只是编辑选区）：残留的 opMode 会把 canPanCanvas 卡住、
+        // selector 还在改选区，工具栏却已高亮新工具——「工具栏冲突/反直觉」的直接来源之一。
+        if(moveMode || regionOperation!=null) { moveMode=false; setRegionOperation(null) }
+        // 换工具时二级栏回到「展开 + 贴着主栏」：第一次点开永远是展开的，收起状态不跨工具残留。
+        if (drawing.tool != tool) { secondaryCollapsed = false; secondaryManual = null }
         resultTool=null; showingOriginal=false; showingTranslation=false
         resultLayer.visibility=if(textLayer!=null) View.VISIBLE else View.INVISIBLE
         textLayer?.visibility=View.VISIBLE; translationLayer?.visibility=View.GONE; pairBar?.visibility=View.GONE
@@ -1557,10 +2067,10 @@ class ScreenshotCaptureOverlay(
             showFeedback("复制失败，请重试")
         }
     }
-    private fun showFeedback(message: String) {
-        val view = feedback ?: TextView(context).apply {
+    private fun showFeedback(message: String) {        val view = feedback ?: TextView(context).apply {
             textSize = 12f
-            setTextColor(0xE0000000.toInt())
+            // 面板背景是深色 COLOR_PANEL，文字必须用白色——2026-11-09 用户反馈黑底黑字看不清。
+            setTextColor(COLOR_TEXT)
             setPadding(dp(10),dp(6),dp(10),dp(6))
             background = surface(PANEL_RADIUS)
             elevation = dp(6).toFloat()
@@ -1612,7 +2122,7 @@ class ScreenshotCaptureOverlay(
                 }
             },80)
         } else {
-            layer?.endEditing(); hideKeyboard(); content.translationY = 0f
+            layer?.endEditing(); hideKeyboard(); applyTransform()
         }
         sync()
     }
@@ -1621,9 +2131,12 @@ class ScreenshotCaptureOverlay(
     }
     private fun applyImeShift() {
         val layer = if (showingTranslation) translationLayer else textLayer
-        content.translationY = 0f
+        // 不重置缩放/平移：那是用户选定的视角，键盘弹起只改文字层可视范围。
+        applyTransform()
         if (!editing || layer == null || root.height == 0) return
-        layer.setEditingViewport(bars.top+dp(8), root.height-maxOf(imeBottom,bars.bottom)-dp(96))
+        // 视口按画布坐标传（root 像素 / zoom），缩放或平移后编辑框才夹在正确位置。
+        layer.setEditingViewport(((bars.top+dp(8)-canvasTop())/zoom).toInt(),
+            ((root.height-maxOf(imeBottom,bars.bottom)-dp(96)-canvasTop())/zoom).toInt())
     }
     /** The grip moves the whole bar instead of letting the auto anchor decide again. */
     private fun dragToolbar(dx: Float,dy: Float) {
@@ -1639,11 +2152,14 @@ class ScreenshotCaptureOverlay(
         val safeTop=bars.top+dp(8)
         val safeBottom=height-maxOf(bars.bottom,imeBottom)-dp(8)
         val rect=picked
-        val left=rect?.let { it.left*width/image.width } ?: (width-toolbarWidth)/2
-        val top=rect?.let { it.top*height/image.height } ?: safeBottom
-        val bottom=rect?.let { it.bottom*height/image.height } ?: safeBottom
+        // 画布可能不是满宽（等比居中）且有垂直平移，锚点必须走画布坐标而不是 root 宽高。
+        val left=rect?.let { canvasX(it.left).toInt() } ?: (width-toolbarWidth)/2
+        val top=rect?.let { canvasY(it.top).toInt() } ?: safeBottom
+        val bottom=rect?.let { canvasY(it.bottom).toInt() } ?: safeBottom
         val browsing = selector.smartEnabled && smartPath.isNotEmpty()
-        val anchorKey="$width,$height,$rect,${bars.top},${bars.bottom},$imeBottom,$toolbarWidth,$toolbarHeight,$browsing"
+        // 锚点缓存必须包含画布偏移与缩放：缩放/平移后选区的屏幕位置变了，工具栏要跟着重算，
+        // 否则会停在首次布局前算出的旧位置。
+        val anchorKey="$width,$height,$rect,${canvasLeft()},${canvasTop()},$zoom,${bars.top},${bars.bottom},$imeBottom,$toolbarWidth,$toolbarHeight,$browsing"
         val manual=toolbarManual
         if(manual!=null) {
             toolbarAnchor=android.graphics.Point(
@@ -1672,7 +2188,7 @@ class ScreenshotCaptureOverlay(
         if (smartBar.visibility == View.VISIBLE) {
             val safe = ScreenshotDocRect(bars.left+dp(8), safeTop, width-bars.right-dp(8), safeBottom)
             val selection = rect?.let {
-                ScreenshotDocRect(left, top, it.right*width/image.width, bottom)
+                ScreenshotDocRect(left, top, canvasX(it.right).toInt(), bottom)
             }
             val panel = if (toolbar.visibility == View.VISIBLE)
                 ScreenshotDocRect(x, y, x+toolbarWidth, y+toolbarHeight) else null
@@ -1698,15 +2214,35 @@ class ScreenshotCaptureOverlay(
         if(secondaryMaxHeight!=detailHeight) { secondaryMaxHeight=detailHeight; secondaryPanel.requestLayout() }
         secondaryPanel.measure(View.MeasureSpec.makeMeasureSpec(detailWidth,View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(detailHeight,View.MeasureSpec.AT_MOST))
-        secondaryPanel.translationX=x.coerceAtMost(width-bars.right-detailWidth-dp(8)).coerceAtLeast(bars.left+dp(8)).toFloat()
-        secondaryPanel.translationY=detailTop.toFloat()
+        // 用户拖过就听用户的；没拖过就贴着主栏（下沿放不下改贴上沿）。
+        val secondaryPos = secondaryManual
+        if (secondaryPos != null) {
+            secondaryPanel.translationX = secondaryPos.x.coerceIn(bars.left+dp(8),
+                maxOf(bars.left+dp(8), width-bars.right-detailWidth-dp(8))).toFloat()
+            secondaryPanel.translationY = secondaryPos.y.coerceIn(safeTop,
+                maxOf(safeTop, safeBottom-detailHeight)).toFloat()
+        } else {
+            secondaryPanel.translationX=x.coerceAtMost(width-bars.right-detailWidth-dp(8)).coerceAtLeast(bars.left+dp(8)).toFloat()
+            secondaryPanel.translationY=detailTop.toFloat()
+        }
+        // 收起后的「详细设置 ▴」跟主栏走，和「显示选择栏」同一套锚点。
+        secondaryRestore.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(dp(48),View.MeasureSpec.AT_MOST))
+        secondaryRestore.translationX=x.coerceAtMost(width-bars.right-secondaryRestore.measuredWidth-dp(8))
+            .coerceAtLeast(bars.left+dp(8)).toFloat()
+        secondaryRestore.translationY=(y+toolbarHeight+dp(8))
+            .coerceAtMost(maxOf(safeTop,safeBottom-secondaryRestore.measuredHeight)).toFloat()
         annotationInput?.place(safeTop,safeBottom)
         annotationEditor?.takeIf { annotationInput==null }?.let { panel ->
             val panelWidth=minOf(dp(360),width-bars.left-bars.right-dp(16)).coerceAtLeast(1)
             val panelHeight=minOf(dp(240),(safeBottom-safeTop-dp(8)).coerceAtLeast(dp(80)))
             panel.layoutParams=FrameLayout.LayoutParams(panelWidth,panelHeight)
-            panel.translationX=(bars.left+(width-bars.left-bars.right-panelWidth)/2).toFloat()
-            panel.translationY=(safeBottom-panelHeight).coerceAtLeast(safeTop).toFloat()
+            // 默认贴着主栏：下方放得下就接下沿，放不下就移到上沿，不再固定吊在屏幕底部。
+            val belowTop = y + toolbarHeight + dp(8)
+            val fitsBelow = belowTop + panelHeight <= safeBottom
+            panel.translationX=x.coerceAtMost(width-bars.right-panelWidth-dp(8)).coerceAtLeast(bars.left+dp(8)).toFloat()
+            panel.translationY=(if (fitsBelow) belowTop else y-panelHeight-dp(8))
+                .coerceIn(safeTop,maxOf(safeTop,safeBottom-panelHeight)).toFloat()
         }
         hideBarRestore.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.AT_MOST),
             View.MeasureSpec.makeMeasureSpec(dp(48),View.MeasureSpec.AT_MOST))
@@ -1751,7 +2287,9 @@ class ScreenshotCaptureOverlay(
     private fun currentDocument(region: Rect)=ScreenshotDocument(image.width,image.height,
         ScreenshotDocRect.of(region),drawing.history.items,currentText(),captureRegion?.rects?.map(ScreenshotDocRect::of).orEmpty(),
         captureRegion?.takeIf { it.isCustom }?.let { region -> region.toJson().toString() },
-        drawing.pixelUnit,drawing.fontUnit,drawing.watermark.takeIf { it.isVisible() })
+        drawing.pixelUnit,drawing.fontUnit,drawing.watermark.takeIf { it.isVisible() },
+        // 记下当前工具与样式，重开这张图时可以接着用同一把笔，而不是回到默认红箭头。
+        drawing.tool?.name,drawing.style)
     private fun currentText(): ScreenshotDocumentText? {
         val layer=textLayer ?: return null
         val blocks=layer.currentBlocks()
@@ -1818,6 +2356,8 @@ class ScreenshotCaptureOverlay(
     }
     fun dismiss(windowManager: WindowManager) {
         disposed=true; actionGeneration++; actionWorker.shutdown()
+        // 画布动画随窗口一起收：双击缩放动画若继续跑，会在已移除的 root 上回调 placeControls。
+        cancelZoomAnimation()
         drawTemplatePopup?.dismiss()
         closeDrawingEditor(); drawing.close()
         closeStack()

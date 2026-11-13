@@ -62,6 +62,16 @@ object ScreenshotDocumentSmoke {
         val migratedStrength = migrated.objects.first { it.tool == ScreenshotDrawingTool.FILTER }.style.strength
         check(kotlin.math.abs(migratedStrength - 0.5f) < 1e-4f) { "旧工程强度没有迁移：$migratedStrength" }
 
+        // 上次使用的工具与样式也要往返；旧工程没这两键时必须按「无工具 + 默认样式」打开。
+        val styled = original.copy(activeTool = "ARROW",
+            activeStyle = ScreenshotDrawingStyle(color = 0xFF00FF00.toInt(), width = 7, fontSize = 28f))
+        val styledRoundTrip = ScreenshotDocumentCodec.decode(ScreenshotDocumentCodec.encode(styled))
+        check(styledRoundTrip.activeTool == "ARROW") { "重开后丢失上次工具：${styledRoundTrip.activeTool}" }
+        check(styledRoundTrip.activeStyle?.width == 7 && styledRoundTrip.activeStyle?.fontSize == 28f) {
+            "重开后丢失上次样式：${styledRoundTrip.activeStyle}"
+        }
+        check(restored.activeTool == null && restored.activeStyle == null) { "旧工程被凭空写入了工具样式" }
+
         val history = ScreenshotDrawing()
         history.load(restored.objects)
         history.add(ScreenshotDrawingStroke(ScreenshotDrawingTool.PEN, listOf(ScreenshotDrawingPoint(1f, 1f)), 0, 2f))

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自适应图标前景：108 视口，图形外沿 500/1024 换算后落在安全区内。
+     构成：四角取景框（截图）+ 居中 V（VoxFix）。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#00000000" android:strokeColor="#FF111111"
+        android:strokeWidth="4.43" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M27.63 38.60 V 27.63 H 38.60" />
+    <path android:fillColor="#00000000" android:strokeColor="#FF111111"
+        android:strokeWidth="4.43" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M69.40 27.63 H 80.37 V 38.60" />
+    <path android:fillColor="#00000000" android:strokeColor="#FF111111"
+        android:strokeWidth="4.43" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M80.37 69.40 V 80.37 H 69.40" />
+    <path android:fillColor="#00000000" android:strokeColor="#FF111111"
+        android:strokeWidth="4.43" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M38.60 80.37 H 27.63 V 69.40" />
+    <path android:fillColor="#00000000" android:strokeColor="#FF111111"
+        android:strokeWidth="5.70" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M42.19 42.19 L 54.00 65.81 L 65.81 42.19" />
+</vector>

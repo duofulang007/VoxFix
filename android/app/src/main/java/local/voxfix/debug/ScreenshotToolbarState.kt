@@ -13,7 +13,17 @@ data class ScreenshotToolbarState(
     val showingOriginal: Boolean = false,
     val translating: Boolean = false,
     val showingTranslation: Boolean = false,
-    val hasDrawingHistory: Boolean = false
+    val hasDrawingHistory: Boolean = false,
+    /**
+     * 已被模块开关关闭的工具。默认空集，既有调用与 JVM 用例不受影响。
+     * CLOSE 不受它约束——取消永远可达。
+     */
+    val hiddenActions: Set<ScreenshotAction> = emptySet(),
+    /**
+     * 再编辑模式（打开已有图片/工程）：选区层整层隐藏，「编辑选区」成了点开就无效的死 UI，
+     * 这里直接不显示。默认 false，新截图路径行为不变。
+     */
+    val projectMode: Boolean = false
 ) {
     fun mainVisible(action: ScreenshotAction): Boolean = action !in secondaryActions
     fun mainEnabled(action: ScreenshotAction): Boolean = when {
@@ -30,6 +40,7 @@ data class ScreenshotToolbarState(
     }
     fun visible(action: ScreenshotAction): Boolean {
         if (action == ScreenshotAction.CLOSE) return true
+        if (action in hiddenActions) return false
         if (translating) return action == ScreenshotAction.TRANSLATE
         if (busy) return action == ScreenshotAction.CLOSE
         return when (action) {
@@ -43,7 +54,9 @@ data class ScreenshotToolbarState(
         ScreenshotAction.UNDO, ScreenshotAction.REDO -> (hasText && editing) || (hasDrawingHistory && !editing && !showingOriginal && !showingTranslation)
         ScreenshotAction.ARROW, ScreenshotAction.RECTANGLE, ScreenshotAction.PEN,
         ScreenshotAction.FILTER,ScreenshotAction.HIGHLIGHT,ScreenshotAction.SPOTLIGHT,ScreenshotAction.TEXT,
-        ScreenshotAction.SERIAL,ScreenshotAction.ERASER,ScreenshotAction.SELECT,ScreenshotAction.MOVE,ScreenshotAction.LINE -> hasRegion && !editing && !showingTranslation
+        ScreenshotAction.SERIAL,ScreenshotAction.ERASER,ScreenshotAction.SELECT,ScreenshotAction.LINE -> hasRegion && !editing && !showingTranslation
+        // 再编辑模式选区层已隐藏，「编辑选区」按钮只留新截图路径（只增不减：只是不再显示死入口）。
+        ScreenshotAction.MOVE -> hasRegion && !editing && !showingTranslation && !projectMode
         ScreenshotAction.BARCODE,ScreenshotAction.PIN,ScreenshotAction.SHARE -> hasRegion && !editing
         ScreenshotAction.SCROLL,ScreenshotAction.RECORD,ScreenshotAction.WATERMARK -> hasRegion && !editing && !showingTranslation
         // Copying text and comparing with the original are only meaningful with a text layer;

@@ -90,6 +90,8 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
     private val areaStyles=mutableMapOf<Pair<ScreenshotDrawingTool,ScreenshotAreaMode>,ScreenshotDrawingStyle>()
     var style=ScreenshotDrawingStyle()
         private set
+    /** 工程重开时恢复上次工具样式；样式面板随后由调用方 rebuild 才能高亮。 */
+    fun restoreStyle(value: ScreenshotDrawingStyle) { style = value }
     /** Endpoint hints help continue a stroke while editing; the recording overlay turns them off. */
     internal var showPenFeedback=true
     /**
@@ -148,11 +150,29 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
     private val erased=mutableSetOf<Int>()
     var savedPixelUnit: Float=0f
     var savedFontUnit: Float=0f
+    /**
+     * 首次打开时按「整幅」视图宽度冻结单位。
+     *
+     * pixelUnit/fontUnit 会随视图宽度变化；若不冻结，切到「适应宽度」后视图变宽、
+     * 单位变小，同一根 4px 笔画会被算成更细的线，字号也会被写小。
+     */
+    fun freezeUnits(viewWidth: Int) {
+        if (savedPixelUnit > 0f || image.width <= 0 || viewWidth <= 0) return
+        val metrics = resources.displayMetrics
+        savedPixelUnit = metrics.density * image.width / viewWidth
+        savedFontUnit = metrics.scaledDensity * image.width / viewWidth
+    }
     val pixelUnit get()=savedPixelUnit.takeIf { it>0 } ?: (resources.displayMetrics.density*image.width/(width.takeIf { it>0 } ?: image.width))
     val fontUnit get()=savedFontUnit.takeIf { it>0 } ?: (resources.displayMetrics.scaledDensity*image.width/(width.takeIf { it>0 } ?: image.width))
-    private val unit get()=resources.displayMetrics.density*image.width/(width.takeIf { it>0 } ?: image.width)
+    private val unit get()=resources.displayMetrics.density*image.width/(width.takeIf { it>0 } ?: image.width)/viewZoom.coerceAtLeast(0.05f)
     private val renderer=ScreenshotDrawingRenderer(image,{ resources.displayMetrics.density }) { fontUnit }
     private val snapPreferences by lazy { ScreenshotSnapConfig.preferences(context) }
+    /** 视图缩放（整幅=1）：选框把手、触点判定等屏幕尺寸 UI 用它保持视觉大小不随捏合变化。 */
+    var viewZoom: Float = 1f
+    /** SELECT 在空白处拖动时转发为画布平移（屏幕像素增量）；点到对象时由选择逻辑接管，不触发。 */
+    var onCanvasPan: ((Float, Float) -> Unit)? = null
+    private var selectPanActive = false
+    private var selectPanLast = ScreenshotDrawingPoint(0f, 0f)
     private val selection by lazy { ScreenshotObjectSelection(history,renderer,{ unit },{ slop }) }
     private val penFeedback by lazy { ScreenshotPenFeedback(this,image.width,image.height) }
 
@@ -399,7 +419,7 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
     /** Curve lines sample the drag path; below this spacing the extra vertices add nothing. */
     private val LINE_SAMPLE_SPACING get()=1.5f*unit
     /** Screen slop is expressed in bitmap pixels, which is the space the touches are mapped into. */
-    private val slop get()=android.view.ViewConfiguration.get(context).scaledTouchSlop*image.width/(width.takeIf { it>0 } ?: image.width).toFloat()
+    private val slop get()=android.view.ViewConfiguration.get(context).scaledTouchSlop*image.width/(width.takeIf { it>0 } ?: image.width).toFloat()/viewZoom.coerceAtLeast(0.05f)
     /** Snow Shot's eraser tolerance is an 8px viewport radius (`ERASER_RADIUS_VIEW`). */
     private fun eraseAt(point: ScreenshotDrawingPoint) {
         history.items.indices.filterTo(erased) { it !in erased && renderer.hit(history.items[it],point,ERASER_RADIUS*unit) }
@@ -455,6 +475,9 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
                         selection.press(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,tapCandidates)
                         selected?.let { style=it.style }
                         changed()
+                        // 什么都没点到：这一趟拖动转成画布平移；点到对象则保持原选择手感。
+                        selectPanActive = selected == null && tapCandidates.isEmpty()
+                        selectPanLast = point
                     }
                     ScreenshotDrawingTool.ERASER -> { eraserPointers.clear(); eraseTo(event.getPointerId(0),point) }
                     ScreenshotDrawingTool.TEXT -> Unit
@@ -506,9 +529,16 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
                     for(index in 0 until event.pointerCount) eraseLift(event.getPointerId(index),eraserPoint(event,index))
                     commitEraser()
                 }
-                cancelled=true; quickDrag=false; pending=null; pen=null; continuation=null; erased.clear(); selection.cancel(); penFeedback.clear()
+                cancelled=true; quickDrag=false; pending=null; pen=null; continuation=null; erased.clear(); selection.cancel(); penFeedback.clear(); selectPanActive=false
             }
-            MotionEvent.ACTION_MOVE -> if(quickDrag) selection.move(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,image.width,image.height,event.metaState and android.view.KeyEvent.META_ALT_ON!=0)
+            MotionEvent.ACTION_MOVE -> if(selectPanActive) {
+                // 空白处拖动＝平移画布：point 是图片像素坐标，屏幕增量＝图片增量 ×(视图宽/图片宽) × viewZoom。
+                // 缺第一项时长图（整幅 contain 后视图宽<图片宽）平移会被放大数倍，表现为底图乱窜。
+                val viewScale=(width.takeIf { it>0 } ?: image.width.coerceAtLeast(1)).toFloat()/image.width.coerceAtLeast(1)
+                onCanvasPan?.invoke((point.x-selectPanLast.x)*viewScale*viewZoom,(point.y-selectPanLast.y)*viewScale*viewZoom)
+                selectPanLast = point
+            }
+                else if(quickDrag) selection.move(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,image.width,image.height,event.metaState and android.view.KeyEvent.META_ALT_ON!=0)
                 else if(!cancelled) when(active) {
                 ScreenshotDrawingTool.SELECT -> selection.move(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,image.width,image.height,event.metaState and android.view.KeyEvent.META_ALT_ON!=0)
                 ScreenshotDrawingTool.ERASER -> for(index in 0 until event.pointerCount) {
@@ -548,6 +578,7 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
                 }
             }
             MotionEvent.ACTION_UP -> {
+                selectPanActive=false
                 if(quickDrag) selection.release(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,image.width,image.height,event.metaState and android.view.KeyEvent.META_ALT_ON!=0)
                 else if(!cancelled) when(active) {
                     ScreenshotDrawingTool.SELECT -> selection.release(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,image.width,image.height,event.metaState and android.view.KeyEvent.META_ALT_ON!=0)

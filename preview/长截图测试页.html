@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>VoxFix 长截图测试页</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:system-ui,sans-serif; background:#fff; color:#111; }
+  .banner { position:sticky; top:0; background:#1677FF; color:#fff; padding:12px 16px; font-size:15px; z-index:9; }
+  .banner small { display:block; opacity:.85; font-size:11px; margin-top:2px; }
+  .ruler { border-top:3px solid #1677FF; background:#eef4ff; padding:10px 16px; font-size:26px; font-weight:700; color:#1677FF; }
+  .ruler small { display:block; font-size:11px; font-weight:400; color:#555; margin-top:2px; }
+  .periodic { border:1px solid #ddd; margin:8px 12px; padding:10px 14px; background:#fafafa; font-size:14px; }
+  .periodic b { color:#c00; }
+  /* 周期压力段：条目外观完全一致（仅编号不同），行距固定，考验位移仲裁 */
+  .stress { margin:12px; }
+  .stress .item { height:64px; display:flex; align-items:center; justify-content:space-between;
+                  border-bottom:1px solid #e5e5e5; font-size:15px; color:#333; }
+  .stress .item span:first-child { color:#1677FF; font-weight:600; }
+  .filler { height:56px; display:flex; align-items:center; justify-content:center; color:#999; font-size:12px; letter-spacing:4px; }
+  .end { margin:40px 12px 80px; padding:24px; text-align:center; background:#0a0a0a; color:#0f0;
+         font-size:22px; font-weight:800; border-radius:8px; }
+  .end small { display:block; font-size:12px; color:#9f9; margin-top:8px; font-weight:400; }
+  .howto { margin:12px; padding:12px 16px; background:#fff7e6; border:1px solid #ffd591; font-size:13px; line-height:1.7; }
+  .howto b { color:#d46b08; }
+</style>
+</head>
+<body>
+<div class="banner">VoxFix 长截图测试页
+  <small>总高约 30000px · 会触发多段续拍 · 全部拼接成功 = 底部黑块可见且标尺连续无跳变</small>
+</div>
+
+<div class="howto">
+  <b>验收清单：</b>① 框选本页区域 → 长截图 → 自动模式跑完（或手动介入：手指一碰页面，自动滚动应立刻暂停）；
+  ② 成图从 R000 拉到 END，标尺 R 编号连续、无重复无缺失；③ R2000–R2100 的「周期压力段」条目行距均匀、无错位重影；
+  ④ 限额内（16MP/16MB）成图应提示「已保存到图片剪贴板」。
+</div>
+
+<script>
+  // 用 JS 生成，避免手写 3 万像素 HTML
+  const RULER_EVERY = 1000;         // 每 1000px 一个标尺
+  const TOTAL = 30000;
+  let html = '';
+  let ruler = 0;
+  for (let y = 0; y < TOTAL; y += RULER_EVERY) {
+    ruler++;
+    html += '<div class="ruler" id="r' + ruler + '">R' + String(ruler).padStart(4,'0')
+         + '　<span style="font-size:14px;font-weight:400">≈ ' + y + 'px</span>'
+         + '<small>标尺块固定高 1000px（含下方内容），拼接正确则编号连续</small></div>';
+    if (ruler === 3 || ruler === 4) {
+      // 周期压力段：40 条外观完全一致的条目（仅编号差异），固定行高
+      html += '<div class="stress">';
+      for (let i = 1; i <= 40; i++) {
+        html += '<div class="item"><span>条目 ' + String(i).padStart(3,'0') + '</span>'
+             + '<span>▸ 高度恒定 64px · 外观全同</span></div>';
+      }
+      html += '</div>';
+    } else {
+      html += '<div class="periodic"><b>内容块 ' + ruler + '</b>　'
+           + '这是用于肉眼校验的普通段落。长图若在此处出现重影、错位或整段缺失，说明该处拼接有抖动。</div>';
+      html += '<div class="filler">· · · 填充 · · ·</div><div class="filler">· · · 填充 · · ·</div>';
+    }
+  }
+  html += '<div class="end" id="end">✓ END · 到底了<small>能看到这块黑底绿字，且上方标尺 R 编号到 '
+        + ruler + ' 无缺失，即为拼接完整</small></div>';
+  document.addEventListener('DOMContentLoaded', () => {
+    const wrap = document.createElement('div'); wrap.innerHTML = html;
+    document.body.appendChild(wrap);
+  });
+</script>
+</body>
+</html>

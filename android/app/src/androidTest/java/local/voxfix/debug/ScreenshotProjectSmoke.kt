@@ -105,6 +105,42 @@ object ScreenshotProjectSmoke {
             val copiedSource = File(File(File(context.filesDir, "screenshot-clipboard/projects"), fromOld.id), "source.png")
             check(copiedSource.isFile && copiedSource.readBytes().contentEquals(store.file(legacy).readBytes())) { "旧图片底图没有原样复制" }
 
+            // 长截图入库：PNG 直存也必须带工程，否则点「编辑」只能造空工程，之前的内容无从恢复。
+            val longPng = File(context.filesDir, "longshot-test.png")
+            val longImage = bitmap(120, 900, Color.WHITE)
+            try { longPng.outputStream().use { check(longImage.compress(Bitmap.CompressFormat.PNG,100,it)) } }
+            finally { longImage.recycle() }
+            val longDoc = ScreenshotDocument.full(120, 900)
+            val longEntry = store.savePng(longPng, 120, 900, document = longDoc) ?: error("长截图没有入库")
+            check(longEntry.kind == ScreenshotStore.Kind.PROJECT && longEntry.revision == 1) { "长截图入库不是工程" }
+            check(store.document(longEntry.id) == longDoc) { "长截图工程读不回" }
+            check(store.file(longEntry.id).isFile && store.sourceFile(longEntry.id)?.isFile == true) { "长截图底图或合成图缺失" }
+            val longMoved = longDoc.copy(objects = listOf(ScreenshotDrawingStroke(ScreenshotDrawingTool.PEN,
+                listOf(ScreenshotDrawingPoint(10f,20f),ScreenshotDrawingPoint(80f,120f)),Color.RED,3f,id=21L)))
+            val longComposite = bitmap(120, 900, Color.LTGRAY)
+            try { store.saveProject(longMoved, longComposite, null, replaceId = longEntry.id, expectedRevision = 1) }
+            finally { longComposite.recycle() }
+            check(store.document(longEntry.id)?.objects?.single()?.id == 21L) { "长截图二次保存没有保留对象" }
+            check(store.entry(longEntry.id)?.revision == 2) { "长截图二次保存没有递增修订" }
+
+            // 普通图片原地升级：同一条记录变成工程、列表不新增，点它就能接着改上次的元素与工具。
+            val plain = store.save(bitmap(300, 500, Color.WHITE))
+            val plainDoc = ScreenshotDocument(300, 500, ScreenshotDocRect(0, 0, 300, 500),
+                listOf(ScreenshotDrawingStroke(ScreenshotDrawingTool.PEN,
+                    listOf(ScreenshotDrawingPoint(10f, 20f), ScreenshotDrawingPoint(120f, 260f)), Color.BLUE, 5f, id = 31L)),
+                activeTool = "PEN", activeStyle = ScreenshotDrawingStyle(color = Color.BLUE, width = 5))
+            val plainComposite = bitmap(300, 500, Color.LTGRAY)
+            val upgraded = try {
+                store.saveProject(plainDoc, plainComposite, null, replaceId = plain.id, expectedRevision = 0)
+            } finally { plainComposite.recycle() }
+            check(upgraded.id == plain.id) { "原地升级换了记录 id：${upgraded.id} != ${plain.id}" }
+            check(upgraded.kind == ScreenshotStore.Kind.PROJECT && upgraded.revision == 1) { "普通图片升级后不是工程首版" }
+            check(store.document(plain.id) == plainDoc) { "升级后读不回元素/工具/样式" }
+            check(store.sourceFile(plain.id)?.isFile == true && store.file(plain.id).isFile) { "升级后底图或合成图缺失" }
+            check(!File(File(context.filesDir, "screenshot-clipboard"), "${plain.id}.png").exists()) { "升级后旧 PNG 没有清理" }
+            check(store.entries().count { it.id == plain.id } == 1) { "升级后出现重复条目" }
+
+
         } finally {
             runCatching { store.entries().forEach { store.delete(it.id) } }
             source.recycle(); composite.recycle()

@@ -1,11 +1,14 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 弧柄上的无线调试开关：系统无公开 API，只能写 Settings.Global.adb_wifi_enabled；
+         本权限为 signature|privileged|development，只能用 adb shell pm grant 一次性授予。 -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
-    <application android:label="VoxFix 真机验证" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false" android:supportsRtl="true">
+    <application android:label="VoxFix 输入法" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:theme="@style/Theme.VoxFix" android:allowBackup="false" android:supportsRtl="true">
         <service android:name=".VoxFixImeService" android:label="VoxFix" android:permission="android.permission.BIND_INPUT_METHOD" android:exported="true">
             <intent-filter><action android:name="android.view.InputMethod" /></intent-filter>
             <meta-data android:name="android.view.im" android:resource="@xml/input_method" />
@@ -29,13 +32,17 @@
             <intent-filter>
                 <action android:name="local.voxfix.debug.IMPORT_TEXT" />
                 <action android:name="local.voxfix.debug.IMPORT_IMAGE" />
+                <action android:name="local.voxfix.debug.PC_INFO" />
+                <action android:name="local.voxfix.debug.PC_STATE" />
             </intent-filter>
         </receiver>
-        <activity android:name=".MainActivity" android:exported="true">
+        <activity android:name=".HomeActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- 保留为「试用与自检」页：真机测试脚本以 am start -n .MainActivity 拉起它，故不加 LAUNCHER。 -->
+        <activity android:name=".MainActivity" android:exported="true" android:label="试用与自检" />
     </application>
 </manifest>

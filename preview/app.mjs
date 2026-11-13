@@ -5,6 +5,7 @@ import { loadPinyin, pinyinCandidates, nineCandidates, setPhraseOptions, phraseC
 import { loadEnglish,loadPersonalEnglish,englishCandidates,hasEnglishWord } from './english.mjs';
 import { loadClipboardSplitter } from './split.mjs';
 import { createMemeSearch } from './meme-search.mjs';
+import { imageFit } from './image-fit.mjs';
 
 const $ = id => document.getElementById(id);
 const hostEditor=$('editor'), keyboard=$('keyboard');
@@ -993,6 +994,10 @@ function clipboard() {
 }
 let screenshotRows=[],screenshotPreview=null,screenshotCrop=null,screenshotDelete=null,screenshotError='';
 let screenshotManage=false,screenshotSelected=[],screenshotRemove=null,imageHold=null;
+let screenTextFix=null;
+// 剪贴板图片预览的两种显示方式：默认整幅（和截图预览一致），长图可切「适应宽度」1:1 滚动。
+// 规则与安卓画布共用 imageFit()，避免预览和编辑看到两种画面。
+let imageFitMode='contain';
 function screenshotCall(method,...args){
   if(!nativeIme?.[method])throw Error('请在手机 VoxFix 输入法中操作图片');
   const result=JSON.parse(nativeIme[method](...args));
@@ -1013,7 +1018,19 @@ function imageClipboard(){
     const actions=crop
       ?button('取消裁剪','image-cancel','','text-action')+button('另存裁剪','image-crop-save','','text-action image-primary')
       :button('编辑图片','image-edit','','text-action','<span>编辑</span>')+button('复制图片','image-copy','','text-action',icon('copy')+'<span>复制</span>')+button('裁剪图片','image-crop','','text-action',icon('select-text')+'<span>裁剪</span>')+button('插入聊天','image-send','','text-action image-primary',icon('send')+'<span>插入聊天</span>');
-    body=`<div class="clip-image-preview"><svg class="clip-image-canvas" viewBox="0 0 ${row.width} ${row.height}" aria-label="图片预览${crop?'，拖动选择裁剪范围':''}"><image href="${screenshotUrl(row.id,'image')}" width="${row.width}" height="${row.height}"/>${crop?`<rect x="${crop[0]}" y="${crop[1]}" width="${crop[2]-crop[0]}" height="${crop[3]-crop[1]}" fill="#4096ff22" stroke="#4096ff" stroke-width="2" vector-effect="non-scaling-stroke"/>`:''}</svg>${crop?'<div class="clip-image-hint">拖动选择范围，另存后保留原图</div>':''}<div class="clip-image-actions">${actions}</div></div>`;
+    // 显示规则与安卓画布共用 imageFit()：默认整幅（先看全），高宽比明显超出屏幕时
+    // 才给「适应宽度」——按宽度 1:1 铺满、纵向滚动，和长截屏预览是同一种形式。
+    const viewWidth=Math.max(1,(keyboard.clientWidth||window.innerWidth||360)-16);
+    const fit=imageFit(row.width,row.height,viewWidth,Math.max(1,Math.round(viewWidth*0.66)));
+    const widthMode=!crop&&fit.canFitWidth&&imageFitMode==='width';
+    const canvas=widthMode
+      ?`<div class="clip-image-scroll" role="group" aria-label="长图预览，可上下滚动"><img class="clip-image-full" src="${screenshotUrl(row.id,'image')}" alt="长图预览" draggable="false"></div>`
+      :`<svg class="clip-image-canvas" viewBox="0 0 ${row.width} ${row.height}" aria-label="图片预览${crop?'，拖动选择裁剪范围':''}"><image href="${screenshotUrl(row.id,'image')}" width="${row.width}" height="${row.height}"/>${crop?`<rect x="${crop[0]}" y="${crop[1]}" width="${crop[2]-crop[0]}" height="${crop[3]-crop[1]}" fill="#4096ff22" stroke="#4096ff" stroke-width="2" vector-effect="non-scaling-stroke"/>`:''}</svg>`;
+    // 切换入口浮在图片右上角，不占动作行：那一行必须保持四个按钮一行放下。
+    const fitToggle=fit.canFitWidth&&!crop
+      ?button(imageFitMode==='width'?'整幅显示':'适应宽度','image-fit','','clip-fit-toggle')
+      :'';
+    body=`<div class="clip-image-preview">${canvas}${fitToggle}${crop?'<div class="clip-image-hint">拖动选择范围，另存后保留原图</div>':''}<div class="clip-image-actions">${actions}</div></div>`;
   }else body=`<div class="clip-list clip-image-grid" aria-label="图片剪贴板">${screenshotError?`<div class="empty-state">${esc(screenshotError)}</div>`:screenshotRows.length?screenshotRows.map(imageCard).join(''):'<div class="empty-state">还没有图片<br>圆弧截图保存后会出现在这里</div>'}</div>`;
   return clipHeader()+body+footer()+(screenshotDelete?imageDeleteConfirmation():'');
 }
@@ -1026,8 +1043,9 @@ function imageAction(action,value){
     const row=screenshotRows.find(item=>item.id===screenshotPreview);
     if(action==='image-edit'&&row){const result=screenshotCall('screenshotEdit',row.id);if(!result.ok)throw Error('无法打开图片编辑');toast('正在打开图片编辑');return;}
     if(action==='image-send'&&row){if(!nativeIme?.screenshotInsert)throw Error('请在手机 VoxFix 输入法中插入图片');nativeIme.screenshotInsert(row.id);return;}
-    if(action==='image-open'&&screenshotRows.some(item=>item.id===value)){screenshotPreview=value;screenshotCrop=null;screenshotRemove=null;}
-    if(action==='image-back'){screenshotPreview=null;screenshotCrop=null;resetImageSelection();}
+    if(action==='image-open'&&screenshotRows.some(item=>item.id===value)){screenshotPreview=value;screenshotCrop=null;screenshotRemove=null;imageFitMode='contain';}
+    if(action==='image-back'){screenshotPreview=null;screenshotCrop=null;resetImageSelection();imageFitMode='contain';}
+    if(action==='image-fit'){imageFitMode=imageFitMode==='width'?'contain':'width';}
     if(action==='image-copy'&&row){const result=screenshotCall('screenshotCopy',row.id);if(!result.ok)throw Error('复制失败，请重试');screenshotEpoch++;refreshScreenshots();toast('已复制图片，可在原应用粘贴');}
     if(action==='image-manage'){screenshotManage=!screenshotManage;screenshotSelected=[];screenshotRemove=null;screenshotDelete=null;}
     if(action==='image-toggle'&&screenshotRows.some(item=>item.id===value))screenshotSelected=screenshotSelected.includes(value)?screenshotSelected.filter(id=>id!==value):[...screenshotSelected,value];
@@ -1174,9 +1192,54 @@ memeInput.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isCo
 localPanel.addEventListener('click',event=>{if(localInput!==memeInput)return;const button=event.target.closest('[data-action^="meme-"]');if(button){event.preventDefault();activate(button.dataset.action,button.dataset.value);}});
 globalThis.voxfixMemeInsertion=(message,accepted)=>{if(accepted){state.page='letters';render();}toast(message);};
 // 功能菜单里符号/数字/编辑/设置没有专属图标，用方形字标代替，避免四个一模一样的方块。
-const menuGlyphs={symbols:'符',numbers:'123',edit:'编',lexicon:'典',custom:'设','screen-text':'截'};
+const menuGlyphs={symbols:'符',numbers:'123',edit:'编',lexicon:'典',custom:'设','screen-text':'截','screen-text-fix':'修'};
+// 模块开关：原生侧 Modules.json() 给的是「自身开关」，父子依赖在这里算一遍。
+// 桥不可用（浏览器试用页）时一律视为开启，不改变原有试用体验。
+const moduleParents={dictionary:'voice',screenshot:'screentext',scroll:'screenshot',watermark:'screenshot',record:'screenshot',translate:'screentext',pcsync:'clipboard'};
+const menuModule={clipboard:'clipboard',emoji:'emoji',lexicon:'dictionary','screen-text':'screentext','screen-text-fix':'screentext','screenshot-settings':'screenshot'};
+let moduleSnapshot;
+function modulesSnapshot(){
+  if(moduleSnapshot!==undefined)return moduleSnapshot;
+  try{const raw=nativeIme?.modules?.();moduleSnapshot=raw?JSON.parse(raw):null;}catch{moduleSnapshot=null;}
+  return moduleSnapshot;
+}
+function moduleOn(key){
+  const snapshot=modulesSnapshot(); if(!snapshot)return true;
+  let cursor=key;
+  while(cursor){ if(snapshot[cursor]===false)return false; cursor=moduleParents[cursor]; }
+  return true;
+}
+function moduleEntryVisible(id){ const key=menuModule[id]; return !key||moduleOn(key); }
 globalThis.voxfixScreenTextChanged=()=>{if(state.page==='menu')render();};
-function menuPanel() { return `<div class="panel-title"><span>${nativeIme?'功能菜单':'功能菜单 · 未展开页面的补充入口'}</span>${button('返回键盘','return','','',icon('back'))}</div><div class="menu-grid">${[...toolbarItems.filter(([id])=>!['menu','hide'].includes(id)),['symbols','符号'],['numbers','数字'],['edit','编辑文字'],['lexicon','词典'],['custom','键盘设置'],['screenshot-settings','截图工具栏设置'],['screen-text',nativeIme?.screenTextEnabled?.()?'关闭截图工具':'开启截图工具']].map(([id,label])=>button(label,id,'','',`<span class="menu-glyph">${menuGlyphs[id]||icon(id)}</span><span>${label}</span>`)).join('')}</div>${footer()}`; }
+// 一键恢复的结果：成功直接刷新菜单文案，失败给出可执行的下一步。
+globalThis.voxfixScreenTextRepaired=(code)=>{
+  screenTextFix=null;
+  if(code==='OK')toast('截图入口已恢复');
+  else if(code==='DENIED')toast('缺少写入安全设置权限，请到系统设置手动开启');
+  else if(code==='DISABLED'){toast('服务未启用，正在打开系统设置');nativeIme?.screenTextSettings?.();}
+  else toast('恢复失败，请到系统设置手动开启');
+  render();
+};
+// 装机/系统回收会把无障碍服务标成 Crashed 且不再自动重绑，圆弧就静默消失；菜单里给出可见状态与修复入口。
+function screenTextHealthLabel(){
+  if(!nativeIme?.screenTextHealth)return '截图工具 · 未连接';
+  try{
+    const h=JSON.parse(nativeIme.screenTextHealth()||'{}');
+    if(h.code==='OK')return '截图工具正常';
+    if(h.code==='ARC_OFF')return '圆弧已关闭 · 修复';
+    if(h.code==='DISABLED')return '截图工具未启用 · 修复';
+    return '截图工具异常 · 修复';
+  }catch{return '截图工具 · 修复';}
+}
+function screenTextFixSheet(){
+  const h=screenTextFix||{};
+  const detail=h.code==='DISABLED'?'无障碍服务未启用：到系统设置里打开「VoxFix 截图工具」。'
+    :h.code==='ARC_OFF'?'服务正常，但圆弧开关是关的：点「一键恢复」或直接开启截图工具。'
+    :h.code==='CRASHED'?'服务被系统停掉了（装机、系统回收都会这样）：点「一键恢复」重新绑定。'
+    :'状态未知：先点「一键恢复」，仍失败再去系统设置手动开启。';
+  return `<div class="clip-menu-backdrop" data-action="screen-text-fix-close"><div class="clip-menu-sheet" role="dialog" aria-modal="true" aria-label="截图工具自检"><div class="clip-menu-title">截图工具自检</div><div class="clip-fix-note">${esc(detail)}</div>${button('一键恢复','screen-text-repair','','row')}${button('去系统设置','screen-text-settings','','row')}${button('取消','screen-text-fix-close','','clip-menu-cancel')}</div></div>`;
+}
+function menuPanel() { moduleSnapshot=undefined; return `<div class="panel-title"><span>${nativeIme?'功能菜单':'功能菜单 · 未展开页面的补充入口'}</span>${button('返回键盘','return','','',icon('back'))}</div><div class="menu-grid">${[...toolbarItems.filter(([id])=>!['menu','hide'].includes(id)),['symbols','符号'],['numbers','数字'],['edit','编辑文字'],['lexicon','词典'],['custom','键盘设置'],['screenshot-settings','截图工具栏设置'],['screen-text',nativeIme?.screenTextEnabled?.()?'关闭截图工具':'开启截图工具'],['screen-text-fix',screenTextHealthLabel()]].filter(([id])=>moduleEntryVisible(id)).map(([id,label])=>button(label,id,'','',`<span class="menu-glyph">${menuGlyphs[id]||icon(id)}</span><span>${label}</span>`)).join('')}</div>${footer()}${screenTextFix?screenTextFixSheet():''}`; }
 function editPanel() { return `<div class="panel-title"><span>${nativeIme?'编辑文字':'编辑文字 · 补充试用'}</span>${button('返回键盘','return','','',icon('back'))}</div><div class="menu-grid">${[['select-all','全选'],['copy-text','复制'],['cut-text','剪切'],['paste-last','粘贴'],['cursor-left','左移'],['cursor-right','右移'],['delete','删除'],['enter',localInput?'换行':enterLabel]].map(([id,label])=>button(label,id,'',id==='delete'?'key':'',icon(id==='delete'?'delete':'copy')+`<span>${label}</span>`)).join('')}</div>${footer()}`; }
 const VOICE_PHASES=['loading','listening','paused','cancel','recognizing'];
 const VOICE_TITLES={loading:'正在开启麦克风',listening:'倾听中',paused:'已暂停',cancel:'松手取消',recognizing:'识别中'};
@@ -1554,6 +1617,8 @@ function showPage(page) { endClipboardSplit();if(state.voice&&!(state.voice.tap&
 function showTab(name) { if(nativeIme&&name==='custom'){$('custom-panel').hidden=false;nativeSettings.showModal();return;} $('try-panel').hidden=name!=='try'; $('custom-panel').hidden=name!=='custom'; document.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-selected',b.dataset.tab===name)); }
 function startVoice(tap=false) {
   if(state.voice)return;
+  moduleSnapshot=undefined;
+  if(!moduleOn('voice')){toast('语音输入已在模块管理中关闭');return;}
   learningChain=[];
   englishPrefix='';
   if(nativeIme){if(!nativeIme.voiceReady()){toast('语音正在准备，请稍后再试。');return;}if(state.comp)commit(state.comp.raw);state.popup=null;state.voice={phase:'loading',micReady:false,tap,local:localInput,snapshot:localInput?{text:editor.value,start:editor.selectionStart,end:editor.selectionEnd}:null};if(!tap){beginVoiceBall();voicePanelFresh=true;}reportCandidatesVisible();if(localInput)nativeIme.startLocalVoice();else nativeIme.startVoice();render();if(!tap)startVoiceLoop();return;}
@@ -1729,6 +1794,18 @@ function activate(action,value='',prefix=englishPrefix) {
     // 词典入口：手机上打开与电脑版同构的词语/错法编辑器；试用页没有该窗口时回到设置里的词库区。
     case 'lexicon': if(nativeIme?.openDictionary){nativeIme.openDictionary();return;} showTab('custom'); state.popup=null; $('lexicon-actions').hidden=false; feedback('试用页没有词典窗口，个人词库在这里导入导出。'); break;
     case 'screen-text': if(nativeIme?.toggleScreenText){nativeIme.toggleScreenText();return;} toast('屏幕取字需在安卓输入法中开启。');return;
+    case 'screen-text-fix': {
+      if(!nativeIme?.screenTextHealth){toast('截图工具自检需在安卓输入法中运行。');return;}
+      try{screenTextFix=JSON.parse(nativeIme.screenTextHealth()||'{}');}catch{screenTextFix={code:'FAILED'};}
+      if(screenTextFix.code==='OK'){screenTextFix=null;toast('截图工具正常，圆弧入口已就绪');return;}
+      render();return;
+    }
+    case 'screen-text-fix-close': screenTextFix=null;render();return;
+    case 'screen-text-repair': {
+      if(!nativeIme?.screenTextRepair){toast('截图工具修复需在安卓输入法中运行。');return;}
+      toast('正在恢复截图入口…');nativeIme.screenTextRepair();return;
+    }
+    case 'screen-text-settings': screenTextFix=null;render();if(nativeIme?.screenTextSettings)nativeIme.screenTextSettings();else toast('需在安卓输入法中运行。');return;
     case 'screenshot-settings': if(nativeIme?.openScreenTextSettings){nativeIme.openScreenTextSettings();return;} toast('截图工具栏设置需在安卓输入法中打开。');return;
     case 'cancel-recognition': if(state.voice?.tap||state.voice?.phase==='recognizing') { cancelVoice(); } return;
     case 'select-all': editor.setSelectionRange(0,editor.value.length);localSelection=null;selectedCount=characterCount(editor.value); state.comp=null; break;

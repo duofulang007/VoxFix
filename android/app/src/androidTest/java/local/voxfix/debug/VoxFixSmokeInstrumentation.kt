@@ -30,6 +30,9 @@ class VoxFixSmokeInstrumentation : Instrumentation() {
     override fun onStart() {
         val output = Bundle()
         try {
+            if (modelCompare == "screenshot-flow-audit") {
+                output.putString("result", ScreenshotFlowAuditChecks.run(this)); finish(Activity.RESULT_OK,output); return
+            }
             if (modelCompare == "screenshot-scroll") {
                 output.putString("result", ScreenshotScrollChecks.run(this)); finish(Activity.RESULT_OK,output); return
             }

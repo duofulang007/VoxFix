@@ -102,6 +102,8 @@ open class VoxFixImeService : InputMethodService() {
 
     private fun prewarmEngine() {
         if (destroyed || busy || TranslateRuntime.occupiesMemory()) return
+        // 语音模块关闭后不再预热 229MB 模型（docs/App外壳设计-2026-11-13.md §4.3）。
+        if (!Modules.isOn(this, Module.VOICE)) return
         voiceWarmup.execute { synchronized(this) {
             if (!TranslateRuntime.occupiesMemory()) runCatching { warmEngine() }.onFailure { Log.w("VoxFix", "IME_ENGINE_WARM_FAILED", it) }
         } }
@@ -784,6 +786,7 @@ open class VoxFixImeService : InputMethodService() {
     }
 
     private fun beginVoice(local: Boolean = false) {
+        if (!Modules.isOn(this, Module.VOICE)) { voiceDone("语音输入已在模块管理中关闭"); return }
         if (busy) { voiceDone("上一段语音正在结束，请稍后再试"); return }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             voiceDone("请打开 VoxFix，允许麦克风权限后再使用语音")
@@ -1088,6 +1091,21 @@ open class VoxFixImeService : InputMethodService() {
             }
             JSONObject().put("ok", true)
         }
+        /** 截图工具（无障碍 + 圆弧）自检：装机或系统回收后它会变成 Crashed，前端据此给恢复入口。 */
+        @JavascriptInterface fun screenTextHealth(): String = try {
+            ScreenTextHealth.status(this@VoxFixImeService)
+        } catch (error: Exception) {
+            android.util.Log.w("VoxFix", "SCREEN_TEXT_HEALTH_FAILED", error)
+            JSONObject().put("code", "FAILED").toString()
+        }
+        @JavascriptInterface fun screenTextRepair() {
+            ScreenTextHealth.repair(this@VoxFixImeService) { outcome ->
+                main.post { if (!destroyed && web === owner) script("globalThis.voxfixScreenTextRepaired?.(${JSONObject.quote(outcome.name)})") }
+            }
+        }
+        @JavascriptInterface fun screenTextSettings() = main.post {
+            if (!destroyed && web === owner) ScreenTextHealth.openSystemSettings(this@VoxFixImeService)
+        }
         private fun screenshotReply(action: () -> JSONObject): String = try {
             check(web === owner && !destroyed); action().toString()
         } catch (error: Exception) { JSONObject().put("error",error.message ?: "图片操作失败").toString() }
@@ -1161,6 +1179,8 @@ open class VoxFixImeService : InputMethodService() {
         }
         @JavascriptInterface fun copy(value: String) { if (value.length <= 10000) editInput { getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("VoxFix", value)); updateClipboard() } }
         @JavascriptInterface fun voiceReady() = !destroyed
+        /** 模块开关快照，供键盘前端隐藏入口（见 docs/App外壳设计-2026-11-13.md §4.3）。 */
+        @JavascriptInterface fun modules(): String = Modules.json(this@VoxFixImeService)
         @JavascriptInterface fun isLandscape() = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         @JavascriptInterface fun maxKeyboardHeight() = if (isLandscape()) (resources.configuration.screenHeightDp - 64).coerceIn(258, 550) else 550
         @JavascriptInterface fun resize(height: Int) {

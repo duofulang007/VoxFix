@@ -28,6 +28,24 @@ import java.io.File
  */
 class ClipboardImportReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        // 电脑端伴生工具每次连着就推一次自己的 IPv4 列表，供弧柄判断"是否同一 Wi-Fi"。
+        // 纯内存/SharedPreferences 写入，不需要线程池。
+        if (intent.action == ACTION_PC_INFO) {
+            val addrs = intent.getStringExtra("addrs").orEmpty()
+            AdbWireless.rememberPc(context, addrs)
+            android.util.Log.i("VoxFix", "PC_INFO addrs=$addrs")
+            return
+        }
+        // 心跳：电脑端每 5 秒推一次"通道还活着 + 走的是 USB 还是 Wi-Fi"。
+        // 手机只存时间戳，15 秒没心跳就当断开 —— 拔线/换网/电脑休眠都会让心跳自己停。
+        if (intent.action == ACTION_PC_STATE) {
+            ScreenTextSettingsActivity.preferences(context).edit()
+                .putLong("pc.beat", android.os.SystemClock.elapsedRealtime())
+                .putString("pc.transport", intent.getStringExtra("transport").orEmpty())
+                .putString("pc.clip", intent.getStringExtra("clip").orEmpty())
+                .apply()
+            return
+        }
         val pending = goAsync()
         worker.execute {
             try {
@@ -96,6 +114,8 @@ class ClipboardImportReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_TEXT = "local.voxfix.debug.IMPORT_TEXT"
         const val ACTION_IMAGE = "local.voxfix.debug.IMPORT_IMAGE"
+        const val ACTION_PC_INFO = "local.voxfix.debug.PC_INFO"
+        const val ACTION_PC_STATE = "local.voxfix.debug.PC_STATE"
         /** 写入系统剪贴板时的描述标签，前端「电脑」标签的判据。 */
         const val PC_CLIP_LABEL = "VoxFix · 电脑"
         /** ScreenshotStore 里电脑来源图片的 source 标记。 */

@@ -20,24 +20,7 @@ internal object ScreenshotDocumentCodec {
     fun encode(document: ScreenshotDocument): String {
         val objects = JSONArray()
         document.objects.forEach { stroke ->
-            val style = JSONObject()
-                .put("color", stroke.style.color).put("width", stroke.style.width)
-                .put("opacity", stroke.style.opacity.toDouble()).put("area", stroke.style.area.name)
-                .put("filter", stroke.style.filter.name).put("filterStrength", stroke.style.strength.toDouble())
-                .put("fontSize", stroke.style.fontSize.toDouble()).put("bold", stroke.style.bold)
-                .put("align", stroke.style.align).put("serial", stroke.style.serialShape.name)
-                .put("family", stroke.style.fontFamily).put("verticalAlign", stroke.style.verticalAlign)
-                .put("outlineColor", stroke.style.outlineColor).put("outlineWidth", stroke.style.outlineWidth)
-                .put("fillColor", stroke.style.fillColor).put("hasFill", stroke.style.hasFill)
-                .put("cornerRadius", stroke.style.cornerRadius)
-                .also { style -> stroke.style.cornerRadii?.let { radii ->
-                    style.put("cornerRadii", JSONArray().apply { radii.forEach { r -> put(r.toDouble()) } }) } }
-                .put("strokePattern", stroke.style.strokePattern.name).put("fillPattern", stroke.style.fillPattern.name)
-                .put("shape", stroke.style.shape.name).put("curved", stroke.style.curved)
-                .put("arrowType", stroke.style.arrowType.name).put("arrowRatio", stroke.style.arrowRatio.toDouble())
-                .put("arrowShaftType", stroke.style.arrowShaftType.name)
-                .put("startHead", stroke.style.startHead.name).put("endHead", stroke.style.endHead.name)
-                .put("serialGeometryVersion",stroke.style.serialGeometryVersion)
+            val style = styleJson(stroke.style)
             val points = JSONArray()
             stroke.points.forEach { points.put(it.x.toDouble()).put(it.y.toDouble()) }
             val objectRow = JSONObject()
@@ -86,6 +69,9 @@ internal object ScreenshotDocumentCodec {
             if (mark.template.isNotEmpty()) row.put("template", mark.template).put("appliedAt", mark.appliedAt)
             root.put("watermark", row)
         }
+        // 上次在用的工具与样式：重开工程时直接接着改，不用重新挑颜色/线宽/字号。
+        document.activeTool?.let { root.put("activeTool", it) }
+        document.activeStyle?.let { root.put("activeStyle", styleJson(it)) }
         return root.toString()
     }
 
@@ -240,8 +226,35 @@ internal object ScreenshotDocumentCodec {
                 mark.optDouble("angle", 30.0).toFloat(), mark.optDouble("gap", 56.0).toFloat(),
                 mark.optDouble("opacity", .16).toFloat(), template, mark.optLong("appliedAt", 0L)).normalized()
         }
-        return ScreenshotDocument(width, height, ScreenshotDocRect(left, top, right, bottom), objects, text,regions,regionOperands,unit("drawingUnit"),unit("fontUnit"),watermark)
+        // 旧工程没有这两键：activeTool 为空按「无工具」打开（长图可直接滑动浏览），
+        // activeStyle 为空用默认样式。这里仅解析存档；恢复顺序在 ScreenshotCaptureOverlay.restoreProject。
+        val activeToolName = root.optString("activeTool").takeIf { it.isNotEmpty() }
+        val activeTool = activeToolName?.let { name -> runCatching { ScreenshotDrawingTool.valueOf(name) }.getOrNull() }
+        val activeStyle = root.optJSONObject("activeStyle")
+            ?.let { row -> style(row, activeTool ?: ScreenshotDrawingTool.SELECT, 1f) }
+        return ScreenshotDocument(width, height, ScreenshotDocRect(left, top, right, bottom), objects, text,regions,regionOperands,unit("drawingUnit"),unit("fontUnit"),watermark,
+            activeToolName, activeStyle)
     }
+
+    /** 样式序列化：对象自带样式与「上次使用的工具样式」共用同一份键，避免两套格式漂移。 */
+    private fun styleJson(style: ScreenshotDrawingStyle): JSONObject = JSONObject()
+        .put("color", style.color).put("width", style.width)
+        .put("opacity", style.opacity.toDouble()).put("area", style.area.name)
+        .put("filter", style.filter.name).put("filterStrength", style.strength.toDouble())
+        .put("fontSize", style.fontSize.toDouble()).put("bold", style.bold)
+        .put("align", style.align).put("serial", style.serialShape.name)
+        .put("family", style.fontFamily).put("verticalAlign", style.verticalAlign)
+        .put("outlineColor", style.outlineColor).put("outlineWidth", style.outlineWidth)
+        .put("fillColor", style.fillColor).put("hasFill", style.hasFill)
+        .put("cornerRadius", style.cornerRadius)
+        .also { row -> style.cornerRadii?.let { radii ->
+            row.put("cornerRadii", JSONArray().apply { radii.forEach { r -> put(r.toDouble()) } }) } }
+        .put("strokePattern", style.strokePattern.name).put("fillPattern", style.fillPattern.name)
+        .put("shape", style.shape.name).put("curved", style.curved)
+        .put("arrowType", style.arrowType.name).put("arrowRatio", style.arrowRatio.toDouble())
+        .put("arrowShaftType", style.arrowShaftType.name)
+        .put("startHead", style.startHead.name).put("endHead", style.endHead.name)
+        .put("serialGeometryVersion",style.serialGeometryVersion)
 
     private fun bindingRow(binding: ScreenshotFixedPointBinding) = JSONArray()
         .put(binding.elementId).put(binding.mode.name).put(binding.fixedX).put(binding.fixedY)

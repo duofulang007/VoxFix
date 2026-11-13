@@ -41,7 +41,7 @@ val stageModels by tasks.registering(Sync::class) {
     into(layout.buildDirectory.dir("modelAssets"))
 }
 val stageKeyboard by tasks.registering(Sync::class) {
-    from("../../preview") { include("index.html", "*.css", "app.mjs", "core.mjs", "lexicon.mjs", "voice-orb.mjs", "pinyin.mjs", "english.mjs", "split.mjs", "meme-search.mjs", "english-words.txt", "pinyin-data.json", "pinyin-lite.json", "phrase-packs.json", "vendor/rime-ice/LICENSE", "vendor/rime-ice/UPSTREAM.md") }
+    from("../../preview") { include("index.html", "*.css", "app.mjs", "core.mjs", "lexicon.mjs", "voice-orb.mjs", "pinyin.mjs", "english.mjs", "split.mjs", "meme-search.mjs", "image-fit.mjs", "english-words.txt", "pinyin-data.json", "pinyin-lite.json", "phrase-packs.json", "vendor/rime-ice/LICENSE", "vendor/rime-ice/UPSTREAM.md") }
     from("src/main/licenses/sensevoice") { include("LICENSE", "UPSTREAM.md"); into("licenses/sensevoice") }
     from("src/main/licenses/sherpa") { include("LICENSE", "UPSTREAM.md"); into("licenses/sherpa") }
     from("src/main/licenses/punctuation") { include("LICENSE", "UPSTREAM.md"); into("licenses/punctuation") }

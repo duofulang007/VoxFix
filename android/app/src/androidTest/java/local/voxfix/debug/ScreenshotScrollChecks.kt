@@ -81,12 +81,19 @@ internal object ScreenshotScrollChecks {
         val bitmap = Bitmap.createBitmap(200, 500, Bitmap.Config.ARGB_8888)
         try {
             val range = ScreenshotScrollTrim(500)
-            val view = ScreenshotScrollRangeView(test.targetContext, bitmap, false, range) {}
+            val gutter = 12 * test.targetContext.resources.displayMetrics.density
+            var view: ScreenshotScrollRangeView? = null
+            view = ScreenshotScrollRangeView(test.targetContext, false, range, 200, 0L, { start, end ->
+                val stop = minOf(end, bitmap.height)
+                if (stop > start) view!!.updateBand(
+                    Bitmap.createBitmap(bitmap, 0, start, bitmap.width, stop - start), start)
+            }) {}
             val scroll = ScrollView(test.targetContext).apply { addView(view, FrameLayout.LayoutParams(200, 800)) }
             scroll.measure(View.MeasureSpec.makeMeasureSpec(280, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(430, View.MeasureSpec.EXACTLY))
             scroll.layout(0, 0, 280, 430)
-            check(view.height == 800) { "Range image height in scrolling preview: ${view.height}" }
+            // 1:1 预览：逻辑高度 = 完整画布 + 上下把手留白。
+            check(view.height == (500 + 2 * gutter).toInt()) { "Range image height in scrolling preview: ${view.height}" }
             val head = 24 * test.targetContext.resources.displayMetrics.density
             for ((action, y) in listOf(MotionEvent.ACTION_DOWN to head, MotionEvent.ACTION_MOVE to head+120f,
                 MotionEvent.ACTION_UP to head+120f)) {

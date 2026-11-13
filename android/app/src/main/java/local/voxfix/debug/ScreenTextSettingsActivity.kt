@@ -14,6 +14,7 @@ import android.view.WindowInsets
 
 class ScreenTextSettingsActivity : Activity() {
     private lateinit var status: TextView
+    private lateinit var wirelessStatus: TextView
     private lateinit var translateStatus: TextView
     private lateinit var translateDownload: Button
     private lateinit var translateDelete: Button
@@ -44,6 +45,22 @@ class ScreenTextSettingsActivity : Activity() {
         layout.addView(TextView(this).apply {
             text = "从屏幕边缘的小弧线向内滑，打开截图；长按弧线后可拖动换边和调整高度。\n\n截图后先画框，可拖动框内移动、拖四边或角点调整。可直接保存图片、识别文字或翻译，识别后可复制文字；不会松手就处理。\n\n保存的截图在输入法剪贴板的「图片」页管理，支持预览、插入聊天、复制、裁剪另存和批量删除。不自动写入系统相册。直接插入需要聊天应用支持接收图片。\n\n只在主动截图时获取画面，未保存的画面退出或闲置90秒后释放；闲置或旋转时保留已识别文字和完成的译文，锁屏或主动退出时清理。安全页面无法截图。\n\n首次使用需手动启用「VoxFix 截图工具」无障碍服务，它独立于键盘运行。"
             textSize = 16f; setPadding(0, pad, 0, pad)
+        })
+        layout.addView(TextView(this).apply { text = "无线调试（弧柄）"; textSize = 20f; setPadding(0, pad, 0, 0) })
+        wirelessStatus = TextView(this).apply { textSize = 16f; setPadding(0, dp(6), 0, dp(6)) }
+        layout.addView(wirelessStatus)
+        layout.addView(Button(this).apply {
+            text = "复制一次性授权命令"
+            setOnClickListener {
+                val command = "adb shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS"
+                getSystemService(android.content.ClipboardManager::class.java)
+                    .setPrimaryClip(android.content.ClipData.newPlainText("adb", command))
+                android.widget.Toast.makeText(this@ScreenTextSettingsActivity, "已复制，电脑上执行一次即可", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        })
+        layout.addView(TextView(this).apply {
+            text = "弧柄展开后第二枚按钮就是开关。面板下方常驻一行连接状态：「电脑已连 · USB/Wi-Fi」表示这条通道现在就能用，剪贴板同步也走它；15 秒没有电脑心跳会变成「电脑未连」。\n\n点开关会先体检：没连 Wi-Fi 会自动拉起网络面板；不在同一 Wi-Fi、电脑端没运行都会直接说清楚，不会闷头写入。开启后电脑首次需要配对一次，端口每次随机，电脑侧用 adb mdns services 查。"
+            textSize = 14f; setPadding(0, 0, 0, pad)
         })
         layout.addView(TextView(this).apply { text = "离线翻译"; textSize = 20f; setPadding(0, pad, 0, 0) })
         translateStatus = TextView(this).apply { textSize = 16f; setPadding(0, dp(6), 0, dp(6)) }
@@ -86,6 +103,12 @@ class ScreenTextSettingsActivity : Activity() {
         TranslateRuntime.init(this)
         TranslateDownloader.observe { renderTranslate(it) }
         status.text = if (connected(this)) "无障碍服务已启用" else "尚未启用无障碍服务"
+        wirelessStatus.text = when {
+            !AdbWireless.granted(this) -> "未授权：需要在电脑上执行一次 pm grant（按钮可复制命令）"
+            !AdbWireless.wifiConnected(this) -> "已授权；当前没有连 Wi-Fi，开启会被系统直接回滚"
+            AdbWireless.enabled(contentResolver) -> "已授权 · 无线调试已开启"
+            else -> "已授权 · 无线调试未开启"
+        }
     }
     override fun onPause() {
         TranslateDownloader.observe(null)

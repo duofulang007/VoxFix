@@ -7,8 +7,10 @@ import org.junit.Test
 class ScreenshotScrollControlsTest {
     @Test fun swipeStartsInsideTheFarSideAndMovesTowardTheHead() {
         val swipe = ScreenshotScrollCapture.Companion::swipe
-        assertEquals(ScreenshotScrollCapture.Companion.Swipe(50f,80f,50f,50f), swipe(20,20,80,110,false))
-        assertEquals(ScreenshotScrollCapture.Companion.Swipe(60f,65f,40f,65f), swipe(20,20,80,110,true))
+        assertEquals(ScreenshotScrollCapture.Companion.Swipe(50f,80f,50f,50f), swipe(20,20,80,110,false,1f/3f))
+        assertEquals(ScreenshotScrollCapture.Companion.Swipe(60f,65f,40f,65f), swipe(20,20,80,110,true,1f/3f))
+        // Adaptive auto step is clamped to 0.15–0.60 of the region.
+        assertEquals(ScreenshotScrollCapture.Companion.Swipe(50f,92f,50f,38f), swipe(20,20,80,110,false,2f/3f))
     }
 
     @Test fun trimLimitsKeepAtLeastOnePixelAndCanBeRestored() {

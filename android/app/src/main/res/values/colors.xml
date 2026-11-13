@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Snow Shot 1.1.8 / Ant Design Qt 令牌的浅色值。深色在 values-night/colors.xml。 -->
+    <color name="vox_bg">#FFF5F5F5</color>
+    <color name="vox_surface">#FFFFFFFF</color>
+    <color name="vox_surface_high">#FFFFFFFF</color>
+    <color name="vox_surface_sunken">#FFFAFAFA</color>
+    <color name="vox_border">#14000000</color>
+    <color name="vox_border_strong">#24000000</color>
+    <color name="vox_text_primary">#DE000000</color>
+    <color name="vox_text_secondary">#A6000000</color>
+    <color name="vox_text_tertiary">#73000000</color>
+    <color name="vox_text_disabled">#40000000</color>
+    <color name="vox_primary">#FF1677FF</color>
+    <color name="vox_primary_hover">#FF4096FF</color>
+    <color name="vox_primary_soft">#FFE6F4FF</color>
+    <color name="vox_danger">#FFFF4D4F</color>
+    <color name="vox_success">#FF52C41A</color>
+    <color name="vox_warning">#FFFAAD14</color>
+    <color name="vox_scrim">#B3000000</color>
+</resources>

@@ -22,12 +22,21 @@ import android.widget.Toast
 private const val DEBUG_CAPTURE = "local.voxfix.debug.DEBUG_CAPTURE"
 /** Debug builds only: records a fixed region so crop geometry can be checked without tapping the toolbar. */
 private const val DEBUG_RECORD = "local.voxfix.debug.DEBUG_RECORD"
+private const val DEBUG_SCROLL = "local.voxfix.debug.DEBUG_SCROLL"
+/** Debug builds only: opens the saved clipboard record `id` in the project editor, no taps needed. */
+private const val DEBUG_EDIT = "local.voxfix.debug.DEBUG_EDIT"
 
 class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPreferenceChangeListener {
     private val main = Handler(Looper.getMainLooper())
     private val preferences by lazy { ScreenTextSettingsActivity.preferences(this) }
     private val windows by lazy { getSystemService(WindowManager::class.java) }
     private var handle: ScreenTextHandle? = null
+    /** 模块开关一变就收起或恢复贴边弧线；与「enabled」偏好走同一条恢复路径。 */
+    private val moduleChanged = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+            if (Modules.isOn(this@ScreenTextService, Module.SCREENTEXT)) showHandle() else removeHandle()
+        }
+    }
     private var overlay: ScreenTextOverlay? = null
     private var screenshot: ScreenshotCaptureOverlay? = null
     private var scrolling: ScreenshotScrollCapture? = null
@@ -41,6 +50,8 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     @Volatile private var generation = 0
     private var connected = false
     private var ocrInFlight = false
+    /** Set by the DEBUG_SCROLL broadcast; the next fresh capture opens long-screenshot directly. */
+    private var debugScrollPending = false
     /** Set while the editor was opened from the image clipboard, so save can report back. */
     private var editorDone: ((Boolean) -> Unit)? = null
     private val editorHost = object : ScreenshotEditorHost.Handler {
@@ -59,7 +70,23 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     // Debug builds only: lets the agent drive a capture without the arc gesture.
     private val debugCapture = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == DEBUG_CAPTURE) { android.util.Log.i("VoxFix","DEBUG_CAPTURE"); capture() }
+            when (intent?.action) {
+                DEBUG_CAPTURE -> { android.util.Log.i("VoxFix","DEBUG_CAPTURE"); capture() }
+                DEBUG_SCROLL -> {
+                    // Debug-only: capture and immediately open long-screenshot on a fixed region,
+                    // so multi-segment stitching can be exercised without hunting toolbar taps.
+                    android.util.Log.i("VoxFix", "DEBUG_SCROLL")
+                    debugScrollPending = true
+                    capture()
+                }
+                DEBUG_EDIT -> {
+                    // Debug-only: open a saved clipboard record in the project editor straight away,
+                    // so canvas geometry can be verified from code instead of tapping the keyboard.
+                    val id = intent.getStringExtra("id").orEmpty()
+                    android.util.Log.i("VoxFix", "DEBUG_EDIT $id")
+                    if (id.isNotEmpty()) openSavedProject(id) {}
+                }
+            }
         }
     }
     private val debugRecord = object : BroadcastReceiver() {
@@ -106,11 +133,14 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         TranslateRuntime.init(this)
         ScreenshotEditorHost.register(editorHost)
         preferences.registerOnSharedPreferenceChangeListener(this)
+        val moduleFilter = IntentFilter(Modules.ACTION_CHANGED)
+        if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(moduleChanged, moduleFilter, RECEIVER_NOT_EXPORTED)
+        else registerReceiver(moduleChanged, moduleFilter)
         val filter = IntentFilter().apply { addAction(Intent.ACTION_SCREEN_OFF); addAction(Intent.ACTION_USER_PRESENT) }
         if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(screenState, filter, RECEIVER_NOT_EXPORTED)
         else registerReceiver(screenState, filter)
         if (debuggable) {
-            val debugFilter = IntentFilter(DEBUG_CAPTURE).apply { addAction(DEBUG_RECORD) }
+            val debugFilter = IntentFilter(DEBUG_CAPTURE).apply { addAction(DEBUG_RECORD); addAction(DEBUG_SCROLL); addAction(DEBUG_EDIT) }
             if (android.os.Build.VERSION.SDK_INT >= 33) {
                 registerReceiver(debugCapture, debugFilter, RECEIVER_EXPORTED)
                 registerReceiver(debugRecord, debugFilter, RECEIVER_EXPORTED)
@@ -125,6 +155,12 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         if (key == "enabled") { closeSession(); showHandle() }
     }
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event?.eventType == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START) {
+            // 用户手指碰到宿主页面：长截图自动滚动立刻让位（2026-11-09 用户反馈手动介入
+            // 打断不了很反直觉）。只认宿主窗口的触摸，点我们自己的控制条不算。
+            if (scrollWindowId != null && event.windowId == scrollWindowId) scrolling?.onUserTouch()
+            return
+        }
         if (event?.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
             if (event.windowId == scrollWindowId) scrolling?.onHostScrolled()
             return
@@ -166,6 +202,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         return false
     }
     override fun onDestroy() {
+        runCatching { unregisterReceiver(moduleChanged) }
         // The system can rebuild this service mid-recording. Cancelling there threw the capture away
         // (the file was deleted with no trace), so finalise instead: the user keeps what was recorded.
         if (liveRecorder != null) android.util.Log.i("VoxFix", "RECORDING_FINALISED_ON_DESTROY")
@@ -191,18 +228,36 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         screenshotWorker.shutdown()
         super.onDestroy()
     }
+    private var handleRetries = 0
+    /** 窗口被系统回收后 handle 字段仍非空，必须靠 isAttached 续命，否则圆弧永久不再出现。 */
+    private val handleRetry = Runnable { if (handle == null) showHandle() }
     private fun showHandle() {
-        if (!connected || !ScreenTextSettingsActivity.enabled(this) || handle != null || busy || overlay != null || screenshot != null ||
+        if (!connected || !ScreenTextSettingsActivity.enabled(this) || !Modules.isOn(this, Module.SCREENTEXT) ||
+            busy || overlay != null || screenshot != null ||
             !getSystemService(android.os.PowerManager::class.java).isInteractive ||
             getSystemService(KeyguardManager::class.java).isKeyguardLocked) return
+        handle?.let { current ->
+            if (current.isAttached) return
+            runCatching { current.dismiss() }
+            handle = null
+        }
         val next = ScreenTextHandle(this) { capture() }
-        runCatching { next.show(); handle = next }
-            .onFailure { android.util.Log.w("VoxFix", "SCREEN_TEXT_HANDLE_FAILED", it) }
+        runCatching { next.show(); handle = next; handleRetries = 0 }
+            .onFailure { error ->
+                android.util.Log.w("VoxFix", "SCREEN_TEXT_HANDLE_FAILED", error)
+                // 悬浮窗偶发被拒/窗口 token 失效时补几次退避重试，避免「引用还在却永不再挂」。
+                if (handleRetries < 3) {
+                    handleRetries++
+                    android.util.Log.i("VoxFix", "SCREEN_TEXT_HANDLE_RETRY $handleRetries")
+                    main.removeCallbacks(handleRetry)
+                    main.postDelayed(handleRetry, 400L shl (handleRetries - 1))
+                }
+            }
     }
     private fun removeHandle() { handle?.let { runCatching { it.dismiss() } }; handle = null }
     private fun capture(replacing: ScreenshotCaptureOverlay? = null) {
         if (!connected || busy || overlay != null || screenshot !== replacing) return
-        if (ocrInFlight) { Toast.makeText(this, "上次识别正在结束，请稍后重试", Toast.LENGTH_SHORT).show(); return }
+        if (ocrInFlight) { toast("上次识别正在结束，请稍后重试"); return }
         if (replacing != null && !replacing.hideForRecapture()) return
         busy = true; removeHandle(); ScreenshotPins.visible(false)
         main.removeCallbacks(expire)
@@ -249,6 +304,14 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
                                 editor.show(windows)
                             }
                             busy = false
+                            if (debugScrollPending) {
+                                debugScrollPending = false
+                                (screenshot as? ScreenshotCaptureOverlay)?.let { editor ->
+                                    val barHeight = (56 * resources.displayMetrics.density).toInt()
+                                    val barTop = ScreenshotScrollCapture.controlTop(350, 1900, 0, 2400, barHeight) ?: 0
+                                    startScroll(editor, Rect(80, 350, 1000, 1900), barTop, false)
+                                }
+                            }
                             keepSession()
                         } catch (error: Exception) { if (token == generation) captureFailed("无法打开截图，请重试", error) }
                         finally { unowned?.recycle(); buffer.close() }
@@ -287,7 +350,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         editor.setScrollCaptureActive(true)
         val next = ScreenshotScrollCapture(this,windows,region,image.width,image.height,top,horizontal,
             { targetWindow == scrollTargetAt(center, ignoreOverlay = true) },
-            { done -> scrollStep(region,horizontal,targetWindow,done) }) { message ->
+            { fraction, done -> scrollStep(region,horizontal,targetWindow,fraction,done) }) { message ->
             scrolling = null
             listenToScrollEvents(null)
             busy = false
@@ -411,7 +474,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             } else {
                 service.busy = true
                 service.setRecordingSetupAttached(true)
-                Toast.makeText(service, message, Toast.LENGTH_SHORT).show()
+                Toast.makeText(android.view.ContextThemeWrapper(service, android.R.style.Theme_Material), message, Toast.LENGTH_SHORT).show()
             }
         }, microphone = options.audioEnabled && options.microphone)
     }
@@ -496,7 +559,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
                         sharedRecorder = null
                         busy = false
                         runCatching(stopProjection)
-                        Toast.makeText(this, error, Toast.LENGTH_LONG).show()
+                        toast(error, long = true)
                         removeRecordingControl()
                         showHandle()
                     }
@@ -530,16 +593,16 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         removeRecordingAnnotation()
         if (file == null) {
             recordingControl?.showFailure(message ?: "录屏已取消")
-            message?.let { Toast.makeText(this, it, Toast.LENGTH_SHORT).show() }
+            message?.let { toast(it) }
         } else {
             val saved = ScreenRecordingLibrary.save(this, file)
             if (saved == null) {
                 recordingControl?.showFailure("录屏保存失败")
-                Toast.makeText(this, "录屏保存失败，请检查可用空间", Toast.LENGTH_SHORT).show()
+                toast("录屏保存失败，请检查可用空间")
             } else {
                 recordingSaved = saved
                 recordingControl?.showSaved(saved.displayPath, saved.uri)
-                Toast.makeText(this, "已保存录屏 ${ScreenRecordingGeometry.formatDuration(duration)}", Toast.LENGTH_SHORT).show()
+                toast("已保存录屏 ${ScreenRecordingGeometry.formatDuration(duration)}")
             }
         }
         // A session ended by rotation leaves the bar in the old orientation's coordinates; re-place
@@ -697,7 +760,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             removeRecordingControl()
             busy = false
             if (!ScreenTextSettingsActivity.enabled(this)) removeHandle() else showHandle()
-            Toast.makeText(this, "无法显示录屏设置", Toast.LENGTH_SHORT).show()
+            toast("无法显示录屏设置")
             return
         }
         recordingControl?.post {
@@ -755,7 +818,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         val rotation = currentRotation()
         if (ScreenRecordingGeometry.rotationSuperseded(sharedRotation, rotation)) {
             android.util.Log.i("VoxFix", "RECORDING_ROTATION_END adopted=${sharedRotation}->${rotation}")
-            Toast.makeText(this, "屏幕已旋转，录屏结束并保存", Toast.LENGTH_SHORT).show()
+            toast("屏幕已旋转，录屏结束并保存")
             running.stop()
             return
         }
@@ -791,7 +854,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         removeRecordingControl()
         busy = false
         if (!ScreenTextSettingsActivity.enabled(this)) removeHandle() else showHandle()
-        message?.let { Toast.makeText(this, it, Toast.LENGTH_SHORT).show() }
+        message?.let { toast(it) }
     }
 
     private fun removeRecordingSetup() {
@@ -847,16 +910,16 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         control.onOptionsChanged = { updated ->
             recordingOptions = updated
             recordingPreferences.save(updated)
-            Toast.makeText(this, "已应用", Toast.LENGTH_SHORT).show()
+            toast("已应用")
         }
         control.onOpenFolder = {
             if (!ScreenRecordingLibrary.openFolder(this))
-                Toast.makeText(this, "没有可打开相册的应用", Toast.LENGTH_SHORT).show()
+                toast("没有可打开相册的应用")
         }
         control.onOpenSaved = {
             val saved = recordingSaved
             if (saved == null || !ScreenRecordingLibrary.open(this, saved.uri, saved.displayPath))
-                Toast.makeText(this, "找不到录屏文件", Toast.LENGTH_SHORT).show()
+                toast("找不到录屏文件")
         }
         control.onToggleAnnotation = { active -> setAnnotationDrawing(active) }
         control.onReleased = { removeRecordingControl() }
@@ -911,7 +974,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         if (recordingSetupAttached) runCatching { windows.updateViewLayout(control, params) }
         if (!recordingBarWarned && Rect(params.x, params.y, params.x + barWidth, params.y + barHeight).intersect(Rect(region))) {
             recordingBarWarned = true
-            Toast.makeText(this, "录屏控制条在录制区域内，会被录进画面，可按住左侧拖动移开", Toast.LENGTH_LONG).show()
+            toast("录屏控制条在录制区域内，会被录进画面，可按住左侧拖动移开", long = true)
         }
     }
 
@@ -986,7 +1049,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         android.util.Log.i("VoxFix", "RECORDING_ROTATION_END rotation=$rotation")
         val running = liveRecorder
         if (running != null && !running.isFinishing()) {
-            Toast.makeText(this, "屏幕已旋转，录屏结束并保存", Toast.LENGTH_SHORT).show()
+            toast("屏幕已旋转，录屏结束并保存")
             running.stop()
         } else if (recordingSetup != null) {
             cancelRecordingSetup("屏幕已旋转，请重新选择录制区域")
@@ -1010,11 +1073,13 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         runCatching {
             val info = serviceInfo ?: return@runCatching
             if (windowId == null) {
-                info.eventTypes = info.eventTypes and AccessibilityEvent.TYPE_VIEW_SCROLLED.inv()
+                info.eventTypes = info.eventTypes and
+                    (AccessibilityEvent.TYPE_VIEW_SCROLLED or AccessibilityEvent.TYPE_TOUCH_INTERACTION_START).inv()
                 info.notificationTimeout = checkNotNull(scrollNotificationTimeout)
             } else {
                 scrollNotificationTimeout = info.notificationTimeout
-                info.eventTypes = info.eventTypes or AccessibilityEvent.TYPE_VIEW_SCROLLED
+                info.eventTypes = info.eventTypes or AccessibilityEvent.TYPE_VIEW_SCROLLED or
+                    AccessibilityEvent.TYPE_TOUCH_INTERACTION_START
                 info.notificationTimeout = 40
             }
             serviceInfo = info
@@ -1038,11 +1103,11 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         } finally { visible.forEach { it.recycle() } }
     }
 
-    private fun scrollStep(region: Rect, horizontal: Boolean, targetWindow: Int?, done: (Boolean) -> Unit): Boolean {
+    private fun scrollStep(region: Rect, horizontal: Boolean, targetWindow: Int?, fraction: Float, done: (Boolean) -> Unit): Boolean {
         if (targetWindow == null || getSystemService(KeyguardManager::class.java).isKeyguardLocked) return false
         val extent = if (horizontal) region.width() else region.height()
-        if (extent / 3f <= android.view.ViewConfiguration.get(this).scaledTouchSlop) return false
-        val points = ScreenshotScrollCapture.swipe(region.left,region.top,region.right,region.bottom,horizontal)
+        if (extent * fraction <= android.view.ViewConfiguration.get(this).scaledTouchSlop) return false
+        val points = ScreenshotScrollCapture.swipe(region.left,region.top,region.right,region.bottom,horizontal,fraction)
         if (targetWindow != scrollTargetAt(listOf(points.startX.toInt() to points.startY.toInt(),
                 region.centerX() to region.centerY(), points.endX.toInt() to points.endY.toInt()))) return false
         val path = android.graphics.Path().apply { moveTo(points.startX,points.startY); lineTo(points.endX,points.endY) }
@@ -1116,7 +1181,17 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     }
     private fun fail(message: String, error: Exception? = null) {
         error?.let { android.util.Log.w("VoxFix", "SCREEN_TEXT_CAPTURE_FAILED", it) }
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show(); closeSession()
+        toast(message); closeSession()
+    }
+
+    /**
+     * 服务进程的提示统一走深色主题：应用清单是 Theme.Material.Light，浅色主题下系统 Toast
+     * 的文字会渲染成深色，落在系统深色 Toast 背景上就是黑底黑字（2026-11-09 用户反馈看不清）。
+     */
+    private fun toast(message: String, long: Boolean = false) {
+        val themed = android.view.ContextThemeWrapper(this, android.R.style.Theme_Material)
+        Toast.makeText(themed, message,
+            if (long) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
     }
     private fun closeSession() {
         scrolling?.close(); scrolling = null
@@ -1149,9 +1224,11 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
                     source.recycle(); error("截图底图与工程不匹配，原文件已保留")
                 }
                 val project = if (document != null) ScreenshotProject(document.copy(), id, entry.revision, null)
-                    else ScreenshotProject(ScreenshotDocument.full(source.width, source.height), null, null, id)
+                    // 普通图片首次编辑：保存回同一条记录（原地升级为工程），
+                    // 否则列表会多出一条新记录，用户点原来那张还是空画布。
+                    else ScreenshotProject(ScreenshotDocument.full(source.width, source.height), id, entry.revision, null)
                 main.post {
-                    if (token != generation || !connected) { source.recycle(); busy = false; editorDone = null; done(false); return@post }
+                    if (token != generation || !connected) { source.recycle(); busy = false; editorDone = null; done(false); showHandle(); return@post }
                     try {
                         session = ScreenshotSession(source)
                         val view = ScreenshotCaptureOverlay(this, source, ::saveScreenshot, ::recognizeScreenshot, ::updateText,
@@ -1169,7 +1246,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
                     if (token == generation) {
                         val finish = editorDone
                         busy = false; editorDone = null
-                        Toast.makeText(this, error.message ?: "无法打开图片编辑", Toast.LENGTH_SHORT).show()
+                        toast(error.message ?: "无法打开图片编辑")
                         closeSession()
                         // The keyboard still shows the preview, but it must clear its opening state.
                         finish?.invoke(false)
@@ -1206,7 +1283,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
                                 editorDone = null
                                 closeSession()
                                 done?.invoke(true)
-                                Toast.makeText(this,"已保存到图片剪贴板",Toast.LENGTH_SHORT).show()
+                                toast("已保存到图片剪贴板")
                             }
                         }
                     } catch (error: Exception) {

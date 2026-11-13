@@ -21,8 +21,10 @@
 随系统自启：把 start_phone_helper.vbs 的快捷方式放进 shell:startup。
 """
 
+import msvcrt
 import os
 import queue
+import socket
 import subprocess
 import sys
 import threading
@@ -38,12 +40,20 @@ ADB = r"D:\Projects\VoxFix\.android\sdk\platform-tools\adb.exe"
 USB_SERIAL = "6959dba1"
 LOG_DIR = r"D:\Projects\VoxFix\.android\voxfix-companion"
 PID_FILE = os.path.join(LOG_DIR, "companion.pid")
+LOCK_FILE = os.path.join(LOG_DIR, "companion.lock")   # 单实例锁；与 pid 分开，pid 保持可读
 LOG_FILE = os.path.join(LOG_DIR, "companion.log")
+_lock_file = None          # 单实例文件锁句柄，存活期间一直持有
 RECONCILE_SEC = 3.0      # adb devices 对账周期（事件流的兜底）
 MAINT_SEC = 10.0         # 慢速维护周期（PowerShell 枚举，开销大）
 TRACK_RETRY_SEC = 2.0    # track-devices 断开后重连间隔
 HEADLESS_RETRY_SEC = 30.0
 CREATE_NO_WINDOW = 0x08000000
+PING_PORT = 18768          # 手机端 AdbWireless.PROBE_PORT 要与此一致
+PING_REPLY = b"VOXFIX\n"
+PC_INFO_ACTION = "local.voxfix.debug.PC_INFO"
+PC_STATE_ACTION = "local.voxfix.debug.PC_STATE"
+HEARTBEAT_SEC = 5.0        # 连着时的心跳：手机据此判断"通道还在、剪贴板可用"
+CLIP_WATCHER_OK = {"value": "0"}
 
 
 def log(msg: str) -> None:
@@ -94,6 +104,78 @@ def pick_serial(devices: list) -> str:
         if serial.startswith(f"adb-{USB_SERIAL}-"):
             return serial
     return ""
+
+
+def local_ipv4() -> list:
+    """本机所有非回环 IPv4（可能同时有以太网和 Wi-Fi 两个）。"""
+    addrs = set()
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip and not ip.startswith("127."):
+                addrs.add(ip)
+    except OSError as error:
+        log(f"枚举本机地址失败: {error}")
+    return sorted(addrs)
+
+
+def ping_server() -> None:
+    """手机开着弧柄时会来连这个端口，用来判断"电脑端在不在"。
+
+    只回一行 VOXFIX 就关连接，不读数据、不解析协议。
+    """
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server.bind(("0.0.0.0", PING_PORT))
+        server.listen(8)
+    except OSError as error:
+        log(f"探测端口 {PING_PORT} 监听失败（可能被防火墙或占用）: {error}")
+        return
+    log(f"探测端口已监听 0.0.0.0:{PING_PORT}，本机地址 {local_ipv4()}")
+    while True:
+        try:
+            conn, _peer = server.accept()
+            with conn:
+                conn.settimeout(2)
+                conn.sendall(PING_REPLY)
+        except Exception as error:  # 单个连接出错不影响监听
+            log(f"探测连接异常（忽略）: {error}")
+            time.sleep(0.2)
+
+
+def push_pc_info(serial: str) -> None:
+    """把本机地址推给手机，手机据此判断"是不是同一网段"。"""
+    if not serial:
+        return
+    addrs = ",".join(local_ipv4())
+    if not addrs:
+        return
+    try:
+        # 必须带 -p：Android 8+ 对清单里的隐式广播不再投递，实测无 -p 时 result=0 没人收
+        run_hidden([ADB, "-s", serial, "shell", "am", "broadcast", "-a",
+                    PC_INFO_ACTION, "-p", "local.voxfix.debug",
+                    "--es", "addrs", addrs], 10)
+        log(f"推送电脑地址 → {addrs}")
+    except Exception as error:
+        log(f"推送电脑地址失败: {error}")
+
+
+def push_state(serial: str, transport: str) -> None:
+    """心跳：每 5 秒告诉手机"电脑这边还连着、走的是 USB 还是 Wi-Fi"。
+
+    手机侧超时 15 秒就认为断开 —— 拔线/换网/电脑休眠都会让心跳自己停掉，
+    不需要手机去猜。
+    """
+    if not serial:
+        return
+    try:
+        run_hidden([ADB, "-s", serial, "shell", "am", "broadcast", "-a",
+                    PC_STATE_ACTION, "-p", "local.voxfix.debug",
+                    "--es", "transport", transport,
+                    "--es", "clip", CLIP_WATCHER_OK["value"]], 8)
+    except Exception as error:
+        log(f"心跳失败: {error}")
 
 
 def track_devices_loop(snapshots: queue.Queue) -> None:
@@ -180,19 +262,27 @@ def visible_scrcpy_running() -> bool:
                for c in process_commands().values())
 
 
-def pid_alive(pid: int) -> bool:
-    code = run_hidden(["tasklist", "/FI", f"PID eq {pid}"], 10).stdout
-    return str(pid) in code
-
-
 def single_instance() -> bool:
-    try:
-        old = int(open(PID_FILE).read().strip())
-        if old != os.getpid() and pid_alive(old):
-            return False
-    except (OSError, ValueError):
-        pass
+    """文件独占锁判单实例。
+
+    不能靠「PID 是否存活」判断：Windows 会复用 PID（2026-11-13 实测 9496 被
+    DefenderAiPlatformHost 复用，companion 每次启动都误判「已有实例」并自杀，
+    插线投屏因此从 11-12 起再没被拉起）。文件锁随进程退出自动释放，不受 PID 复用影响。
+    """
+    global _lock_file
     os.makedirs(LOG_DIR, exist_ok=True)
+    try:
+        handle = open(LOCK_FILE, "a+")
+    except OSError as error:
+        log(f"单实例锁不可用，按无锁启动: {error}")
+        return True
+    try:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        handle.close()
+        return False
+    _lock_file = handle          # 必须持有到进程结束，释放锁等于允许第二个实例
     with open(PID_FILE, "w") as f:
         f.write(str(os.getpid()))
     return True
@@ -217,7 +307,7 @@ def on_usb_unplug() -> None:
 
 def main() -> None:
     if not single_instance():
-        log("已有伴生进程在运行，本次退出")
+        # 计划任务每 5 分钟自愈探测一次，这里静默退出，避免日志每 5 分钟刷一行。
         return
     log("伴生进程启动（track-devices 事件驱动 + 3s 对账兜底）")
 
@@ -234,12 +324,15 @@ def main() -> None:
     snapshots = queue.Queue()
     threading.Thread(target=track_devices_loop, args=(snapshots,),
                      daemon=True, name="track-devices").start()
+    threading.Thread(target=ping_server, daemon=True, name="ping").start()
 
     usb_was_online = None
     last_devices = []
     last_headless_try = 0.0
     last_maint = 0.0
     last_reconcile = 0.0
+    last_pc_info = 0.0
+    last_beat = 0.0
     headless_serial = ""
     while True:
         try:
@@ -259,7 +352,12 @@ def main() -> None:
             if devices is not None:
                 if devices != last_devices:
                     log(f"设备表变化: {devices}")
+                    push_pc_info(pick_serial(devices))
                 last_devices = devices
+                if devices and now - last_beat >= HEARTBEAT_SEC:
+                    last_beat = now
+                    push_state(pick_serial(devices),
+                               "usb" if USB_SERIAL in devices else "wifi")
                 usb_online = USB_SERIAL in devices
                 first = usb_was_online is None
                 if first or usb_online != usb_was_online:
@@ -273,10 +371,14 @@ def main() -> None:
             if now - last_maint < MAINT_SEC:
                 continue
             last_maint = now
+            if now - last_pc_info > 60:      # 地址/网段可能被 DHCP 换掉，定期补推
+                last_pc_info = now
+                push_pc_info(pick_serial(last_devices))
 
             procs = process_commands()
             watcher = any("copyq_phone_sync.py" in (c or "")
                           for c in procs.values())
+            CLIP_WATCHER_OK["value"] = "1" if watcher else "0"
             if not watcher:
                 spawn([PYTHONW, WATCHER])
                 log("剪贴板守护未在运行 → 已拉起")

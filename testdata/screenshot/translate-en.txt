@@ -1,0 +1,6 @@
+The quick brown fox jumps over the lazy dog. This line checks Latin glyph metrics, mixed CJK/Latin spacing, and whether OCR keeps punctuation such as commas, periods, and quotation marks in the expected order.
+The quick brown fox jumps over the lazy dog. This line checks Latin glyph metrics, mixed CJK/Latin spacing, and whether OCR keeps punctuation such as commas, periods, and quotation marks in the expected order.
+The quick brown fox jumps over the lazy dog. This line checks Latin glyph metrics, mixed CJK/Latin spacing, and whether OCR keeps punctuation such as commas, periods, and quotation marks in the expected order.
+The quick brown fox jumps over the lazy dog. This line checks Latin glyph metrics, mixed CJK/Latin spacing, and whether OCR keeps punctuation such as commas, periods, and quotation marks in the expected order.
+The quick brown fox jumps over the lazy dog. This line checks Latin glyph metrics, mixed CJK/Latin spacing, and whether OCR keeps punctuation such as commas, periods, and quotation marks in the expected order.
+The quick brown fox jumps over the lazy dog. This line checks Latin glyph metrics, mixed CJK/Latin spacing, and whether OCR keeps punctuation such as commas, periods, and quotation marks in the expected order.

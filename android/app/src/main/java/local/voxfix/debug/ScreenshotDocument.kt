@@ -45,7 +45,11 @@ data class ScreenshotDocument(
     val drawingUnit: Float = 0f,
     val fontUnit: Float = 0f,
     /** Canvas-level watermark; null keeps projects written before T23 unchanged. */
-    val watermark: ScreenshotWatermark? = null
+    val watermark: ScreenshotWatermark? = null,
+    /** 上次使用的工具（`ScreenshotDrawingTool.name`）；null = 旧工程，打开时回到 SELECT。 */
+    val activeTool: String? = null,
+    /** 上次使用的样式（颜色/线宽/字号等）；null = 旧工程，打开时用默认样式。 */
+    val activeStyle: ScreenshotDrawingStyle? = null
 ) {
     fun isEmpty() = objects.isEmpty() && text == null
     companion object {

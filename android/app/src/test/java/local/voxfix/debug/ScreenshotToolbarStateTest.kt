@@ -14,6 +14,16 @@ class ScreenshotToolbarStateTest {
             assertTrue(state.mainEnabled(ScreenshotAction.CLOSE))
         }
     }
+    @Test fun moveButtonHiddenInProjectModeButKeptForFreshScreenshots() {
+        // 再编辑（projectMode）：选区层整层隐藏，编辑选区是死 UI，不再显示；
+        // 新截图路径（默认 projectMode=false）行为不变——只增不减。
+        val fresh = ScreenshotToolbarState(hasRegion = true)
+        assertTrue(fresh.visible(ScreenshotAction.MOVE))
+        assertFalse(fresh.copy(projectMode = true).visible(ScreenshotAction.MOVE))
+        // 其它工具不跟随 projectMode：再编辑里仍要能画箭头/选元素。
+        assertTrue(ScreenshotToolbarState(hasRegion = true, projectMode = true).visible(ScreenshotAction.ARROW))
+        assertTrue(ScreenshotToolbarState(hasRegion = true, projectMode = true).visible(ScreenshotAction.SELECT))
+    }
     @Test fun drawingRequiresARegionAndHistoryUsesItsOwnUndo() {
         val region = ScreenshotToolbarState(hasRegion=true)
         for (action in listOf(ScreenshotAction.ARROW,ScreenshotAction.RECTANGLE,ScreenshotAction.PEN)) {

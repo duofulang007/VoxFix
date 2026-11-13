@@ -1,4 +1,5 @@
 #include <android/bitmap.h>
+#include <android/log.h>
 #include <jni.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -66,11 +67,25 @@ Java_local_voxfix_debug_ScreenshotStitch_pushFrame(JNIEnv *env, jobject self, jl
         memcpy(info.rgba_bytes + y * info.stride_bytes, source + offset + y * (size_t)stride, row);
     }
     SnowStitchFrameOutcome outcome = {0};
-    if (!snow_stitch_session_push_owned(stitch->session, &frame, &outcome)) return NULL;
+    if (!snow_stitch_session_push_owned(stitch->session, &frame, &outcome)) {
+        __android_log_print(ANDROID_LOG_WARN, "VoxFix", "SCROLL_PUSH_FAILED: %s",
+                            snow_stitch_last_error_message());
+        return NULL;
+    }
     stitch->extent = horizontal ? outcome.output_width : outcome.output_height;
-    jint result[] = {(jint)outcome.event, (jint)outcome.output_width, (jint)outcome.output_height};
-    jintArray output = (*env)->NewIntArray(env, 3);
-    if (output != NULL) (*env)->SetIntArrayRegion(env, output, 0, 3, result);
+    /* Diagnostics for the phone-side capture loop: confidence, coverage and the matched
+     * reference offset let Kotlin log (and later gate) suspicious small-shift matches. */
+    jint result[] = {
+        (jint)outcome.event, (jint)outcome.output_width, (jint)outcome.output_height,
+        (jint)outcome.has_matched_reference_offset_y, (jint)outcome.matched_reference_offset_y,
+        (jint)(outcome.metrics.score * 1000.0f), (jint)(outcome.metrics.second_score * 1000.0f),
+        (jint)(outcome.metrics.content_coverage * 1000.0f),
+        (jint)(outcome.metrics.fixed_coverage * 1000.0f),
+        (jint)(outcome.metrics.inlier_ratio * 1000.0f),
+        (jint)outcome.metrics.feature_support,
+    };
+    jintArray output = (*env)->NewIntArray(env, 11);
+    if (output != NULL) (*env)->SetIntArrayRegion(env, output, 0, 11, result);
     return output;
 }
 

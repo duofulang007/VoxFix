@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Rect
 import android.net.Uri
 import android.util.AtomicFile
 import org.json.JSONArray
@@ -97,6 +98,80 @@ class ScreenshotStore(private val context: Context) {
         } finally { if (!committed) { original.delete(); thumb.delete() } }
     }
 
+    /**
+     * 已编码的 PNG 文件直接入库（长截图多段合成用，避免为入库再整张解码）。
+     * 传入 [document] 时存成可二次编辑的工程（底图 + 首版合成），否则只存普通图片。
+     * 超出剪贴板单张限额（16MP / 16MB）时返回 null，由调用方改走相册；入库失败抛错。
+     */
+    fun savePng(png: File, width: Int, height: Long, source: String = "",
+                document: ScreenshotDocument? = null): Entry? {
+        if (width <= 0 || height <= 0 || width.toLong() * height > 16_000_000) return null
+        check(png.isFile) { "长截图文件不存在" }
+        if (png.length() > 16L * 1024 * 1024) return null
+        check(directory.isDirectory || directory.mkdirs()) { "无法创建截图剪贴板" }
+        val id = UUID.randomUUID().toString().replace("-", "")
+        var committed = false
+        if (document == null) {
+            val original = file(id)
+            val thumb = thumbnail(id)
+            try {
+                val moved = png.renameTo(original)
+                check(moved || (png.copyTo(original, overwrite = true).isFile && png.delete())) { "无法入库长截图" }
+                val preview = thumbnailFromPng(original, width)
+                try { FileOutputStream(thumb).use { check(preview.compress(Bitmap.CompressFormat.WEBP,80,it)) { "缩略图保存失败" } } }
+                finally { preview.recycle() }
+                val entry = Entry(id,System.currentTimeMillis(),width,height.toInt(),original.length(),source=source)
+                synchronized(lock) {
+                    val old = readEntries()
+                    budget(old,entry,null)
+                    writeEntries(listOf(entry) + old)
+                    committed = true
+                }
+                return entry
+            } finally { if (!committed) { original.delete(); thumb.delete() } }
+        }
+        // 工程化长截图：source.png 是未改动的底图，revision 1 是首版合成。
+        // 剪贴板点「编辑」时复用截图工程，之前加的对象、文字和工具状态都能继续改。
+        val projectDir = File(projects,id)
+        val base = File(projectDir,"source.png")
+        val revisionDir = File(projectDir,"1")
+        val composite = File(revisionDir,"composite.png")
+        val thumb = File(revisionDir,"thumbnail.webp")
+        try {
+            check(projectDir.isDirectory || projectDir.mkdirs()) { "无法创建截图工程" }
+            check(revisionDir.isDirectory || revisionDir.mkdirs()) { "无法创建截图副本" }
+            val moved = png.renameTo(base)
+            check(moved || (png.copyTo(base, overwrite = true).isFile && png.delete())) { "无法入库长截图" }
+            base.copyTo(composite,overwrite = true)
+            val preview = thumbnailFromPng(base, width)
+            try { FileOutputStream(thumb).use { check(preview.compress(Bitmap.CompressFormat.WEBP,80,it)) { "缩略图保存失败" } } }
+            finally { preview.recycle() }
+            File(revisionDir,"document.json").writeText(ScreenshotDocumentCodec.encode(document),Charsets.UTF_8)
+            val bytes = base.length() + composite.length() + thumb.length() + File(revisionDir,"document.json").length()
+            val entry = Entry(id,System.currentTimeMillis(),width,height.toInt(),bytes,Kind.PROJECT,1,source)
+            synchronized(lock) {
+                val old = readEntries()
+                budget(old,entry,null)
+                writeEntries(listOf(entry) + old)
+                committed = true
+            }
+            return entry
+        } finally { if (!committed) projectDir.deleteRecursively() }
+    }
+
+    /** 长图缩略图：只解码顶部一条窄带再缩放，不整张解码。 */
+    private fun thumbnailFromPng(file: File, width: Int): Bitmap {
+        val decoder = android.graphics.BitmapRegionDecoder.newInstance(file.path, false)
+        try {
+            val band = minOf(decoder.height, width * 3)
+            val top = decoder.decodeRegion(Rect(0,0,width,band),BitmapFactory.Options())
+            val scale = minOf(1f,320f / maxOf(top.width,top.height))
+            val scaled = Bitmap.createScaledBitmap(top,maxOf(1,(top.width*scale).toInt()),maxOf(1,(top.height*scale).toInt()),true)
+            if (scaled !== top) top.recycle()
+            return scaled
+        } finally { decoder.recycle() }
+    }
+
     /** Path of the untouched canvas for a project, or the image itself for a plain record. */
     fun sourceFile(id: String): File? {
         val entry = entry(id) ?: return null
@@ -121,6 +196,11 @@ class ScreenshotStore(private val context: Context) {
      * Publishes one project revision. [replaceId] keeps the record and its revision chain; otherwise
      * a new record is created and the base image is either [source], copied from [copySourceFromId]
      * or, for a record that never had a project, the composite itself.
+     *
+     * A plain image may be upgraded in place by passing its id as [replaceId]: the record keeps its
+     * id (so the clipboard shows one entry, not two) and its PNG becomes the project base image.
+     * Without this the user edits a screenshot, saves, taps the same picture again and finds an
+     * empty canvas — the marks went into a second, easy-to-miss record.
      */
     fun saveProject(
         document: ScreenshotDocument, composite: Bitmap, source: Bitmap? = null,
@@ -129,7 +209,7 @@ class ScreenshotStore(private val context: Context) {
         require(composite.width > 0 && composite.height > 0 && composite.width.toLong()*composite.height <= 16_000_000) { "截图尺寸过大，请缩小选区" }
         check(directory.isDirectory || directory.mkdirs()) { "无法创建截图剪贴板" }
         val replaced = replaceId?.let { entry(it) ?: error("图片已删除，请刷新") }
-        check(replaced==null || replaced.kind==Kind.PROJECT) { "普通图片请另存为工程" }
+        val upgrading = replaced?.kind == Kind.IMAGE
         val id = replaceId ?: UUID.randomUUID().toString().replace("-","")
         val projectDir = File(projects,id)
         check(projectDir.isDirectory || projectDir.mkdirs()) { "无法创建截图工程" }
@@ -139,16 +219,26 @@ class ScreenshotStore(private val context: Context) {
         val revisionDir = File(projectDir,revision.toString())
         try {
             if (!sourceFile.isFile) {
-                check(replaced==null) { "截图底图缺失，原工程已保留" }
-                val copied = when {
-                    source != null -> writePng(sourceFile,source)
-                    copySourceFromId != null -> {
-                        val origin = sourceFile(copySourceFromId) ?: error("原图已删除，请刷新")
-                        origin.copyTo(sourceFile,overwrite = true); true
+                when {
+                    replaced == null -> {
+                        val copied = when {
+                            source != null -> writePng(sourceFile,source)
+                            copySourceFromId != null -> {
+                                val origin = sourceFile(copySourceFromId) ?: error("原图已删除，请刷新")
+                                origin.copyTo(sourceFile,overwrite = true); true
+                            }
+                            else -> writePng(sourceFile,composite)
+                        }
+                        check(copied && sourceFile.isFile) { "无法保存截图底图" }
                     }
-                    else -> writePng(sourceFile,composite)
+                    upgrading -> {
+                        // 普通图片原地升级：它自己的 PNG 就是底图，原样复制，不动像素。
+                        val legacy = File(directory,"$id.png")
+                        check(legacy.isFile) { "原图已删除，请刷新" }
+                        legacy.copyTo(sourceFile,overwrite = true)
+                    }
+                    else -> error("截图底图缺失，原工程已保留")
                 }
-                check(copied && sourceFile.isFile) { "无法保存截图底图" }
             }
             check(revisionDir.isDirectory || revisionDir.mkdirs()) { "无法创建截图副本" }
             check(writePng(File(revisionDir,"composite.png"),composite)) { "截图编码失败" }
@@ -171,13 +261,14 @@ class ScreenshotStore(private val context: Context) {
                 writeEntries(listOf(entry) + old.filterNot { it.id == id })
                 committed = true
             }
-            // Only after the index committed may the superseded revision disappear.
-            if (replaced != null) File(projectDir,replaced.revision.toString()).deleteRecursively()
+            // Only after the index committed may the superseded files disappear.
+            if (replaced != null && !upgrading) File(projectDir,replaced.revision.toString()).deleteRecursively()
+            if (upgrading) { File(directory,"$id.png").delete(); File(directory,"$id.webp").delete() }
             entry
         } finally {
             if (!committed) {
                 revisionDir.deleteRecursively()
-                if (replaceId == null) projectDir.deleteRecursively()
+                if (replaceId == null || upgrading) projectDir.deleteRecursively()
             }
         }
     }
