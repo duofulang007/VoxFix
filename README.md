@@ -7,11 +7,12 @@ VoxFix 是可在系统中独立选择的 Android 输入法（`local.voxfix.debug
 ## 当前能力
 
 - **键盘**：原生 WebView 承载 `preview/`，优先维护 26 键；中文拼音使用 librime 1.17.0，支持个人词库、候选记忆、备份与合并导入。
+- **App 外壳**：启动入口为 `HomeActivity`，四栏信息架构（首页／屏幕／输入／设置），模块开关集中在 `Modules.kt`，主题与控件令牌在 `ui/VoxFixTheme.kt`／`ui/VoxFixUi.kt`，图标在 `res/drawable/ic_vx_*.xml`；`MainActivity` 降为「试用与自检」页，真机脚本仍以 `am start -n local.voxfix.debug/.MainActivity` 拉起。设计基线与可点原型见[App 外壳设计](docs/App外壳设计-2026-11-13.md)、`design/app-shell.html`。
 - **离线语音**：SenseVoice Small R5 INT8＋silero VAD＋CT-Transformer；定稿 → CTC 热词救援 → 个人词典 → 标点。长按空格 240ms 进入，上滑取消、松手定稿；支持常驻、逐字呈现和长录音内部接续。键盘出现即预热，空闲 5 分钟释放。不保存日常录音或转写。
 - **编辑与剪贴板**：滑轨长按锁定、自定义编辑框、八方向盘及宿主选区弹出；剪贴板拆词、全历史检索与候选引用，工具栏长按拖动排序；超长条目向左拖动跟手查看（位移记忆＋松手惯性，存储原文不变）；图片重复复制自动置顶；电脑推送条目带「电脑」角标，支持电脑↔手机剪贴板双向同步（`tools/` 伴生工具，经 scrcpy 与 CopyQ，见 [AGENTS.md](AGENTS.md) 当前进度）。
-- **屏幕取字**：独立无障碍服务、侧边弧形入口、整屏/框选与结果保护；主包由 ML Kit 定位行、PP-OCRv6 small 识别并做段落排序，不上传截图。独立 OCR 对照宿主在 `android/screenTextUiTest/`。
-- **截图工程**：参考 Snow Shot 1.1.8，支持绘图、滤镜、文字/序号、贴图、单对象反复编辑与工具栏自定义；图片并入剪贴板，保存工程后可重开，裁剪另存保留工程。所有工具可从选框外起笔，导出只裁框内。见[实现与验收](docs/截图可编辑工程-实现与验收-2026-11-04.md)。
-- **Snow Shot 逐项复刻（进行中）**：目标为全部 44 项（T01–T28 工具动作、A01–A16 辅助入口）。已接画笔、形状、直线、箭头、橡皮、高亮、聚光灯、序号、文字、水印、非矩形选区，以及 T22 的多选、混合态、八向边角缩放、插点、拖段、层级／对齐／分布／复制与移动／缩放吸附；智能选择支持连续点按换目标与文字行／段落细化，智能条已精简、工具栏与贴图编辑条贴选区；T27 手机长截屏已接手动跟拍、自动滚动和实时裁边，成品进图片剪贴板；T28 录屏已接选区 MP4 录制、麦克风／系统音、暂停恢复、相册保存、导出设置面板、延迟倒计时、打开录制文件夹、录制区域边框与录制前设置阶段（蓝框可调选区，区域裁切真机已确认）。T28 录屏已接选区 MP4 录制、麦克风／系统音、暂停恢复、相册保存、导出设置面板、延迟倒计时、打开录制文件夹、录制区域边框与录制前设置阶段，GIF/APNG/WebP 动画导出与混音/分轨已真机验证。T08、T15、T16、T22、T28 代码面均已收口，剩余为原版同尺度叠图与真人走查；A07 捕捉光标已判定不做（Android 无指针捕捉能力）。识别/翻译/识码进行中在对应按钮上显示忙碌转圈。B 线原版叠图管线已建成（经 MCP 驱动本机原版 1.1.8），已出 T08 画笔首对叠图。进度与未闭环项以[交接最后两节](docs/SnowShot复刻接续交接-2026-11-04.md)为准；自动化口径是 JVM 463 项与 K60 28 组截图套件，**套件通过不等于原版叠图或真人通过**。
+- **屏幕取字**：独立无障碍服务、侧边弧形入口、整屏/框选与结果保护；主包由 ML Kit 定位行、PP-OCRv6 small 识别并做段落排序，不上传截图。独立 OCR 对照宿主在 `android/screenTextUiTest/`。展开胶囊后第二枚按钮是无线调试开关（写 `Settings.Global.adb_wifi_enabled`，需一次性 `pm grant WRITE_SECURE_SETTINGS`，Wi-Fi 未连时系统回滚）；功能菜单「截图工具 · 修复」按 listed／bound／live 自检无障碍服务并一键重绑，见[无线调试开关](docs/无线调试开关-可行性评估与设计-2026-11-09.md)。
+- **截图工程**：参考 Snow Shot 1.1.8，支持绘图、滤镜、文字/序号、贴图、单对象反复编辑与工具栏自定义；图片并入剪贴板，保存工程后可重开，裁剪另存保留工程。所有工具可从选框外起笔，导出只裁框内。画布缩放为照片查看器式：双指捏合以焦点为锚、单指拖动、双击整幅↔满宽、松手吸附档位，整幅/适应宽度由 `ScreenshotCanvasFit`（Kotlin 与 `preview/image-fit.mjs` 同公式）决定；编辑过的元素可从图片剪贴板同一条记录点「编辑」继续调整（工具、颜色、线宽、字号一并恢复），普通图片首次编辑保存即原地升级为工程、列表不新增条目。见[实现与验收](docs/截图可编辑工程-实现与验收-2026-11-04.md)与[剪贴板图片编辑修复](docs/剪贴板图片编辑修复-2026-11-13.md)。
+- **Snow Shot 逐项复刻（进行中）**：目标为全部 44 项（T01–T28 工具动作、A01–A16 辅助入口）。已接画笔、形状、直线、箭头、橡皮、高亮、聚光灯、序号、文字、水印、非矩形选区，以及 T22 的多选、混合态、八向边角缩放、插点、拖段、层级／对齐／分布／复制与移动／缩放吸附；智能选择支持连续点按换目标与文字行／段落细化，智能条已精简、工具栏与贴图编辑条贴选区；T27 手机长截屏已接手动跟拍、自动滚动和实时裁边，成品进图片剪贴板；T28 录屏已接选区 MP4 录制、麦克风／系统音、暂停恢复、相册保存、导出设置面板、延迟倒计时、打开录制文件夹、录制区域边框与录制前设置阶段（蓝框可调选区、区域裁切、GIF/APNG/WebP 动画导出、混音/分轨均已真机验证）。T08、T15、T16、T22、T28 代码面均已收口，剩余为原版同尺度叠图与真人走查；A07 捕捉光标已判定不做（Android 无指针捕捉能力）。识别/翻译/识码进行中在对应按钮上显示忙碌转圈。B 线原版叠图管线已建成（经 MCP 驱动本机原版 1.1.8），已出 T08 画笔首对叠图。进度与未闭环项以[交接最后两节](docs/SnowShot复刻接续交接-2026-11-04.md)为准；自动化口径是 JVM 466 项与 K60 28 组截图套件，**套件通过不等于原版叠图或真人通过**。
 - **离线翻译**：截图工具条接 Hy-MT2-1.8B 1.25bit，约 462 MB，首次使用下载，不随 APK 打包；支持原文/译文、段落重排、编辑及撤销/重做。中文长文本译英文仍有超时问题，下载恢复与复杂版面待验，见[OCR 与翻译交接](docs/OCR与翻译续做交接-2026-11-04.md)。
 - **其他**：表情包同屏搜索（搜狗图源，联网）、横屏独立布局。手写、安卓 Qwen 润色、电脑语音服务、自动改字学习和旧双遍引擎已删除。
 
@@ -26,6 +27,8 @@ VoxFix 是可在系统中独立选择的 Android 输入法（`local.voxfix.debug
 | `android/app/src/test/` / `androidTest/` | JVM 自检与隔离安卓测试 |
 | `android/screenTextUiTest/` | 独立、无联网权限的 OCR 对照宿主 |
 | `preview/` | APK 共用键盘前端、网页回归、参考图 |
+| `design/` | 可点原型与图标方案（`app-shell.html`、`icon/`） |
+| `testdata/` | 截图/长截屏/翻译的固定测试素材 |
 | `tools/` | 构建、模型/词库准备、评测脚本及手机伴生工具（插拔自动投屏、剪贴板同步守护） |
 | `docs/` | 当前约定与验收；旧方案在 `archive/`，待决策稿在 `design/` |
 
@@ -43,6 +46,17 @@ pwsh -ExecutionPolicy Bypass -File tools/build_android.ps1
 
 构建脚本校验依赖摘要，执行 `testDebugUnitTest assembleDebug`，不自动安装。APK 位于 `android/app/build/outputs/apk/debug/app-debug.apk`。Android 测试代码改动另需 `assembleDebugAndroidTest`。
 
+在本机由 agent 构建时不要走这个 ps1（PowerShell 的 stdout 不回传，看不到失败原因），直接用 JDK 与 gradle-launcher：
+
+```bash
+.android/app-tools/jdk/bin/java.exe -classpath .android/app-tools/gradle/lib/gradle-launcher-8.9.jar \
+  org.gradle.launcher.GradleMain --no-daemon --max-workers=2 \
+  "-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g" \
+  -Pkotlin.compiler.execution.strategy=in-process -g .android/gradle-cache -p android <任务名>
+```
+
+`-Dorg.gradle.jvmargs` 必须带，默认 512MB 堆会在编译期 GC 抖动直至失败。
+
 ## 验证与网页打包
 
 ```powershell
@@ -52,7 +66,7 @@ node tools/check_module_boundaries.mjs
 .venv/Scripts/python.exe tools/build_preview.py
 ```
 
-`preview/*.test.mjs` 共 47 套，其中 40 套不依赖手机，7 套 `*-device` 需要 USB 与 WebView 调试端口转发。只跑受影响功能；修改共用状态、渲染或事件委托时跑全量非真机回归。网页测试使用 Playwright＋Edge。
+`preview/*.test.mjs` 共 48 套，其中 41 套不依赖手机，7 套 `*-device` 需要 USB 与 WebView 调试端口转发。开发期只做 `:app:compileDebugKotlin` 编译自检，功能全部改完后统一跑一次全量（网页回归＋JVM＋仪器套件＋真机走查）；纯文档清理或无引用代码删除按受影响范围回归。网页测试使用 Playwright＋Edge。
 
 开发预览使用本地 HTTP 下的 `preview/index.html`；根目录 `键盘试用页.html` 是分发产物。前端改完由 agent 打包，不使用监听模式。结构检查目前允许 `app.mjs` 的体积预警，达到 3000 行或 250 KB 必须拆分；`test-lexicon.mjs` 是测试共用模块，不进产物。
 
