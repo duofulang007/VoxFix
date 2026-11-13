@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="VoxFix 输入法 图标 B 近黑底">
+  <rect width="1024" height="1024" fill="#0F1115"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="42" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M262 366 V 262 H 366"/>
+    <path d="M658 262 H 762 V 366"/>
+    <path d="M762 658 V 762 H 658"/>
+    <path d="M366 762 H 262 V 658"/>
+    <path d="M400 400 L 512 624 L 624 400" stroke-width="54"/>
+  </g>
+</svg>

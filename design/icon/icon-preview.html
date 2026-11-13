@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VoxFix 输入法 · 应用图标</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:48px 40px 72px;background:#0B0B0C;color:#EDEDEF;
+  font-family:system-ui,-apple-system,"PingFang SC","MiSans","Noto Sans CJK SC","Microsoft YaHei",sans-serif}
+.wrap{max-width:1080px;margin:0 auto}
+h1{font-size:22px;font-weight:600;letter-spacing:-.01em;margin:0 0 6px}
+.lede{font-size:13.5px;line-height:1.7;color:#8E8E96;margin:0 0 40px;max-width:640px}
+h2{font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:#6E6E76;font-weight:600;margin:44px 0 16px}
+.row{display:flex;gap:20px;flex-wrap:wrap}
+.variant{background:#141416;border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:22px;display:flex;flex-direction:column;gap:16px;align-items:center}
+.variant img{width:148px;height:148px;border-radius:26%;display:block}
+.variant .meta{text-align:center;font-size:12px;color:#8E8E96;line-height:1.6}
+.variant .meta b{display:block;color:#EDEDEF;font-size:13.5px;font-weight:500;margin-bottom:2px}
+.swatch{width:100%;height:4px;border-radius:2px;margin-top:2px}
+
+.masks{display:flex;gap:34px;align-items:flex-end;flex-wrap:wrap}
+.mask{display:flex;flex-direction:column;align-items:center;gap:10px;font-size:11.5px;color:#7C7C84}
+.mask .box{width:96px;height:96px;overflow:hidden;background:#1677FF}
+.mask .box img{width:100%;height:100%;display:block}
+.circle .box{border-radius:50%}
+.squircle .box{border-radius:26%}
+.rsquare .box{border-radius:14%}
+
+.sizes{display:flex;gap:26px;align-items:flex-end;flex-wrap:wrap}
+.size{display:flex;flex-direction:column;align-items:center;gap:8px;font-size:11.5px;color:#7C7C84;font-variant-numeric:tabular-nums}
+.size img{border-radius:26%;display:block}
+
+.launcher{display:flex;gap:22px;padding:26px 22px;border-radius:22px;align-items:flex-start;flex-wrap:wrap}
+.launcher.light{background:linear-gradient(150deg,#F3F4F6,#DDE2E8)}
+.launcher.dark{background:linear-gradient(150deg,#1C1F26,#0D0F13)}
+.app{display:flex;flex-direction:column;align-items:center;gap:7px;width:66px}
+.app img{width:54px;height:54px;border-radius:26%;box-shadow:0 3px 8px rgba(0,0,0,.22)}
+.app span{font-size:10.5px;line-height:1.2;text-align:center;letter-spacing:-.01em}
+.launcher.light .app span{color:#2B2E33}
+.launcher.dark .app span{color:#E8E9EC}
+.app.ghost img{opacity:.35}
+
+.spec{display:grid;grid-template-columns:1fr 1fr;gap:10px 32px;font-size:13px;color:#A6A6AE}
+.spec div{display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.06);padding:7px 0}
+.spec b{color:#EDEDEF;font-weight:500;font-variant-numeric:tabular-nums}
+.note{font-size:12.5px;line-height:1.75;color:#7C7C84;margin-top:14px}
+@media (max-width:760px){body{padding:28px 18px 56px}.spec{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>VoxFix 输入法 · 应用图标</h1>
+  <p class="lede">两个元素：四角取景框 = 截图，中间 V = VoxFix。单色标记，换底色即为另一套。取景框是截图与扫描的通用符号，也让图标不至于被读成「勾选框」。</p>
+
+  <h2>三套底色</h2>
+  <div class="row">
+    <div class="variant">
+      <img src="voxfix-icon-a.svg" alt="A 蓝底">
+      <div class="meta"><b>A · 主色蓝</b>#1677FF · 与 App 主色一致<br>启动器里识别度最高</div>
+      <div class="swatch" style="background:#1677FF"></div>
+    </div>
+    <div class="variant">
+      <img src="voxfix-icon-b.svg" alt="B 近黑底">
+      <div class="meta"><b>B · 近黑</b>#0F1115 · 最克制<br>工具感强，深色壁纸略融</div>
+      <div class="swatch" style="background:#0F1115;border:1px solid rgba(255,255,255,.14)"></div>
+    </div>
+    <div class="variant">
+      <img src="voxfix-icon-c.svg" alt="C 白底">
+      <div class="meta"><b>C · 白底</b>#FFFFFF · 反色标记<br>浅色壁纸友好，深色壁纸上偏亮</div>
+      <div class="swatch" style="background:#FFFFFF"></div>
+    </div>
+  </div>
+
+  <h2>遮罩测试（以 A 为例）</h2>
+  <div class="masks">
+    <div class="mask circle"><div class="box"><img src="voxfix-icon-a.svg" alt=""></div>圆形 · 原生桌面</div>
+    <div class="mask squircle"><div class="box"><img src="voxfix-icon-a.svg" alt=""></div>圆角方 · 部分 ROM</div>
+    <div class="mask rsquare"><div class="box"><img src="voxfix-icon-a.svg" alt=""></div>方角 · 自适应</div>
+  </div>
+  <p class="note">图形外沿 500/1024 落在自适应安全区内，圆形与圆角方遮罩都不会切到取景框的角。</p>
+
+  <h2>实际尺寸</h2>
+  <div class="sizes">
+    <div class="size"><img src="voxfix-icon-a.svg" width="96" height="96" alt="">96</div>
+    <div class="size"><img src="voxfix-icon-a.svg" width="72" height="72" alt="">72</div>
+    <div class="size"><img src="voxfix-icon-a.svg" width="56" height="56" alt="">56</div>
+    <div class="size"><img src="voxfix-icon-a.svg" width="48" height="48" alt="">48</div>
+    <div class="size"><img src="voxfix-icon-a.svg" width="32" height="32" alt="">32</div>
+    <div class="size"><img src="voxfix-icon-a.svg" width="24" height="24" alt="">24</div>
+  </div>
+  <p class="note">24px 时取景框线约 1.0px、V 约 1.3px，仍能读出「取景框 + V」。通知栏另有加粗实心版，不复用此图。</p>
+
+  <h2>放进桌面</h2>
+  <div class="row">
+    <div class="launcher light">
+      <div class="app"><img src="voxfix-icon-a.svg" alt=""><span>VoxFix<br>输入法</span></div>
+      <div class="app ghost"><span style="width:54px;height:54px;border-radius:26%;background:rgba(0,0,0,.10);display:block"></span><span>系统应用</span></div>
+      <div class="app ghost"><span style="width:54px;height:54px;border-radius:26%;background:rgba(0,0,0,.10);display:block"></span><span>系统应用</span></div>
+      <div class="app ghost"><span style="width:54px;height:54px;border-radius:26%;background:rgba(0,0,0,.10);display:block"></span><span>系统应用</span></div>
+    </div>
+    <div class="launcher dark">
+      <div class="app"><img src="voxfix-icon-b.svg" alt=""><span>VoxFix<br>输入法</span></div>
+      <div class="app ghost"><span style="width:54px;height:54px;border-radius:26%;background:rgba(255,255,255,.10);display:block"></span><span>系统应用</span></div>
+      <div class="app ghost"><span style="width:54px;height:54px;border-radius:26%;background:rgba(255,255,255,.10);display:block"></span><span>系统应用</span></div>
+      <div class="app ghost"><span style="width:54px;height:54px;border-radius:26%;background:rgba(255,255,255,.10);display:block"></span><span>系统应用</span></div>
+    </div>
+  </div>
+
+  <h2>几何规格（1024 母版）</h2>
+  <div class="spec">
+    <div><span>画布</span><b>1024 × 1024</b></div>
+    <div><span>取景框</span><b>500 × 500 · 臂长 104</b></div>
+    <div><span>取景框线宽</span><b>42 · 圆头</b></div>
+    <div><span>图形外沿</span><b>500（自适应安全区内）</b></div>
+    <div><span>V 宽度</span><b>224</b></div>
+    <div><span>V 笔画</span><b>54 · 圆头圆角</b></div>
+  </div>
+  <p class="note">Android 交付为自适应图标：前景 vector（108 视口，图形按安全区缩放）、背景纯色、外加 Android 13 主题图标用的单色层。minSdk 30，无需各密度 PNG。</p>
+</div>
+</body>
+</html>

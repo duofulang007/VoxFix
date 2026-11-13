@@ -1,0 +1,923 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VoxFix 输入法 · App 外壳设计稿</title>
+<style>
+/* ───────────── 令牌：Snow Shot 1.1.8 / Ant Design Qt 映射 ───────────── */
+:root{
+  --primary:#1677FF; --primary-hover:#4096FF; --primary-soft:#E6F4FF;
+  --danger:#FF4D4F; --success:#52C41A; --warning:#FAAD14;
+  --bg:#F5F5F5; --surface:#FFFFFF; --surface-high:#FFFFFF; --surface-sunken:#FAFAFA;
+  --border:rgba(0,0,0,.08); --border-strong:rgba(0,0,0,.14);
+  --t1:rgba(0,0,0,.87); --t2:rgba(0,0,0,.65); --t3:rgba(0,0,0,.45); --t4:rgba(0,0,0,.25);
+  --rc:10px; --rctl:8px; --rsm:6px;
+  --shadow-pop:0 6px 16px rgba(0,0,0,.12),0 3px 6px rgba(0,0,0,.06);
+}
+[data-theme="dark"]{
+  --bg:#141414; --surface:#1F1F1F; --surface-high:#262626; --surface-sunken:#181818;
+  --border:rgba(255,255,255,.08); --border-strong:rgba(255,255,255,.14);
+  --t1:rgba(255,255,255,.85); --t2:rgba(255,255,255,.65); --t3:rgba(255,255,255,.45); --t4:rgba(255,255,255,.25);
+  --primary-soft:#15325B;
+  --shadow-pop:0 6px 16px rgba(0,0,0,.48);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+[hidden]{display:none!important}
+html,body{height:100%}
+/* 统一图标：24dp 网格、描边 1.75（≈原版 1024 画布 80.64 的 24dp 视觉线宽）、圆头 */
+svg.ic{width:24px;height:24px;display:block;flex:0 0 auto;fill:none;stroke:currentColor;
+  stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+body{
+  margin:0;background:#E9EAEC;color:#1a1a1a;
+  font-family:system-ui,-apple-system,"PingFang SC","MiSans","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+  display:flex;justify-content:center;align-items:flex-start;gap:40px;padding:40px 24px 64px;
+}
+@media (prefers-color-scheme:dark){body{background:#0C0C0D;color:#eee}}
+
+/* ───────────── 舞台 ───────────── */
+.stage{display:flex;flex-direction:column;align-items:center;gap:14px;position:sticky;top:24px}
+.caption{font-size:12px;letter-spacing:.02em;color:#6b6b70;font-variant-numeric:tabular-nums}
+@media (prefers-color-scheme:dark){.caption{color:#8a8a90}}
+
+/* ───────────── 手机 ───────────── */
+.phone{
+  width:411px;height:891px;background:var(--bg);color:var(--t1);
+  border-radius:42px;border:1px solid rgba(0,0,0,.10);overflow:hidden;
+  display:flex;flex-direction:column;position:relative;
+  box-shadow:0 1px 0 rgba(255,255,255,.5) inset,0 24px 60px rgba(0,0,0,.16),0 2px 8px rgba(0,0,0,.08);
+}
+[data-theme="dark"]{border-color:rgba(255,255,255,.10)}
+
+/* 状态栏 */
+.statusbar{height:34px;flex:0 0 34px;display:flex;align-items:flex-end;justify-content:space-between;
+  padding:0 22px 2px;font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--t1)}
+.statusbar .sb-right{display:flex;align-items:center;gap:5px}
+.sb-bar{display:flex;align-items:flex-end;gap:1.5px;height:9px}
+.sb-bar i{width:2.5px;background:currentColor;border-radius:1px;display:block}
+.sb-bar i:nth-child(1){height:4px}.sb-bar i:nth-child(2){height:6px}.sb-bar i:nth-child(3){height:8px}
+.sb-batt{width:18px;height:9px;border:1px solid currentColor;border-radius:2.5px;position:relative;opacity:.9}
+.sb-batt::before{content:"";position:absolute;inset:1.5px;right:5px;background:currentColor;border-radius:1px}
+.sb-batt::after{content:"";position:absolute;right:-2.5px;top:2.5px;width:1.5px;height:3px;background:currentColor;border-radius:0 1px 1px 0}
+
+/* 顶栏 */
+.topbar{flex:0 0 auto;min-height:52px;display:flex;align-items:center;gap:8px;padding:0 16px 6px}
+.topbar h1{font-size:22px;line-height:1.2;font-weight:600;margin:0;letter-spacing:-.01em}
+.topbar .spacer{flex:1}
+.icon-btn{width:40px;height:40px;margin-right:-8px;display:grid;place-items:center;border:0;background:none;color:var(--t2);border-radius:50%;cursor:pointer}
+.icon-btn:active{background:var(--border)}
+.icon-btn.left{margin:0 0 0 -10px}
+
+/* 内容滚动区 */
+.content{flex:1;overflow-y:auto;overflow-x:hidden;padding:4px 16px 20px;scrollbar-width:none}
+.content::-webkit-scrollbar{display:none}
+.page[hidden]{display:none}
+
+/* 卡片 */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--rc);padding:4px 0;margin:0 0 12px}
+.card.flush{padding:0;overflow:hidden}
+.card-head{display:flex;align-items:center;gap:8px;padding:14px 16px 10px}
+.card-head h3{font-size:15px;font-weight:500;margin:0;letter-spacing:-.005em}
+.card-head .sub{font-size:12.5px;color:var(--t3);margin-left:auto;font-variant-numeric:tabular-nums}
+.card-note{padding:0 16px 12px;font-size:12.5px;line-height:1.6;color:var(--t3)}
+
+/* 行 */
+.row{display:flex;align-items:center;gap:12px;min-height:56px;padding:9px 16px;background:none;border:0;width:100%;font:inherit;color:inherit;text-align:left;cursor:default}
+button.row{cursor:pointer}
+button.row:active{background:var(--border)}
+.row + .row{position:relative}
+.row + .row::before{content:"";position:absolute;left:16px;right:0;top:0;height:1px;background:var(--border)}
+.row.child{padding-left:56px}
+.row.child + .row.child::before{left:56px}
+.row.grand{padding-left:72px}
+.row.grand + .row::before{left:72px}
+.row .body{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px}
+.row .title{font-size:15px;line-height:20px;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .desc{font-size:12.5px;line-height:17px;color:var(--t3)}
+.row .value{font-size:14px;color:var(--t2);white-space:nowrap;flex:0 0 auto}
+.row .value.num{font-variant-numeric:tabular-nums}
+.row .chev{color:var(--t4);flex:0 0 auto;display:grid;place-items:center}
+.row.off{opacity:.45}
+.row.off .title,.row.off .desc{color:var(--t2)}
+.row-child-guide{position:relative}
+.row-child-guide::before{content:"";position:absolute;left:20px;top:0;bottom:0;width:1px;background:var(--border)}
+
+/* 行首图标 */
+.row-ic{width:28px;height:28px;flex:0 0 28px;border-radius:var(--rsm);display:grid;place-items:center;
+  background:var(--primary-soft);color:var(--primary)}
+.row-ic.gray{background:var(--border);color:var(--t2)}
+.row-ic .ic{width:18px;height:18px}
+
+/* 状态点 */
+.dot{width:7px;height:7px;border-radius:50%;flex:0 0 7px;display:inline-block}
+.dot.ok{background:var(--success)}
+.dot.warn{background:var(--warning)}
+.dot.off{background:var(--t4)}
+
+/* 段控 */
+.segmented{display:flex;padding:2px;background:var(--border);border-radius:var(--rctl);gap:2px}
+.segmented button{border:0;background:none;font:inherit;font-size:13px;color:var(--t2);padding:6px 12px;border-radius:6px;cursor:pointer}
+.segmented button[aria-selected="true"]{background:var(--surface-high);color:var(--t1);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+[data-theme="dark"] .segmented button[aria-selected="true"]{background:#3A3A3A}
+
+/* 标题 */
+.sec{display:flex;align-items:baseline;gap:8px;padding:14px 2px 8px}
+.sec:first-child{padding-top:2px}
+.sec h2{font-size:13.5px;font-weight:500;letter-spacing:.01em;color:var(--t2);margin:0}
+.sec .link{margin-left:auto;font-size:12.5px;color:var(--primary);background:none;border:0;font:inherit;font-size:12.5px;cursor:pointer;padding:2px 0}
+.sec .hint{margin-left:auto;font-size:12px;color:var(--t3)}
+
+/* 动作卡片 */
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px}
+.tile{position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:0;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--rc);
+  padding:14px 14px 13px;min-height:92px;text-align:left;font:inherit;color:inherit;cursor:pointer;overflow:hidden}
+.tile:active{background:var(--surface-sunken)}
+.tile .ic{width:22px;height:22px;color:var(--primary);margin-bottom:10px}
+.tile .t{font-size:15px;font-weight:500;line-height:20px}
+.tile .s{font-size:12px;line-height:16px;color:var(--t3);margin-top:2px}
+.tile .lock{position:absolute;right:11px;top:11px;color:var(--t4)}
+.tile .lock .ic{width:14px;height:14px;margin:0}
+.tile.locked{background:var(--surface-sunken)}
+.tile.locked .ic{color:var(--t4)}
+.tile.locked .t{color:var(--t3)}
+
+/* chips */
+/* chips：单行横向滚动，模块再多也不挤成两行 */
+.chips{display:flex;flex-wrap:nowrap;gap:8px;margin-bottom:4px;overflow-x:auto;scrollbar-width:none;margin-right:-16px;padding-right:16px}
+.chips::-webkit-scrollbar{display:none}
+.chip{height:28px;flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;padding:0 10px;border-radius:14px;
+  background:var(--surface);border:1px solid var(--border);font-size:12.5px;color:var(--t2)}
+.chip .dot{width:5px;height:5px;flex:0 0 5px}
+
+/* 缩略图 */
+.strip{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+.strip::-webkit-scrollbar{display:none}
+.thumb{flex:0 0 92px;height:66px;border-radius:var(--rsm);border:1px solid var(--border);background:var(--surface);position:relative;overflow:hidden}
+.thumb::before,.thumb::after{content:"";position:absolute;border-radius:2px;background:var(--t3)}
+.thumb.a::before{left:11px;right:11px;top:14px;height:3px;opacity:.55}
+.thumb.a::after{left:11px;right:28px;top:23px;height:3px;opacity:.3}
+.thumb.b::before{left:11px;top:14px;width:34px;height:3px;opacity:.55}
+.thumb.b::after{left:11px;right:11px;top:23px;height:22px;opacity:.14;border-radius:4px}
+.thumb.c::before{left:11px;right:11px;top:14px;height:3px;opacity:.55}
+.thumb.c::after{left:11px;right:11px;top:23px;height:3px;opacity:.3}
+.thumb.more{flex:0 0 72px;display:grid;place-items:center;border-style:dashed;background:none;color:var(--t3);font-size:12px}
+.thumb.more::before,.thumb.more::after{display:none}
+
+/* 开关 */
+.switch{position:relative;width:42px;height:24px;flex:0 0 42px;display:inline-block}
+.switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;z-index:1}
+.switch i{position:absolute;inset:0;border-radius:12px;background:var(--t4);transition:background .16s ease}
+.switch i::after{content:"";position:absolute;left:2px;top:2px;width:20px;height:20px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .16s cubic-bezier(.32,.72,0,1)}
+.switch input:checked + i{background:var(--primary)}
+.switch input:checked + i::after{transform:translateX(18px)}
+.switch input:disabled + i{opacity:.5}
+.switch input:disabled{cursor:not-allowed}
+
+/* 按钮 */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;padding:0 14px;
+  border-radius:var(--rctl);border:1px solid var(--border-strong);background:var(--surface);color:var(--t1);
+  font:inherit;font-size:13.5px;cursor:pointer;white-space:nowrap}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:#fff}
+.btn.primary:active{background:var(--primary-hover)}
+.btn.text{border-color:transparent;background:none;color:var(--primary);padding:0 8px}
+.btn.block{width:100%;height:44px;font-size:15px}
+.btn:active{opacity:.85}
+
+/* 标签 */
+.tag{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:4px;font-size:11.5px;
+  background:var(--primary-soft);color:var(--primary);font-weight:500}
+
+/* 提示条 */
+.tip{display:flex;align-items:center;gap:14px;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--rc);padding:12px 14px;margin-top:12px}
+.tip-art{position:relative;flex:0 0 78px;height:46px;border-radius:6px;background:var(--surface-sunken);border:1px solid var(--border)}
+.tip-art i{position:absolute;right:-1px;top:11px;width:5px;height:24px;border-radius:3px 0 0 3px;background:var(--primary)}
+.tip-art::after{content:"";position:absolute;right:13px;top:19px;width:8px;height:8px;border-left:1.5px solid var(--primary);
+  border-bottom:1.5px solid var(--primary);transform:rotate(45deg);opacity:.55}
+.tip-body{display:flex;flex-direction:column;gap:2px;min-width:0}
+.tip-body b{font-size:13.5px;font-weight:500;color:var(--t1)}
+.tip-body span{font-size:12px;line-height:1.5;color:var(--t3)}
+
+/* 底部导航 */
+.tabbar{flex:0 0 auto;height:58px;display:grid;grid-template-columns:repeat(4,1fr);
+  border-top:1px solid var(--border);background:var(--surface);padding-bottom:0}
+.tab{border:0;background:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  color:var(--t3);font:inherit;font-size:11px;cursor:pointer;padding:0}
+.tab .ic{width:23px;height:23px}
+.tab[aria-selected="true"]{color:var(--primary)}
+.tab[aria-selected="true"] .ic{stroke-width:2}
+.home-ind{height:18px;flex:0 0 18px;background:var(--surface);display:grid;place-items:center}
+.home-ind::after{content:"";width:120px;height:4px;border-radius:2px;background:var(--t4)}
+
+/* Toast */
+.toast{position:absolute;left:50%;bottom:96px;transform:translate(-50%,8px);background:rgba(0,0,0,.82);color:#fff;
+  font-size:13px;line-height:1.4;padding:9px 14px;border-radius:8px;max-width:300px;text-align:center;
+  opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease;z-index:20;backdrop-filter:blur(6px)}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+/* ───────────── 说明栏 ───────────── */
+.rail{width:320px;font-size:13px;line-height:1.7;color:#4a4a50}
+@media (prefers-color-scheme:dark){.rail{color:#a8a8b0}}
+.rail h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#8a8a90;font-weight:600;margin:26px 0 8px}
+.rail h2:first-child{margin-top:0}
+.rail p{margin:0 0 10px}
+.rail ul{margin:0 0 10px;padding-left:16px}
+.rail li{margin:0 0 5px}
+.tok{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px}
+.tok span{font-size:11.5px;font-variant-numeric:tabular-nums;background:rgba(0,0,0,.05);border:1px solid rgba(0,0,0,.06);
+  border-radius:5px;padding:3px 7px;color:#3c3c42}
+@media (prefers-color-scheme:dark){.tok span{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.08);color:#c8c8d0}}
+.swatch{display:flex;gap:4px;margin:8px 0 4px}
+.swatch i{width:34px;height:22px;border-radius:4px;display:block;border:1px solid rgba(0,0,0,.08)}
+
+@media (max-width:900px){  body{flex-direction:column;align-items:center;padding:20px 12px 48px}
+  .stage{position:static}
+  .phone{transform-origin:top center}
+  .rail{width:min(411px,100%)}
+}
+</style>
+</head>
+<body>
+
+<!-- 图标精灵：24dp 网格 / 1.75 描边 / currentColor（对应 Snow Shot 24dp 图标约 1.89dp 视觉线宽） -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<defs>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 10.6 12 4l8 6.6V20a1 1 0 0 1-1 1h-4.2v-6.4H9.2V21H5a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-screen" viewBox="0 0 24 24"><path d="M6.2 2.8v13.4a1.6 1.6 0 0 0 1.6 1.6h13.4"/><path d="M17.8 21.2V7.8a1.6 1.6 0 0 0-1.6-1.6H2.8"/></symbol>
+  <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="3" y="6.5" width="18" height="11" rx="2"/><path d="M7 10.4h.01M12 10.4h.01M17 10.4h.01M8 14.2h8"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7.5h9M17 7.5h3M4 16.5h4M12 16.5h8"/><circle cx="15" cy="7.5" r="2"/><circle cx="10" cy="16.5" r="2"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M19.8 14.6A8.2 8.2 0 0 1 9.4 4.2a8.4 8.4 0 1 0 10.4 10.4z"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4 17 7M7 17l-1.6 1.6"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9.5 5.5 16 12l-6.5 6.5"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M14.5 5.5 8 12l6.5 6.5"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9.2" y="3" width="5.6" height="10" rx="2.8"/><path d="M5.5 11.4a6.5 6.5 0 0 0 13 0M12 18v3"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="16" rx="2"/><path d="M9 5V3.6h6V5"/><path d="M8.6 10.6h6.8M8.6 14h5" opacity=".55"/></symbol>
+  <symbol id="i-smile" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><path d="M8.6 14.2a4.2 4.2 0 0 0 6.8 0"/><path d="M9.4 9.6h.01M14.6 9.6h.01"/></symbol>
+  <symbol id="i-scan" viewBox="0 0 24 24"><path d="M4 8.4V5a1 1 0 0 1 1-1h3.4M15.6 4H19a1 1 0 0 1 1 1v3.4M20 15.6V19a1 1 0 0 1-1 1h-3.4M8.4 20H5a1 1 0 0 1-1-1v-3.4"/><path d="M8.2 10.4h7.6M8.2 13.6h5.4"/></symbol>
+  <symbol id="i-record" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><circle cx="12" cy="12" r="3.4" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-translate" viewBox="0 0 24 24"><path d="M3.6 6.2h8M7.6 6.2c0 4.6-1.8 7.6-3.8 8.8M5.2 12c1.8 2.8 3.9 4 6.6 4.2"/><path d="M13.4 20l3.4-8.8L20.2 20M14.7 17.2h4.2"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.4" y="4.6" width="17.2" height="14.8" rx="2"/><circle cx="8.6" cy="9.4" r="1.5"/><path d="m4.4 17.4 4.8-4.2 3.4 2.8 3-2.6 4 3.6"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5.2" y="10.6" width="13.6" height="9.6" rx="2"/><path d="M8.4 10.6V8.2a3.6 3.6 0 0 1 7.2 0v2.4"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.4 19 6v6.1c0 4-2.9 7.1-7 8.8-4.1-1.7-7-4.8-7-8.8V6z"/><path d="m9 12 2.2 2.2L15.4 10"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><path d="M12 11v5.4M12 7.8h.01"/></symbol>
+  <symbol id="i-storage" viewBox="0 0 24 24"><ellipse cx="12" cy="6.6" rx="7.4" ry="2.8"/><path d="M4.6 6.6v10.8c0 1.5 3.3 2.8 7.4 2.8s7.4-1.3 7.4-2.8V6.6"/><path d="M4.6 12c0 1.5 3.3 2.8 7.4 2.8s7.4-1.3 7.4-2.8"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9.2 3v5.4M14.8 3v5.4"/><path d="M6.4 8.4h11.2v3.2a5.6 5.6 0 0 1-11.2 0z"/><path d="M12 17.2V21"/></symbol>
+  <symbol id="i-water" viewBox="0 0 24 24"><path d="M12 3.2s6.2 6.6 6.2 10.6A6.2 6.2 0 0 1 5.8 13.8C5.8 9.8 12 3.2 12 3.2z"/></symbol>
+  <symbol id="i-scroll" viewBox="0 0 24 24"><rect x="5.4" y="3.4" width="13.2" height="12" rx="1.8"/><path d="M7.4 18.6h11.2a1.8 1.8 0 0 0 1.8-1.8V8.4"/></symbol>
+  <symbol id="i-reset" viewBox="0 0 24 24"><path d="M4.6 12a7.4 7.4 0 1 0 2.3-5.3"/><path d="M4 4.6v3.6h3.6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.6 4.4 4.4L19.4 7"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3.6v10.2M8 10.2l4 4 4-4M4.6 20.4h14.8"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13.4 2.8 5.6 14h5.6l-1 7.2L18.4 10h-5.6z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.6 7.2a2 2 0 0 1 2-2h3.6l2 2.4h7.2a2 2 0 0 1 2 2v8.2a2 2 0 0 1-2 2H5.6a2 2 0 0 1-2-2z"/></symbol>
+</defs>
+</svg>
+
+<div class="stage">
+  <div class="caption">411 × 891 dp · Redmi K60 逻辑分辨率 · 可点原型</div>
+
+  <div class="phone" id="phone" data-theme="light">
+
+    <div class="statusbar">
+      <span>9:41</span>
+      <span class="sb-right">
+        <span class="sb-bar"><i></i><i></i><i></i></span>
+        <svg width="15" height="11" viewBox="0 0 15 11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1 4.2a9.6 9.6 0 0 1 13 0M3.6 6.8a6.2 6.2 0 0 1 7.8 0M6.2 9.2a2.8 2.8 0 0 1 2.6 0"/></svg>
+        <span class="sb-batt"></span>
+      </span>
+    </div>
+
+    <!-- 顶部标题（随页切换） -->
+    <header class="topbar" id="topbar">
+      <button class="icon-btn left" id="backBtn" hidden aria-label="返回"><svg class="ic" width="24" height="24"><use href="#i-back"/></svg></button>
+      <h1 id="pageTitle">VoxFix 输入法</h1>
+      <span class="spacer"></span>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题"><svg class="ic" width="24" height="24"><use href="#i-moon"/></svg></button>
+    </header>
+
+    <main class="content" id="content">
+
+      <!-- ═══════════ 首页 ═══════════ -->
+      <section class="page" data-page="home">
+
+        <div class="card" style="margin-top:2px">
+          <button class="row" data-go="perm-ime">
+            <span class="dot ok"></span>
+            <span class="body"><span class="title">输入法</span></span>
+            <span class="value" id="imeState">已启用</span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+          <button class="row" data-go="perm-a11y">
+            <span class="dot warn"></span>
+            <span class="body"><span class="title">屏幕取字</span></span>
+            <span class="value" style="color:var(--warning)">未授权</span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+        </div>
+
+        <div class="sec"><h2>快速开始</h2><span class="hint">从屏幕边缘滑入也可</span></div>
+        <div class="tiles">
+          <button class="tile" data-mod="screentext" data-act="取字">
+            <svg class="ic"><use href="#i-scan"/></svg>
+            <span class="t">取字</span><span class="s">抓取屏幕文字</span>
+            <span class="lock" hidden><svg class="ic"><use href="#i-lock"/></svg></span>
+          </button>
+          <button class="tile" data-mod="screenshot" data-act="截屏">
+            <svg class="ic"><use href="#i-screen"/></svg>
+            <span class="t">截屏</span><span class="s">框选并标注</span>
+            <span class="lock" hidden><svg class="ic"><use href="#i-lock"/></svg></span>
+          </button>
+          <button class="tile" data-mod="translate" data-act="翻译">
+            <svg class="ic"><use href="#i-translate"/></svg>
+            <span class="t">翻译</span><span class="s">取字后翻译</span>
+            <span class="lock" hidden><svg class="ic"><use href="#i-lock"/></svg></span>
+          </button>
+          <button class="tile" data-mod="record" data-act="录屏">
+            <svg class="ic"><use href="#i-record"/></svg>
+            <span class="t">录屏</span><span class="s">录制选区 MP4</span>
+            <span class="lock" hidden><svg class="ic"><use href="#i-lock"/></svg></span>
+          </button>
+        </div>
+
+        <div class="sec"><h2>已启用模块</h2><button class="link" data-go="modules">管理</button></div>
+        <div class="chips" id="homeChips"></div>
+
+        <div class="sec" style="padding-top:16px"><h2>最近剪贴板</h2><button class="link" data-go="clipboard">全部</button></div>
+        <div class="strip">
+          <div class="thumb a" title="截图工程"></div>
+          <div class="thumb b" title="截图"></div>
+          <div class="thumb c" title="截图"></div>
+          <div class="thumb more">文本 300</div>
+        </div>
+        <p style="font-size:12px;line-height:1.65;color:var(--t3);padding:12px 4px 0;margin:0">
+          截图与取字的结果先进剪贴板，不写入相册；需要留档时在图片页另存。
+        </p>
+
+        <div class="tip">
+          <span class="tip-art" aria-hidden="true"><i></i></span>
+          <span class="tip-body">
+            <b>边缘滑入更快</b>
+            <span>在任意界面从屏幕右侧弧线向左滑，直接取字或截图。</span>
+          </span>
+        </div>
+      </section>
+
+      <!-- ═══════════ 屏幕 ═══════════ -->
+      <section class="page" data-page="screen" hidden>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>贴边弧线</h3>
+            <span class="sub">屏幕边缘的取字入口</span>
+          </div>
+          <div class="row">
+            <span class="body"><span class="title">显示弧线</span><span class="desc">关闭后仍可用首页按钮取字</span></span>
+            <label class="switch"><input type="checkbox" data-mod="screentext"><i></i></label>
+          </div>
+          <button class="row" data-dep="screentext">
+            <span class="body"><span class="title">位置</span></span>
+            <span class="value">右侧</span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+          <button class="row" data-dep="screentext">
+            <span class="body"><span class="title">垂直高度</span></span>
+            <span class="value num">40%</span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>截图与标注</h3><span class="sub" id="toolbarCount">绘制 12 · 截图 8</span></div>
+          <button class="row" data-dep="screenshot">
+            <span class="row-ic gray"><svg class="ic"><use href="#i-screen"/></svg></span>
+            <span class="body"><span class="title">工具栏布局</span><span class="desc">拖动编排，可从选框外起笔</span></span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+          <div class="row child" data-dep="scroll">
+            <span class="body"><span class="title">长截屏</span></span>
+            <label class="switch"><input type="checkbox" data-mod="scroll"><i></i></label>
+          </div>
+          <div class="row child" data-dep="watermark">
+            <span class="body"><span class="title">水印</span></span>
+            <label class="switch"><input type="checkbox" data-mod="watermark"><i></i></label>
+          </div>
+          <div class="row child" data-dep="record">
+            <span class="body"><span class="title">录屏</span><span class="desc">选区录 MP4 / GIF / WebP</span></span>
+            <label class="switch"><input type="checkbox" data-mod="record"><i></i></label>
+          </div>
+          <div class="row">
+            <span class="body"><span class="title">保存位置</span></span>
+            <span class="value">剪贴板 · 图片</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>录屏</h3><span class="sub" data-dep="record">默认 MP4</span></div>
+          <button class="row" data-dep="record">
+            <span class="body"><span class="title">格式</span></span>
+            <span class="value">MP4</span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+          <button class="row" data-dep="record">
+            <span class="body"><span class="title">清晰度与帧率</span></span>
+            <span class="value num">1080p · 30fps</span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+          <button class="row" data-dep="record">
+            <span class="body"><span class="title">音轨</span></span>
+            <span class="value">系统 + 麦克风</span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>识别与翻译</h3></div>
+          <div class="row">
+            <span class="body"><span class="title">识别引擎</span><span class="desc">ML Kit 行定位 · PP-OCRv6 small · 完全离线</span></span>
+          </div>
+          <button class="row" data-dep="translate">
+            <span class="body"><span class="title">离线翻译模型</span><span class="desc" id="mtState">未下载 · 462MB · 首次使用下载</span></span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+          <div class="row" data-dep="translate">
+            <span class="body"><span class="title">翻译方向</span></span>
+            <span class="value">自动检测 ⇄ 简体中文</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <button class="row" data-go="clipboard">
+            <span class="row-ic gray"><svg class="ic"><use href="#i-image"/></svg></span>
+            <span class="body"><span class="title">截图历史</span><span class="desc">12 张 · 工程可重开继续编辑</span></span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+        </div>
+      </section>
+
+      <!-- ═══════════ 输入 ═══════════ -->
+      <section class="page" data-page="input" hidden>
+
+        <div class="card">
+          <div class="card-head"><h3>键盘</h3><span class="sub">26 键 · 9 键 · 英文</span></div>
+          <button class="row" data-go="layout">
+            <span class="row-ic gray"><svg class="ic"><use href="#i-keyboard"/></svg></span>
+            <span class="body"><span class="title">当前布局</span></span>
+            <span class="value">26 键中文</span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+          <button class="row" data-go="toolbar">
+            <span class="body"><span class="title">工具栏项目</span><span class="desc">长按直接拖动换位</span></span>
+            <span class="value num">6 项</span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+          <div class="row">
+            <span class="body"><span class="title">夜间模式</span></span>
+            <div class="segmented" data-seg="keyboard-night">
+              <button aria-selected="false">跟随</button><button aria-selected="true">常亮</button><button aria-selected="false">常灭</button>
+            </div>
+          </div>
+          <button class="row" data-go="tryime">
+            <span class="body"><span class="title">试用与自检</span><span class="desc">在这里试打、试语音</span></span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>语音输入</h3><span class="sub" id="voiceSub">模型就绪 · 229MB</span></div>
+          <div class="row" data-dep="voice">
+            <span class="row-ic gray"><svg class="ic"><use href="#i-mic"/></svg></span>
+            <span class="body"><span class="title">长按空格说话</span><span class="desc">松手定稿，自动补标点</span></span>
+            <label class="switch"><input type="checkbox" data-mod="voice"><i></i></label>
+          </div>
+          <button class="row child" data-dep="dictionary">
+            <span class="body"><span class="title">个人词典</span><span class="desc">12 条 · 词与常见错法</span></span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>剪贴板</h3><span class="sub" id="clipSub">文本 300 · 图片 12</span></div>
+          <button class="row" data-dep="clipboard" data-go="clipboard">
+            <span class="row-ic gray"><svg class="ic"><use href="#i-clip"/></svg></span>
+            <span class="body"><span class="title">进入剪贴板</span><span class="desc">文本 / 图片 / 常用语</span></span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+          <div class="row child" data-dep="pcsync">
+            <span class="body"><span class="title">电脑同步</span><span class="desc" id="pcState">未连接 · 需电脑端助手</span></span>
+            <label class="switch"><input type="checkbox" data-mod="pcsync"><i></i></label>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>表情与词库</h3></div>
+          <div class="row" data-dep="emoji">
+            <span class="row-ic gray"><svg class="ic"><use href="#i-smile"/></svg></span>
+            <span class="body"><span class="title">表情搜索</span><span class="desc">图源搜狗 · 需联网</span></span>
+            <label class="switch"><input type="checkbox" data-mod="emoji"><i></i></label>
+          </div>
+          <button class="row" data-go="lexicon">
+            <span class="body"><span class="title">个人词库</span><span class="desc">选词记忆与迁移</span></span>
+            <span class="value num">1,204</span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+        </div>
+      </section>
+
+      <!-- ═══════════ 设置 ═══════════ -->
+      <section class="page" data-page="settings" hidden>
+
+        <div class="card">
+          <button class="row" data-go="modules">
+            <span class="row-ic"><svg class="ic"><use href="#i-settings"/></svg></span>
+            <span class="body"><span class="title">模块管理</span><span class="desc">关闭不用的功能，省内存也省心</span></span>
+            <span class="value num" id="modCount">已开 8 / 11</span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>外观</h3></div>
+          <div class="row">
+            <span class="body"><span class="title">主题</span></span>
+            <div class="segmented" data-seg="theme">
+              <button data-theme-set="system" aria-selected="false">跟随系统</button>
+              <button data-theme-set="light" aria-selected="true">浅色</button>
+              <button data-theme-set="dark" aria-selected="false">深色</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>存储</h3></div>
+          <div class="row">
+            <span class="row-ic gray"><svg class="ic"><use href="#i-image"/></svg></span>
+            <span class="body"><span class="title">图片剪贴板</span><span class="desc">12 张 · 含 3 个截图工程</span></span>
+            <span class="value num">86MB</span>
+          </div>
+          <div class="row">
+            <span class="row-ic gray"><svg class="ic"><use href="#i-storage"/></svg></span>
+            <span class="body"><span class="title">离线翻译模型</span><span class="desc" id="storeMt">未下载</span></span>
+            <span class="value num">462MB</span>
+          </div>
+          <button class="row" data-go="cache">
+            <span class="row-ic gray"><svg class="ic"><use href="#i-reset"/></svg></span>
+            <span class="body"><span class="title">清除缓存</span><span class="desc">表情图与临时文件</span></span>
+            <span class="value num">24MB</span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>权限</h3></div>
+          <button class="row" data-go="perm-ime">
+            <span class="body"><span class="title">输入法</span></span>
+            <span class="value" style="color:var(--success)">已启用</span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+          <button class="row" data-go="perm-a11y">
+            <span class="body"><span class="title">无障碍服务</span><span class="desc">屏幕取字、截图与录屏依赖它</span></span>
+            <span class="value" style="color:var(--warning)">未授权</span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+          <button class="row" data-go="perm-mic">
+            <span class="body"><span class="title">麦克风</span></span>
+            <span class="value">已允许</span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>关于</h3></div>
+          <div class="row">
+            <span class="body"><span class="title">版本</span></span>
+            <span class="value num">0.4.0 (r5)</span>
+          </div>
+          <button class="row" data-go="license">
+            <span class="body"><span class="title">开源许可</span><span class="desc">Snow Shot · sherpa-onnx · librime 等</span></span>
+            <span class="chev"><svg class="ic" width="18" height="18"><use href="#i-chev"/></svg></span>
+          </button>
+        </div>
+
+        <p style="font-size:12px;line-height:1.7;color:var(--t3);padding:2px 4px 8px">
+          VoxFix 输入法 · 全部识别、语音与翻译均在本机完成，不上传屏幕内容与录音。
+        </p>
+      </section>
+
+      <!-- ═══════════ 模块管理 ═══════════ -->
+      <section class="page" data-page="modules" hidden>
+
+        <p style="font-size:12.5px;line-height:1.65;color:var(--t3);margin:0 0 12px;padding:0 2px">
+          关闭的模块会从键盘与工具条隐藏，并停止占用内存。<br>数据不会删除，随时可以开回。
+        </p>
+
+        <div class="sec" style="padding-top:2px"><h2>输入</h2></div>
+        <div class="card">
+          <div class="row">
+            <span class="row-ic gray"><svg class="ic"><use href="#i-mic"/></svg></span>
+            <span class="body"><span class="title">语音输入</span><span class="desc">本地离线识别，长按空格说话</span></span>
+            <label class="switch"><input type="checkbox" data-mod="voice"><i></i></label>
+          </div>
+          <div class="row child" data-dep="voice">
+            <span class="body"><span class="title">个人词典</span><span class="desc">纠正常错词，12 条</span></span>
+            <label class="switch"><input type="checkbox" data-mod="dictionary"><i></i></label>
+          </div>
+          <div class="row">
+            <span class="row-ic gray"><svg class="ic"><use href="#i-smile"/></svg></span>
+            <span class="body"><span class="title">表情搜索</span><span class="desc">同屏搜图并直接插入</span></span>
+            <label class="switch"><input type="checkbox" data-mod="emoji"><i></i></label>
+          </div>
+        </div>
+
+        <div class="sec"><h2>屏幕</h2></div>
+        <div class="card">
+          <div class="row">
+            <span class="row-ic gray"><svg class="ic"><use href="#i-scan"/></svg></span>
+            <span class="body"><span class="title">屏幕取字</span><span class="desc">贴边弧线滑入，整屏或框选取字</span></span>
+            <label class="switch"><input type="checkbox" data-mod="screentext"><i></i></label>
+          </div>
+          <div class="row child" data-dep="screentext">
+            <span class="body"><span class="title">截图与标注</span><span class="desc">框选、绘图、识别、保存工程</span></span>
+            <label class="switch"><input type="checkbox" data-mod="screenshot"><i></i></label>
+          </div>
+          <div class="row grand" data-dep="screenshot">
+            <span class="body"><span class="title">长截屏</span><span class="desc">滚动拼接</span></span>
+            <label class="switch"><input type="checkbox" data-mod="scroll"><i></i></label>
+          </div>
+          <div class="row grand" data-dep="screenshot">
+            <span class="body"><span class="title">水印</span><span class="desc">文字与图片水印</span></span>
+            <label class="switch"><input type="checkbox" data-mod="watermark"><i></i></label>
+          </div>
+          <div class="row grand" data-dep="screenshot">
+            <span class="body"><span class="title">录屏</span><span class="desc">选区录制，含音轨</span></span>
+            <label class="switch"><input type="checkbox" data-mod="record"><i></i></label>
+          </div>
+          <div class="row child" data-dep="screentext">
+            <span class="body"><span class="title">离线翻译</span><span class="desc">需下载 462MB 模型</span></span>
+            <label class="switch"><input type="checkbox" data-mod="translate"><i></i></label>
+          </div>
+        </div>
+
+        <div class="sec"><h2>数据</h2></div>
+        <div class="card">
+          <div class="row">
+            <span class="row-ic gray"><svg class="ic"><use href="#i-clip"/></svg></span>
+            <span class="body"><span class="title">剪贴板</span><span class="desc">文本与图片历史，可引用到候选</span></span>
+            <label class="switch"><input type="checkbox" data-mod="clipboard"><i></i></label>
+          </div>
+          <div class="row child" data-dep="clipboard">
+            <span class="body"><span class="title">电脑同步</span><span class="desc">USB 与电脑双向搬运</span></span>
+            <label class="switch"><input type="checkbox" data-mod="pcsync"><i></i></label>
+          </div>
+        </div>
+
+        <div style="display:flex;justify-content:center;padding:8px 0 4px">
+          <button class="btn text" id="resetMods">
+            <svg class="ic" width="16" height="16"><use href="#i-reset"/></svg>&nbsp;恢复默认
+          </button>
+        </div>
+      </section>
+
+    </main>
+
+    <nav class="tabbar" id="tabbar">
+      <button class="tab" data-tab="home" aria-selected="true"><svg class="ic"><use href="#i-home"/></svg>首页</button>
+      <button class="tab" data-tab="screen" aria-selected="false"><svg class="ic"><use href="#i-screen"/></svg>屏幕</button>
+      <button class="tab" data-tab="input" aria-selected="false"><svg class="ic"><use href="#i-keyboard"/></svg>输入</button>
+      <button class="tab" data-tab="settings" aria-selected="false"><svg class="ic"><use href="#i-settings"/></svg>设置</button>
+    </nav>
+    <div class="home-ind"></div>
+
+    <div class="toast" id="toast"></div>
+  </div>
+</div>
+
+<aside class="rail">
+  <h2>设计依据</h2>
+  <p>Snow Shot 1.1.8 主窗口是「左侧导航 220/80 + 内容卡片」，窗口默认 900×640。手机改为底部四栏，卡片、间距与控件高度按原版 Ant Design Qt 令牌换算，不另起一套视觉。</p>
+  <div class="swatch">
+    <i style="background:#1677FF"></i><i style="background:#FF4D4F"></i><i style="background:#52C41A"></i>
+    <i style="background:#FAAD14"></i><i style="background:#F5F5F5"></i><i style="background:#141414"></i>
+  </div>
+  <div class="tok">
+    <span>主色 #1677FF</span><span>卡片圆角 10</span><span>控件圆角 8</span>
+    <span>控件高 48</span><span>页边距 16</span><span>卡片间距 12</span>
+    <span>行高 56</span><span>正文 15</span><span>说明 12.5</span>
+  </div>
+
+  <h2>本页要点</h2>
+  <ul id="notes"></ul>
+
+  <h2>怎么试</h2>
+  <ul>
+    <li>切到「设置 → 模块管理」，关掉<b>截图与标注</b>，回首页看卡片变灰带锁。</li>
+    <li>关掉<b>屏幕取字</b>会级联关闭截图、录屏、翻译，并弹确认。</li>
+    <li>在关掉的父项下点开子项，会自动把父项一起打开并提示。</li>
+    <li>右上角图标切亮暗，设置里的主题段控同步。</li>
+  </ul>
+
+  <h2>未复刻项</h2>
+  <ul>
+    <li>全局快捷键、应用快捷键、全局鼠标：桌面输入设备专属。</li>
+    <li>贴图管理页：手机贴图无独立管理场景，已并入截图。</li>
+    <li>侧栏 220/80 折叠：手机四栏常驻，不折叠。</li>
+  </ul>
+</aside>
+
+<script type="module">
+const phone = document.getElementById('phone');
+const notes = document.getElementById('notes');
+const toastEl = document.getElementById('toast');
+/* ── 模块模型：自身开关 + 祖先依赖 ── */
+const MODS = {
+  voice:      {n:'语音输入', on:true},
+  dictionary: {n:'个人词典', on:true, p:'voice'},
+  emoji:      {n:'表情搜索', on:true},
+  screentext: {n:'屏幕取字', on:true},
+  screenshot: {n:'截图与标注', on:true, p:'screentext'},
+  scroll:     {n:'长截屏', on:true, p:'screenshot'},
+  watermark:  {n:'水印', on:true, p:'screenshot'},
+  record:     {n:'录屏', on:true, p:'screenshot'},
+  translate:  {n:'离线翻译', on:false, p:'screentext'},
+  clipboard:  {n:'剪贴板', on:true},
+  pcsync:     {n:'电脑同步', on:false, p:'clipboard'},
+};
+const DEFAULT = Object.fromEntries(Object.entries(MODS).map(([k,v]) => [k, v.on]));
+const ORDER = ['voice','dictionary','emoji','screentext','screenshot','scroll','watermark','record','translate','clipboard','pcsync'];
+
+const on = k => {
+  const m = MODS[k];
+  if (!m) return false;
+  if (!m.on) return false;
+  return m.p ? on(m.p) : true;
+};
+const children = k => ORDER.filter(x => MODS[x].p === k);
+
+function setMod(k, value, opts = {}){
+  const m = MODS[k];
+  if (!m) return;
+  if (value && m.p && !on(m.p)) {
+    setMod(m.p, true, {silent:true});
+    if (!opts.silent) toast(`已同时开启「${MODS[m.p].n}」`);
+  }
+  if (!value) {
+    const kids = children(k);
+    if (kids.length) m.on = false, kids.forEach(c => setMod(c, false, {silent:true}));
+  }
+  m.on = value;
+  render();
+}
+
+let toastTimer;
+function toast(text){
+  toastEl.textContent = text;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2000);
+}
+
+/* ── 页面 ── */
+const TITLES = {home:'VoxFix 输入法', screen:'屏幕', input:'输入', settings:'设置', modules:'模块管理'};
+const NOTES = {
+  home:['先回答「能不能用」：输入法是否启用、无障碍是否连接。','再回答「能干什么」：四个动作卡片，一屏可见。','关闭的模块卡片变灰带锁，点击直接去开启，不留死链。'],
+  screen:['对应原版「截图历史 / 翻译 / 贴图」三页，手机合并为一页。','弧线开关就是取字总阀门，关掉后仍可用首页按钮。','翻译模型 462MB 不进包，默认关闭，用时再下。'],
+  input:['键盘是核心不设开关，只换布局与夜间模式。','语音、表情、剪贴板各自独立开关，互不牵连。','个人词典从属于语音；关闭语音时整行变灰。'],
+  settings:['模块管理放在第一行：这是本版新增的自定义能力。','权限页把四类授权聚齐，避免在系统设置里迷路。','关于页承载开源许可，Snow Shot 与各模型均需署名。'],
+  modules:['一级 8 个，二级 3 组，层级不超过两层。','父项关闭时子项变灰禁用，点一下会连父项一起打开。','底部「恢复默认」可一键还原全部开关。'],
+};
+
+let page = 'home';
+const TAB_OF = {home:'home', screen:'screen', input:'input', settings:'settings', modules:'settings'};
+function go(name){
+  page = name;
+  document.querySelectorAll('.page').forEach(s => s.hidden = s.dataset.page !== name);
+  document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === TAB_OF[name]));
+  document.getElementById('pageTitle').textContent = TITLES[name] || '';
+  const isTab = ['home','screen','input','settings'].includes(name);
+  document.getElementById('backBtn').hidden = isTab;
+  document.getElementById('themeBtn').hidden = !isTab;
+  document.getElementById('content').scrollTop = 0;
+  notes.innerHTML = (NOTES[name] || []).map(t => `<li>${t}</li>`).join('');
+}
+
+/* ── 渲染 ── */
+const CHIP_SET = ['voice','screentext','screenshot','record','clipboard'];
+const SHORT = {screenshot:'截图', screentext:'取字', record:'录屏'};
+function render(){
+  // 开关
+  document.querySelectorAll('input[data-mod]').forEach(input => {
+    const k = input.dataset.mod, m = MODS[k];
+    input.checked = m.on;
+    input.disabled = !!(m.p && !on(m.p));
+  });
+  // 依赖行灰态
+  document.querySelectorAll('[data-dep]').forEach(row => {
+    const dep = row.dataset.dep;
+    const ok = on(dep);
+    row.classList.toggle('off', !ok);
+    row.querySelectorAll('input').forEach(i => i.disabled = !ok);
+  });
+  // 卡片
+  document.querySelectorAll('.tile').forEach(tile => {
+    const k = tile.dataset.mod;
+    const ok = on(k);
+    tile.classList.toggle('locked', !ok);
+    tile.querySelector('.lock').hidden = ok;
+  });
+  // chips
+  document.getElementById('homeChips').innerHTML = CHIP_SET
+    .filter(k => on(k))
+    .map(k => `<span class="chip">${SHORT[k] || MODS[k].n}</span>`)
+    .join('') || '<span class="chip" style="border-style:dashed">全部模块已关闭</span>';
+
+  // 计数
+  const count = ORDER.filter(on).length;
+  document.getElementById('modCount').textContent = `已开 ${count} / ${ORDER.length}`;
+  document.getElementById('toolbarCount').textContent = on('screenshot') ? '绘制 12 · 截图 8' : '已关闭';
+  document.getElementById('voiceSub').textContent = on('voice') ? '模型就绪 · 229MB' : '已关闭';
+  document.getElementById('clipSub').textContent = on('clipboard') ? '文本 300 · 图片 12' : '已关闭';
+  document.getElementById('mtState').textContent = on('translate') ? '未下载 · 462MB' : '已关闭';
+  document.getElementById('storeMt').textContent = on('translate') ? '未下载' : '已关闭';
+  document.getElementById('pcState').textContent = on('pcsync') ? '未连接 · 需电脑端助手' : '已关闭';
+}
+
+/* ── 主题 ── */
+let themeMode = 'light';
+function applyTheme(mode){
+  themeMode = mode;
+  const sysDark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const dark = mode === 'dark' || (mode === 'system' && sysDark);
+  phone.dataset.theme = dark ? 'dark' : 'light';
+  document.getElementById('themeBtn').innerHTML = `<svg class="ic" width="24" height="24"><use href="#i-${dark ? 'sun' : 'moon'}"/></svg>`;
+  document.querySelectorAll('[data-seg="theme"] button').forEach(b =>
+    b.setAttribute('aria-selected', b.dataset.themeSet === mode));
+}
+
+/* ── 事件 ── */
+document.querySelectorAll('input[data-mod]').forEach(input => {
+  input.addEventListener('change', () => {
+    const k = input.dataset.mod;
+    if (!input.checked && children(k).length) {
+      const kids = children(k).map(c => MODS[c].n).join('、');
+      if (!confirm(`关闭「${MODS[k].n}」会同时关闭：${kids}。继续？`)) {
+        input.checked = true; return;
+      }
+    }
+    setMod(k, input.checked);
+  });
+});
+
+document.querySelectorAll('.tab').forEach(b => b.onclick = () => go(b.dataset.tab));
+document.getElementById('backBtn').onclick = () => go('settings');
+
+document.querySelectorAll('[data-go]').forEach(el => {
+  el.onclick = () => {
+    const target = el.dataset.go;
+    if (target === 'modules') return go('modules');
+    if (target === 'perm-a11y') return toast('将跳转系统无障碍授权页');
+    if (target === 'perm-ime') return toast('将跳转语言与输入法设置');
+    if (target === 'perm-mic') return toast('麦克风已授权');
+    if (target === 'layout') return toast('打开键盘选择（原生页）');
+    if (target === 'toolbar') return toast('打开工具栏编排（原生页）');
+    if (target === 'tryime') return toast('打开试用与自检（原生页）');
+    if (target === 'lexicon') return toast('打开个人词库（原生页）');
+    if (target === 'clipboard') return toast('打开剪贴板（键盘内页）');
+    if (target === 'cache') return toast('已清除 24MB 缓存');
+    if (target === 'license') return toast('打开开源许可列表');
+  };
+});
+
+document.querySelectorAll('.tile').forEach(tile => {
+  tile.onclick = () => {
+    const k = tile.dataset.mod, act = tile.dataset.act;
+    if (!on(k)) return toast(`「${MODS[k].n}」已关闭，可在模块管理中开启`);
+    toast(`执行：${act}`);
+  };
+});
+
+document.getElementById('themeBtn').onclick = () => applyTheme(phone.dataset.theme === 'dark' ? 'light' : 'dark');
+
+document.querySelectorAll('[data-seg]').forEach(seg => {
+  seg.querySelectorAll('button').forEach(b => b.onclick = () => {
+    if (seg.dataset.seg === 'theme') { applyTheme(b.dataset.themeSet); return; }
+    seg.querySelectorAll('button').forEach(x => x.setAttribute('aria-selected', x === b));
+    toast(`夜间模式：${b.textContent}`);
+  });
+});
+
+document.getElementById('resetMods').onclick = () => {
+  Object.keys(DEFAULT).forEach(k => MODS[k].on = DEFAULT[k]);
+  render(); toast('已恢复默认');
+};
+
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (themeMode === 'system') applyTheme('system'); });
+
+/* ── 初始化 ── */
+render();
+go('home');
+const q = new URLSearchParams(location.search);
+applyTheme(q.get('theme') === 'dark' ? 'dark' : 'light');
+if (q.get('page')) go(q.get('page'));
+</script>
+</body>
+</html>
