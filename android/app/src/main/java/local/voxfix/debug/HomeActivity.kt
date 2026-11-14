@@ -8,7 +8,6 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
-import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
@@ -20,6 +19,7 @@ import android.widget.Toast
 import local.voxfix.debug.ui.Palette
 import local.voxfix.debug.ui.VoxFixTheme
 import local.voxfix.debug.ui.VoxFixUi
+import local.voxfix.debug.update.UpdateChecker
 
 /**
  * App 外壳：底部四栏（首页 / 屏幕 / 输入 / 设置）+ 模块管理子页。
@@ -124,13 +124,31 @@ class HomeActivity : Activity() {
         ))
         setContentView(root)
 
+        // 更新状态变化（下载进度/校验完成/安装就绪）即时刷新首页横幅。
+        UpdateChecker.observe { _ ->
+            runOnUiThread {
+                cache.remove("home")
+                if (tabIndex == 0 && !showingModules) showTab(0)
+            }
+        }
         showTab(0)
+    }
+
+    override fun onDestroy() {
+        // object 单例持引用会泄漏 Activity，页面销毁即摘监听。
+        UpdateChecker.observe(null)
+        super.onDestroy()
     }
 
     override fun onResume() {
         super.onResume()
-        // 权限与模块状态可能在别的页面被改过，回前台重读一次。
+        // 权限与模块状态可能在别的页面被改过，回前台重读一次；
+        // 首页带输入法向导状态，从系统设置/选择弹层回来时必须一起失效。
         cache.remove(keys[tabIndex])
+        cache.remove("home")
+        // 推导横幅（READY/AVAILABLE），并按 ≥24h 节流做静默自动检查（失败不打扰）。
+        UpdateChecker.refresh(this)
+        if (UpdateChecker.shouldAutoCheck(this)) UpdateChecker.check(this, manual = false)
         if (showingModules) showModules() else showTab(tabIndex)
     }
 
@@ -191,80 +209,161 @@ class HomeActivity : Activity() {
     private fun buildHomePage(): View {
         val scroll = ScrollView(this).apply { isFillViewport = true }
         val col = VoxFixUi.page(this, palette)
-        scroll.addView(col)
 
-        val imeOn = imeEnabled()
-        val a11yOn = ScreenTextSettingsActivity.connected(this)
-
-        val ready = VoxFixUi.card(this, palette)
-        ready.addView(VoxFixUi.row(
-            this, palette, "输入法",
-            value = if (imeOn) "已启用" else "未启用",
-            valueColor = if (imeOn) palette.success else palette.warning,
-            chevron = true, divider = false
-        ) { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) })
-        ready.addView(VoxFixUi.row(
-            this, palette, "屏幕取字",
-            value = if (a11yOn) "已连接" else "未授权",
-            valueColor = if (a11yOn) palette.success else palette.warning,
-            chevron = true
-        ) { openAccessibility() })
-        col.addView(ready)
-
-        col.addView(VoxFixUi.section(this, palette, "快速开始", "从屏幕边缘滑入也可"))
-
-        col.addView(tileRow(
-            Triple(R.drawable.ic_vx_scan, "取字", "抓取屏幕文字") to Module.SCREENTEXT,
-            Triple(R.drawable.ic_vx_crop, "截屏", "框选并标注") to Module.SCREENSHOT
-        ))
-        col.addView(tileRow(
-            Triple(R.drawable.ic_vx_translate, "翻译", "取字后翻译") to Module.TRANSLATE,
-            Triple(R.drawable.ic_vx_record, "录屏", "录制选区 MP4") to Module.RECORD
-        ))
-
+        // 更新横幅只在首页与关于页出现：明显但不打断，键盘与输入过程永不弹窗。
+        updateBanner()?.let { col.addView(it) }
+        col.addView(setupCard())
         col.addView(VoxFixUi.section(this, palette, "已启用模块", "管理") { showModules() })
         col.addView(chipsRow())
 
-        col.addView(VoxFixUi.section(this, palette, "剪贴板"))
-        val clip = VoxFixUi.card(this, palette)
-        clip.addView(VoxFixUi.row(
-            this, palette, "文本与图片历史",
-            desc = "在键盘里打开「剪贴板」标签查看、引用或拆词",
-            divider = false
-        ))
-        col.addView(clip)
-
         col.addView(VoxFixUi.note(
             this, palette,
-            "截图与取字的结果先进剪贴板，不写入相册；需要留档时在图片页另存。"
+            "截图与取字的结果先进剪贴板，不写入相册；需要留档时在图片页另存。剪贴板、表情与词典在键盘里使用。"
         ))
 
+        scroll.addView(col)
         return scroll
     }
 
-    private fun tileRow(
-        first: Pair<Triple<Int, String, String>, Module>,
-        second: Pair<Triple<Int, String, String>, Module>
-    ): LinearLayout {
-        val grid = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        grid.addView(tileFor(first), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        grid.addView(VoxFixUi.spacer(this, 10, 0))
-        grid.addView(tileFor(second), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        grid.setPadding(0, 0, 0, dp(10))
-        return grid
+    /**
+     * 「开始使用」卡：输入法启用 → 设为默认 → 试用，三步各带状态；
+     * 屏幕取字的无障碍授权行保留在同一张卡里。
+     * 主路径永远是系统两步（系统设置勾选 + 系统选择弹层），直写仅作电脑辅助的次级入口。
+     */
+    private fun setupCard(): View {
+        val card = VoxFixUi.card(this, palette)
+        card.addView(VoxFixUi.head(this, palette, "开始使用"))
+        val imeOn = imeEnabled()
+        val imeNow = imeDefault()
+        val a11yOn = ScreenTextSettingsActivity.connected(this)
+
+        card.addView(VoxFixUi.row(
+            this, palette, "1 · 启用 VoxFix 输入法",
+            desc = "在系统「输入法管理」里勾选 VoxFix",
+            value = if (imeOn) "已启用" else "未启用",
+            valueColor = if (imeOn) palette.success else palette.warning,
+            chevron = !imeOn,
+            divider = false
+        ) { if (!imeOn) startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) })
+        card.addView(VoxFixUi.row(
+            this, palette, "2 · 设为默认输入法",
+            desc = if (imeNow) "在系统「选择输入法」弹层里选中的" else "在系统弹层里选 VoxFix；别在讯飞键盘的菜单里找",
+            value = if (imeNow) "已设为默认" else "未设置",
+            valueColor = if (imeNow) palette.success else palette.warning,
+            chevron = !imeNow
+        ) { if (!imeNow) pickOrSwitchDefault() })
+        card.addView(VoxFixUi.row(
+            this, palette, "3 · 试用键盘",
+            desc = "在自带试用框里打字、长按空格说话",
+            value = if (imeOn && imeNow) "可以开始" else "完成上面两步",
+            valueColor = if (imeOn && imeNow) palette.success else palette.textTertiary,
+            chevron = true
+        ) { trialKeyboard() })
+
+        // 直写路径只在电脑辅助场景出现：已授权直接切换；未授权给复制命令的入口。
+        if (!imeNow && AdbWireless.granted(this)) {
+            card.addView(VoxFixUi.row(
+                this, palette, "一键切换（电脑辅助）",
+                desc = "已授权 WRITE_SECURE_SETTINGS，直接写系统设置",
+                chevron = true
+            ) { switchSelf() })
+        } else if (!imeNow) {
+            card.addView(VoxFixUi.row(
+                this, palette, "电脑辅助：一键切换",
+                desc = "电脑执行一次 pm grant 后可直接切换（点此复制命令）",
+                chevron = true
+            ) { copyGrantCommand() })
+        }
+
+        card.addView(VoxFixUi.row(
+            this, palette, "屏幕取字",
+            desc = "无障碍服务：取字、截图与录屏共用",
+            value = if (a11yOn) "已连接" else "未授权",
+            valueColor = if (a11yOn) palette.success else palette.warning,
+            chevron = !a11yOn,
+            divider = false
+        ) { if (!a11yOn) openAccessibility() })
+        return card
     }
 
-    private fun tileFor(entry: Pair<Triple<Int, String, String>, Module>): View {
-        val (spec, module) = entry
-        val (iconRes, title, desc) = spec
-        val locked = !Modules.isOn(this, module)
-        return VoxFixUi.tile(this, palette, iconRes, title, desc, locked) {
-            if (locked) {
-                showModules()
-            } else {
-                Toast.makeText(this, "$title：请从贴边弧线或键盘进入", Toast.LENGTH_SHORT).show()
+    /** 更新横幅：无新版本/已忽略时为 null（不占位）。点击即行动，不弹对话框。 */
+    private fun updateBanner(): View? {
+        val status = UpdateChecker.current()
+        if (status.phase == UpdateChecker.Phase.HIDDEN) return null
+        val card = VoxFixUi.card(this, palette)
+        when (status.phase) {
+            UpdateChecker.Phase.AVAILABLE -> {
+                val m = status.manifest ?: return null
+                card.addView(VoxFixUi.head(this, palette, "发现新版本 ${m.versionName}",
+                    if (m.apkSizeBytes > 0) "约 ${m.apkSizeBytes / (1024 * 1024)}MB · 建议 Wi-Fi" else "建议 Wi-Fi"))
+                card.addView(VoxFixUi.row(this, palette, "更新到 ${m.versionName}",
+                    desc = m.changelog.takeIf { it.isNotBlank() }, chevron = true, divider = false) {
+                    UpdateChecker.startDownload(this)
+                })
+                card.addView(VoxFixUi.row(this, palette, "忽略这个版本", divider = false) {
+                    UpdateChecker.dismiss(this)
+                })
             }
+            UpdateChecker.Phase.DOWNLOADING -> {
+                val percent = if (status.total > 0) (status.downloaded * 100 / status.total).toInt() else 0
+                card.addView(VoxFixUi.head(this, palette, "正在下载 ${status.manifest?.versionName.orEmpty()}",
+                    "$percent% · ${status.downloaded / (1024 * 1024)}MB"))
+                card.addView(VoxFixUi.row(this, palette, "取消下载", divider = false) {
+                    UpdateChecker.cancelDownload()
+                })
+            }
+            UpdateChecker.Phase.READY -> {
+                card.addView(VoxFixUi.head(this, palette, "${status.manifest?.versionName.orEmpty()} 已就绪",
+                    "校验通过，点「安装」调起系统安装器"))
+                card.addView(VoxFixUi.row(this, palette, "安装更新", chevron = true, divider = false) {
+                    UpdateChecker.install(this)
+                })
+            }
+            UpdateChecker.Phase.FAILED -> {
+                card.addView(VoxFixUi.head(this, palette, "更新未完成", status.message.ifEmpty { "下载或检查失败" }))
+                card.addView(VoxFixUi.row(this, palette, "重试", divider = false) {
+                    if (status.manifest != null) UpdateChecker.startDownload(this)
+                    else UpdateChecker.check(this, manual = true)
+                })
+                card.addView(VoxFixUi.row(this, palette, "关闭", divider = false) {
+                    UpdateChecker.dismiss(this)
+                })
+            }
+            UpdateChecker.Phase.HIDDEN -> return null
         }
+        return card
+    }
+
+    /** 默认输入法主入口：已授权直写（回读确认），否则拉系统选择弹层。 */
+    private fun pickOrSwitchDefault() {
+        if (imeDefault()) return
+        if (AdbWireless.granted(this)) switchSelf() else ImeSwitcher.pick(this)
+    }
+
+    private fun switchSelf() {
+        Toast.makeText(this, "正在切换…", Toast.LENGTH_SHORT).show()
+        ImeSwitcher.switchToSelf(this) { outcome ->
+            cache.remove("home")
+            if (showingModules) showModules() else showTab(tabIndex)
+            val message = when (outcome) {
+                ImeSwitcher.Outcome.OK -> "已切换为 VoxFix 输入法"
+                ImeSwitcher.Outcome.DENIED -> "缺少 WRITE_SECURE_SETTINGS：电脑执行 pm grant 后可用一键切换"
+                ImeSwitcher.Outcome.WRITE_FAILED -> "写入系统设置失败，请改用系统「选择输入法」弹层"
+                ImeSwitcher.Outcome.REVERTED -> "系统回滚了写入，请改用系统「选择输入法」弹层"
+            }
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun copyGrantCommand() {
+        val command = "adb shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS"
+        getSystemService(android.content.ClipboardManager::class.java)
+            .setPrimaryClip(android.content.ClipData.newPlainText("adb", command))
+        Toast.makeText(this, "已复制授权命令，电脑上执行一次即可", Toast.LENGTH_LONG).show()
+    }
+
+    private fun trialKeyboard() {
+        startActivity(Intent(this, MainActivity::class.java).putExtra("voxfix.autofocus", true))
     }
 
     private fun chipsRow(): View {
@@ -332,18 +431,6 @@ class HomeActivity : Activity() {
         shot.addView(VoxFixUi.row(this, palette, "保存位置", value = "剪贴板 · 图片"))
         col.addView(shot)
 
-        val rec = VoxFixUi.card(this, palette)
-        rec.addView(VoxFixUi.head(this, palette, "录屏", if (Modules.isOn(this, Module.RECORD)) "默认 MP4" else "已关闭"))
-        rec.addView(VoxFixUi.row(this, palette, "格式", value = "MP4", chevron = true,
-            dimmed = !Modules.isOn(this, Module.RECORD), divider = false) {
-            Toast.makeText(this, "在截图工具条上开始录制", Toast.LENGTH_SHORT).show()
-        })
-        rec.addView(VoxFixUi.row(this, palette, "清晰度与帧率", value = "1080p · 30fps", chevron = true,
-            dimmed = !Modules.isOn(this, Module.RECORD)))
-        rec.addView(VoxFixUi.row(this, palette, "音轨", value = "系统 + 麦克风", chevron = true,
-            dimmed = !Modules.isOn(this, Module.RECORD)))
-        col.addView(rec)
-
         val translateReady = TranslateModelStore(this).ready()
         val tr = VoxFixUi.card(this, palette)
         tr.addView(VoxFixUi.head(this, palette, "识别与翻译"))
@@ -408,31 +495,10 @@ class HomeActivity : Activity() {
         voice.addView(voiceRow)
         voice.addView(VoxFixUi.row(this, palette, "个人词典",
             desc = "纠正常错词，只在语音结果上生效",
-            chevron = true,
-            dimmed = !Modules.isOn(this, Module.DICTIONARY)) {
+            chevron = true) {
             startActivity(Intent(this, DictionaryActivity::class.java))
         })
         col.addView(voice)
-
-        val clip = VoxFixUi.card(this, palette)
-        clip.addView(VoxFixUi.head(this, palette, "剪贴板", if (Modules.isOn(this, Module.CLIPBOARD)) "文本 · 图片 · 常用" else "已关闭"))
-        clip.addView(VoxFixUi.row(this, palette, "打开剪贴板",
-            desc = "在键盘工具栏点「剪贴板」标签", divider = false,
-            dimmed = !Modules.isOn(this, Module.CLIPBOARD)))
-        clip.addView(VoxFixUi.row(this, palette, "电脑同步",
-            desc = "需在电脑运行手机助手，USB 连接后自动投递",
-            value = if (Modules.isOn(this, Module.PCSYNC)) "已开启" else "已关闭",
-            dimmed = !Modules.isOn(this, Module.PCSYNC)))
-        col.addView(clip)
-
-        val emoji = VoxFixUi.card(this, palette)
-        emoji.addView(VoxFixUi.head(this, palette, "表情与词库"))
-        emoji.addView(VoxFixUi.row(this, palette, "表情搜索",
-            desc = "图源搜狗 · 需联网",
-            value = if (Modules.isOn(this, Module.EMOJI)) "已开启" else "已关闭",
-            divider = false,
-            dimmed = !Modules.isOn(this, Module.EMOJI)))
-        col.addView(emoji)
 
         scroll.addView(col)
         return scroll
@@ -453,18 +519,18 @@ class HomeActivity : Activity() {
         ) { showModules() })
         col.addView(mods)
 
-        val look = VoxFixUi.card(this, palette)
-        look.addView(VoxFixUi.head(this, palette, "外观"))
-        look.addView(VoxFixUi.row(this, palette, "主题",
-            desc = "跟随系统深浅色", value = "跟随系统", divider = false))
-        col.addView(look)
-
         val perm = VoxFixUi.card(this, palette)
         perm.addView(VoxFixUi.head(this, palette, "权限"))
         perm.addView(VoxFixUi.row(this, palette, "输入法",
-            value = if (imeEnabled()) "已启用" else "未启用",
-            valueColor = if (imeEnabled()) palette.success else palette.warning,
-            chevron = true, divider = false) { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) })
+            value = when {
+                imeDefault() -> "已设为默认"
+                imeEnabled() -> "已启用 · 未选默认"
+                else -> "未启用"
+            },
+            valueColor = if (imeDefault()) palette.success else palette.warning,
+            chevron = true, divider = false) {
+            if (imeDefault()) ImeSwitcher.pick(this) else pickOrSwitchDefault()
+        })
         perm.addView(VoxFixUi.row(this, palette, "无障碍服务",
             desc = "屏幕取字、截图与录屏依赖它",
             value = if (ScreenTextSettingsActivity.connected(this)) "已连接" else "未授权",
@@ -474,11 +540,14 @@ class HomeActivity : Activity() {
 
         val about = VoxFixUi.card(this, palette)
         about.addView(VoxFixUi.head(this, palette, "关于"))
-        about.addView(VoxFixUi.row(this, palette, "版本",
-            value = versionName(), divider = false))
+        about.addView(VoxFixUi.row(this, palette, "版本与更新",
+            desc = "版本号、更新日志与项目说明",
+            value = versionName(), chevron = true, divider = false) {
+            startActivity(Intent(this, AboutActivity::class.java))
+        })
         about.addView(VoxFixUi.row(this, palette, "开源许可",
-            desc = "Snow Shot · sherpa-onnx · librime 等", chevron = true) {
-            Toast.makeText(this, "许可文件随 APK 资源提供", Toast.LENGTH_SHORT).show()
+            desc = "SenseVoice · sherpa-onnx · librime · rime-ice 等", chevron = true) {
+            startActivity(Intent(this, LicenseActivity::class.java))
         })
         col.addView(about)
 
@@ -595,10 +664,10 @@ class HomeActivity : Activity() {
 
     // ───────────────────────── 公共 ─────────────────────────
 
-    private fun imeEnabled(): Boolean {
-        val imm = getSystemService(InputMethodManager::class.java) ?: return false
-        return imm.enabledInputMethodList.any { it.packageName == packageName }
-    }
+    private fun imeEnabled(): Boolean = ImeSwitcher.enabled(this)
+
+    /** 两级检测的第二级：本输入法是否已是系统当前默认（向导与设置页共用）。 */
+    private fun imeDefault(): Boolean = ImeSwitcher.isDefault(this)
 
     private fun openAccessibility() {
         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))

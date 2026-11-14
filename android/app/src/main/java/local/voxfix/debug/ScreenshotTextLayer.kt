@@ -52,6 +52,19 @@ class ScreenshotTextLayer(
     private val translationRegion: Rect? = null
 ) : FrameLayout(context) {
     private val density = resources.displayMetrics.density
+    /**
+     * 画布视口。设置后本层的「图片 → 视图」换算全部走它，与底图/标注共用同一套映射。
+     *
+     * 不接视口时沿用旧的 `图片坐标 × 视图宽/图片宽`，只对「图片尺寸等于视图尺寸」成立；
+     * 编辑已保存的截图（尤其长图）时两者差着几倍，文字框会整体错位。
+     */
+    var viewport: ScreenshotViewport? = null
+        set(value) { field = value; requestLayout(); invalidate() }
+    private val activeViewport get() = viewport?.takeIf { it.hasSize }
+    private fun vScaleX(): Float = activeViewport?.scale ?: (if (width>0) width.toFloat()/source.width else 1f)
+    private fun vScaleY(): Float = activeViewport?.scale ?: (if (height>0) height.toFloat()/source.height else 1f)
+    private fun vx(imageX: Float): Float = activeViewport?.toScreenX(imageX) ?: (imageX*vScaleX())
+    private fun vy(imageY: Float): Float = activeViewport?.toScreenY(imageY) ?: (imageY*vScaleY())
     private val history = ScreenshotEditHistory(blocks)
     private var restoring = false
     var historyChanged: () -> Unit = {}
@@ -159,8 +172,8 @@ class ScreenshotTextLayer(
         layoutBlocks.forEachIndexed { index,block ->
             val origin=block.origin ?: return@forEachIndexed
             patchPaint.color=originColors.getOrElse(index) { Color.WHITE }
-            canvas.drawRect(origin.left*width.toFloat()/source.width, origin.top*height.toFloat()/source.height,
-                origin.right*width.toFloat()/source.width, origin.bottom*height.toFloat()/source.height, patchPaint)
+            canvas.drawRect(vx(origin.left.toFloat()),vy(origin.top.toFloat()),
+                vx(origin.right.toFloat()),vy(origin.bottom.toFloat()), patchPaint)
         }
     }
     override fun dispatchDraw(canvas: Canvas) {
@@ -228,16 +241,16 @@ class ScreenshotTextLayer(
         val width=measuredWidth; val height=measuredHeight
         if(width<=0||height<=0) return
         if (fitToBlock) {
-            scroll.measure(MeasureSpec.makeMeasureSpec(maxOf(2,reflowRegion.width()*width/source.width),MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(maxOf(2,reflowRegion.height()*height/source.height),MeasureSpec.EXACTLY))
+            scroll.measure(MeasureSpec.makeMeasureSpec(maxOf(2,(reflowRegion.width()*vScaleX()).toInt()),MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(maxOf(2,(reflowRegion.height()*vScaleY()).toInt()),MeasureSpec.EXACTLY))
             editingBounds()?.let { region -> documentEditor?.measure(
                 MeasureSpec.makeMeasureSpec(region.width(),MeasureSpec.EXACTLY),
                 MeasureSpec.makeMeasureSpec(region.height(),MeasureSpec.EXACTLY)) }
             return
         }
         layoutBlocks.forEachIndexed { i,b ->
-            val w=maxOf(2,(b.right-b.left)*width/source.width)
-            val h=maxOf(2,(b.bottom-b.top)*height/source.height)
+            val w=maxOf(2,((b.right-b.left)*vScaleX()).toInt())
+            val h=maxOf(2,((b.bottom-b.top)*vScaleY()).toInt())
             // Layout params set during onSizeChanged never re-measure in the same pass;
             // measure and place the fields here so they are never left at 1x1.
             val lines=maxOf(1,fields[i].text.lines().size)
@@ -268,14 +281,14 @@ class ScreenshotTextLayer(
         val width=measuredWidth; val height=measuredHeight
         if(width<=0||height<=0) return
         if (fitToBlock) {
-            val x=reflowRegion.left*width/source.width; val y=reflowRegion.top*height/source.height
+            val x=vx(reflowRegion.left.toFloat()).toInt(); val y=vy(reflowRegion.top.toFloat()).toInt()
             scroll.layout(x,y,x+scroll.measuredWidth,y+scroll.measuredHeight)
             editingBounds()?.let { region -> documentEditor?.layout(region.left,region.top,region.right,region.bottom) }
             return
         }
         layoutBlocks.forEachIndexed { i,block ->
-            val left=block.left*width/source.width
-            val top=block.top*height/source.height
+            val left=vx(block.left.toFloat()).toInt()
+            val top=vy(block.top.toFloat()).toInt()
             fields[i].layout(left,top,left+fields[i].measuredWidth,top+fields[i].measuredHeight)
             android.util.Log.i("VoxFix","TEXT_FIELD_RECT i=$i l=$left t=$top w=${fields[i].width} h=${fields[i].height}")
         }
@@ -303,10 +316,12 @@ class ScreenshotTextLayer(
     fun endLayoutMode() { layoutMode = false }
     override fun onInterceptTouchEvent(event: MotionEvent): Boolean = layoutMode
     private fun imagePoint(event: MotionEvent) = ScreenshotDrawingPoint(
-        (event.x*imageXScale()).coerceIn(0f,source.width.toFloat()),
-        (event.y*imageYScale()).coerceIn(0f,source.height.toFloat()))
-    private fun imageXScale() = if (width>0) source.width.toFloat()/width else 1f
-    private fun imageYScale() = if (height>0) source.height.toFloat()/height else 1f
+        imageX(event.x).coerceIn(0f,source.width.toFloat()),
+        imageY(event.y).coerceIn(0f,source.height.toFloat()))
+    private fun imageX(viewX: Float): Float = activeViewport?.toImageX(viewX) ?: (viewX*imageXScale())
+    private fun imageY(viewY: Float): Float = activeViewport?.toImageY(viewY) ?: (viewY*imageYScale())
+    private fun imageXScale() = 1f/vScaleX().coerceAtLeast(1e-4f)
+    private fun imageYScale() = 1f/vScaleY().coerceAtLeast(1e-4f)
     private fun blockAt(point: ScreenshotDrawingPoint) = layoutBlocks.indices.reversed()
         .firstOrNull { layoutBlocks[it].let { b -> point.x>=b.left && point.x<=b.right && point.y>=b.top && point.y<=b.bottom } }
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -443,11 +458,15 @@ class ScreenshotTextLayer(
         val margin=(8*density).toInt()
         val top=editorTop.coerceIn(0,maxOf(0,measuredHeight-2))
         val bottom=minOf(measuredHeight,editorBottom).coerceAtLeast(top+2)
-        val w=maxOf(region.width()*measuredWidth/source.width,(240*density).toInt())
+        val sx=activeViewport?.scale ?: (if(measuredWidth>0) measuredWidth.toFloat()/source.width else 1f)
+        val sy=activeViewport?.scale ?: (if(measuredHeight>0) measuredHeight.toFloat()/source.height else 1f)
+        val ox=activeViewport?.offsetX ?: 0f
+        val oy=activeViewport?.offsetY ?: 0f
+        val w=maxOf((region.width()*sx).toInt(),(240*density).toInt())
             .coerceAtMost(maxOf(2,measuredWidth-2*margin))
-        val h=maxOf(region.height()*measuredHeight/source.height,(160*density).toInt()).coerceAtMost(bottom-top)
-        val x=(region.left*measuredWidth/source.width).coerceIn(margin,maxOf(margin,measuredWidth-margin-w))
-        val y=(region.top*measuredHeight/source.height).coerceIn(top,maxOf(top,bottom-h))
+        val h=maxOf((region.height()*sy).toInt(),(160*density).toInt()).coerceAtMost(bottom-top)
+        val x=(region.left*sx+ox).toInt().coerceIn(margin,maxOf(margin,measuredWidth-margin-w))
+        val y=(region.top*sy+oy).toInt().coerceIn(top,maxOf(top,bottom-h))
         return Rect(x,y,x+w,y+h)
     }
     fun endEditing() {
@@ -471,7 +490,8 @@ class ScreenshotTextLayer(
         layout(left,top,right,bottom)
         if (fitToBlock) {
             // Export all reflowed text, including the part below the on-screen scroll viewport.
-            val scale=source.width.toFloat()/width
+            val scale=activeViewport?.let { 1f/it.scale } ?: (source.width.toFloat()/width)
+            val scaleY=activeViewport?.let { 1f/it.scale } ?: (source.height.toFloat()/height)
             val outHeight=maxOf(region.height(),kotlin.math.ceil(reflow.height*scale).toInt())
             require(region.width().toLong()*outHeight <= 16_000_000) { "译文图片过长，请分段保存或复制文字" }
             val out=Bitmap.createBitmap(region.width(),outHeight,Bitmap.Config.ARGB_8888)
@@ -481,20 +501,29 @@ class ScreenshotTextLayer(
             if (outHeight>region.height())
                 canvas.drawRect(0f,region.height().toFloat(),region.width().toFloat(),outHeight.toFloat(),
                     Paint().apply { color=bottom })
-            canvas.scale(scale,source.height.toFloat()/height)
+            canvas.scale(scale,scaleY)
             reflow.draw(canvas)
             return out
         }
         val crop=Bitmap.createBitmap(source,region.left,region.top,region.width(),region.height())
         val out=try { crop.copy(Bitmap.Config.ARGB_8888,true) ?: error("结果图片创建失败") } finally { if(crop!==source)crop.recycle() }
-        val canvas=Canvas(out);canvas.translate(-region.left.toFloat(),-region.top.toFloat());canvas.scale(source.width.toFloat()/width,source.height.toFloat()/height)
+        val canvas=Canvas(out)
+        // 导出坐标系：视图坐标 → 原图坐标。有视口时先把视图位移还原（减 offset）再除以比例，
+        // 否则长图会把文字画到错误的像素上。
+        canvas.translate(-region.left.toFloat(),-region.top.toFloat())
+        val vp=activeViewport
+        if(vp!=null) {
+            val k=1f/vp.scale
+            canvas.scale(k,k)
+            canvas.translate(-vp.panX,-vp.panY)
+        } else canvas.scale(source.width.toFloat()/width,source.height.toFloat()/height)
         // A moved line leaves a patch of its own colour behind, exactly like the on-screen layer.
         val patch=Paint(Paint.ANTI_ALIAS_FLAG)
         layoutBlocks.forEachIndexed { index,block ->
             val origin=block.origin ?: return@forEachIndexed
             patch.color=originColors.getOrElse(index) { Color.WHITE }
-            canvas.drawRect(RectF(origin.left*width.toFloat()/source.width,origin.top*height.toFloat()/source.height,
-                origin.right*width.toFloat()/source.width,origin.bottom*height.toFloat()/source.height),patch)
+            canvas.drawRect(RectF(vx(origin.left.toFloat()),vy(origin.top.toFloat()),
+                vx(origin.right.toFloat()),vy(origin.bottom.toFloat())),patch)
         }
         fields.forEachIndexed { index,field ->
             val label=TextView(context).apply {

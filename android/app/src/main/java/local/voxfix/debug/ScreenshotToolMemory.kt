@@ -7,6 +7,8 @@ import org.json.JSONObject
 class ScreenshotToolMemory(context: Context) {
     private val preferences=context.getSharedPreferences("screenshot-tool-memory",Context.MODE_PRIVATE)
     private fun raw(key: String)=runCatching { preferences.getString(key,null) }.getOrNull()
+    /** sync 守卫用：最近工具串的原始值。remember() 后它变化，主栏组触发位才会重建。 */
+    fun fingerprint(): String=raw("recent").orEmpty()
     private fun recent()=raw("recent").orEmpty().take(2048).split(',').mapNotNull { name ->
         ScreenshotAction.values().firstOrNull { it.name==name }
     }.distinct()

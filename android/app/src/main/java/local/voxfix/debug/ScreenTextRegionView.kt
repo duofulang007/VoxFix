@@ -33,6 +33,27 @@ internal class ScreenTextRegionView(
     private val recognize: (Rect) -> Unit
 ) : View(context) {
     private val density = resources.displayMetrics.density
+    /**
+     * 画布视口。设置后本层的「图片 ↔ 视图」换算全部走它，与底图/标注/文字层同一套映射。
+     *
+     * 改造前靠 `width/imageWidth` 的隐式关系，只在「视图尺寸 = 图片尺寸 × contain 比例」
+     * 时成立；content 改为填满窗口后这个前提没了，不接视口就会把框画到错误位置。
+     */
+    var viewport: ScreenshotViewport? = null
+    private val activeViewport get() = viewport?.takeIf { it.hasSize }
+    private fun vScaleX(): Float = activeViewport?.scale ?: (if (width>0) width.toFloat()/imageWidth else 1f)
+    private fun vScaleY(): Float = activeViewport?.scale ?: (if (height>0) height.toFloat()/imageHeight else 1f)
+    private fun vx(imageX: Float): Float = activeViewport?.toScreenX(imageX) ?: (imageX*vScaleX())
+    private fun vy(imageY: Float): Float = activeViewport?.toScreenY(imageY) ?: (imageY*vScaleY())
+    private fun ivx(viewX: Float): Float = activeViewport?.toImageX(viewX)
+        ?: (viewX*imageWidth/(width.takeIf { it>0 } ?: 1))
+    private fun ivy(viewY: Float): Float = activeViewport?.toImageY(viewY)
+        ?: (viewY*imageHeight/(height.takeIf { it>0 } ?: 1))
+    private fun imageToView(): android.graphics.Matrix = android.graphics.Matrix().apply {
+        val vp = activeViewport
+        if (vp != null) { setScale(vp.scale, vp.scale); postTranslate(vp.offsetX, vp.offsetY) }
+        else setScale(vScaleX(), vScaleY())
+    }
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val rect = RectF()
     private val before = RectF()
@@ -70,6 +91,14 @@ internal class ScreenTextRegionView(
     private var lastSmartTap: PointF? = null
     val selectionInProgress get() = active || constructing
     var opMode = false
+    /**
+     * 只读态：编辑已有图片（工程）时整层不参与绘制与触摸。
+     *
+     * 这层的默认状态是 VISIBLE + 空 [rect]，而空 RectF 会让 onDraw 里的四块遮罩退化成
+     * 一整幅 50% 黑；触摸侧又会把绘图/平移的手势全部吃掉。调用方虽然会把它设成 GONE，
+     * 但只读态是第二道保险——不依赖可见性也能保证"不画、不吃事件"。
+     */
+    var readOnly = false
     private var parts: List<Rect> = emptyList()
     private var pendingSelection: Rect? = null
     /** Confirmed region rendered lit during add/subtract construction; null otherwise. */
@@ -101,8 +130,8 @@ internal class ScreenTextRegionView(
         parts = emptyList()
         confirmedPath = null
         if (width == 0 || height == 0) { pendingSelection = Rect(region); return }
-        rect.set(region.left * width.toFloat() / imageWidth,region.top * height.toFloat() / imageHeight,
-            region.right * width.toFloat() / imageWidth,region.bottom * height.toFloat() / imageHeight)
+        rect.set(vx(region.left.toFloat()),vy(region.top.toFloat()),
+            vx(region.right.toFloat()),vy(region.bottom.toFloat()))
         invalidate(); onRegionMoved?.invoke(Rect(region))
     }
     /** Show a multi-part region without re-firing the selection callback. */
@@ -111,8 +140,8 @@ internal class ScreenTextRegionView(
         confirmedPath = null
         if (parts.isNotEmpty()) {
             val box = Rect().also { r -> parts.forEach { r.union(it) } }
-            if (width > 0 && height > 0) rect.set(box.left * width.toFloat() / imageWidth,box.top * height.toFloat() / imageHeight,
-                box.right * width.toFloat() / imageWidth,box.bottom * height.toFloat() / imageHeight)
+            if (width > 0 && height > 0) rect.set(vx(box.left.toFloat()),vy(box.top.toFloat()),
+                vx(box.right.toFloat()),vy(box.bottom.toFloat()))
         }
         invalidate()
     }
@@ -123,8 +152,7 @@ internal class ScreenTextRegionView(
         if (width > 0 && height > 0 && path != null) {
             val box = RectF()
             path.computeBounds(box, true)
-            rect.set(box.left * width / imageWidth, box.top * height / imageHeight,
-                box.right * width / imageWidth, box.bottom * height / imageHeight)
+            rect.set(vx(box.left), vy(box.top), vx(box.right), vy(box.bottom))
         }
         invalidate()
     }
@@ -136,8 +164,7 @@ internal class ScreenTextRegionView(
         invalidate()
     }
 
-    private fun toImage(x: Float, y: Float) =
-        PointF(x * imageWidth / width, y * imageHeight / height)
+    private fun toImage(x: Float, y: Float) = PointF(ivx(x), ivy(y))
 
     private fun draftPath(includePointer: PointF?): Path {
         val vertices = mutableListOf<PointF>().apply { addAll(draft) }
@@ -209,47 +236,49 @@ internal class ScreenTextRegionView(
     }
 
     private fun region(): Rect {
-        var left = (rect.left * imageWidth / width).toInt()
-        var top = (rect.top * imageHeight / height).toInt()
+        var left = ivx(rect.left).toInt()
+        var top = ivy(rect.top).toInt()
         if (edges == 16) {
             // Rounding two moving edges independently changes the crop by one pixel.
-            val fixedWidth = ((before.right * imageWidth / width).toInt() - (before.left * imageWidth / width).toInt()).coerceIn(1,imageWidth)
-            val fixedHeight = ((before.bottom * imageHeight / height).toInt() - (before.top * imageHeight / height).toInt()).coerceIn(1,imageHeight)
+            val fixedWidth = (ivx(before.right).toInt() - ivx(before.left).toInt()).coerceIn(1,imageWidth)
+            val fixedHeight = (ivy(before.bottom).toInt() - ivy(before.top).toInt()).coerceIn(1,imageHeight)
             left = if (rect.right >= width) imageWidth - fixedWidth else left.coerceIn(0,imageWidth-fixedWidth)
             top = if (rect.bottom >= height) imageHeight - fixedHeight else top.coerceIn(0,imageHeight-fixedHeight)
             return Rect(left,top,left+fixedWidth,top+fixedHeight)
         }
-        return Rect(left,top,(rect.right * imageWidth / width).toInt(),(rect.bottom * imageHeight / height).toInt())
+        return Rect(left,top,ivx(rect.right).toInt(),ivy(rect.bottom).toInt())
     }
 
     init { contentDescription = "拖动框选文字；已有选框可拖动边缘调整或在框内移动，松手识别" }
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         pendingSelection?.let { pendingSelection = null; selectRegion(it); return }
-        if (oldw == 0 && previous != null) rect.set(previous.left * w.toFloat() / imageWidth,
-            previous.top * h.toFloat() / imageHeight, previous.right * w.toFloat() / imageWidth,
-            previous.bottom * h.toFloat() / imageHeight)
+        if (oldw == 0 && previous != null) rect.set(vx(previous.left.toFloat()),vy(previous.top.toFloat()),
+            vx(previous.right.toFloat()),vy(previous.bottom.toFloat()))
     }
     override fun onDraw(canvas: Canvas) {
+        if (readOnly) return
         if (constructing) {
             drawConstruction(canvas)
             return
         }
         val rect = smartPreview ?: this.rect
+        // 空选区什么都不画。四块遮罩的写法在 rect 为空时（left=top=right=bottom=0）会把
+        // `drawRect(0, rect.bottom, w, h)` 变成一整幅 50% 黑——这正是"进编辑器一片暗"的来源；
+        // 末尾那句 `if (rect.isEmpty) return` 已经太晚，遮罩早画完了。
+        if (rect.isEmpty && confirmedPath == null && parts.isEmpty()) return
         paint.style = Paint.Style.FILL; paint.color = 0x80000000.toInt()
         val confirmed = confirmedPath
         if (confirmed != null) {
             val scaled = Path()
-            confirmed.transform(android.graphics.Matrix().apply {
-                setScale(width.toFloat() / imageWidth, height.toFloat() / imageHeight)
-            }, scaled)
+            confirmed.transform(imageToView(), scaled)
             canvas.save(); canvas.clipPath(scaled, Region.Op.DIFFERENCE)
             canvas.drawRect(0f,0f,width.toFloat(),height.toFloat(),paint); canvas.restore()
             paint.style = Paint.Style.STROKE; paint.strokeWidth = 2 * density; paint.color = 0xff4096ff.toInt()
             canvas.drawPath(scaled, paint)
         } else if (parts.size > 1) {
             val shape = Path()
-            for (part in parts) shape.addRect(part.left * width.toFloat() / imageWidth,part.top * height.toFloat() / imageHeight,
-                part.right * width.toFloat() / imageWidth,part.bottom * height.toFloat() / imageHeight,Path.Direction.CW)
+            for (part in parts) shape.addRect(vx(part.left.toFloat()),vy(part.top.toFloat()),
+                vx(part.right.toFloat()),vy(part.bottom.toFloat()),Path.Direction.CW)
             canvas.save(); canvas.clipPath(shape,Region.Op.DIFFERENCE)
             canvas.drawRect(0f,0f,width.toFloat(),height.toFloat(),paint); canvas.restore()
         } else {
@@ -272,8 +301,8 @@ internal class ScreenTextRegionView(
         } else {
             paint.style = Paint.Style.STROKE; paint.strokeWidth = 2 * density; paint.color = blue
             if (parts.size > 1) for (part in parts) canvas.drawRect(
-                part.left * width.toFloat() / imageWidth,part.top * height.toFloat() / imageHeight,
-                part.right * width.toFloat() / imageWidth,part.bottom * height.toFloat() / imageHeight,paint)
+                vx(part.left.toFloat()),vy(part.top.toFloat()),
+                vx(part.right.toFloat()),vy(part.bottom.toFloat()),paint)
             else if (confirmedPath == null) canvas.drawRect(rect, paint)
         }
         smartPointer?.let {
@@ -302,17 +331,17 @@ internal class ScreenTextRegionView(
             ScreenshotSmartSelection.padded(it, smartPadPixels, imageWidth, imageHeight)
         }
         val next = hit?.let {
-            RectF(it.left * width.toFloat() / imageWidth, it.top * height.toFloat() / imageHeight,
-                it.right * width.toFloat() / imageWidth, it.bottom * height.toFloat() / imageHeight)
+            RectF(vx(it.left.toFloat()),vy(it.top.toFloat()),
+                vx(it.right.toFloat()),vy(it.bottom.toFloat()))
         }
         // Hit-testing flickers between neighbouring nodes while the finger moves; keep the current
         // preview until the new target differs by more than the pad.
         val previous = smartPreview
         val sticky = previous != null && next != null &&
-            abs(previous.left - next.left) <= smartPadPixels * width / imageWidth &&
-            abs(previous.top - next.top) <= smartPadPixels * height / imageHeight &&
-            abs(previous.right - next.right) <= smartPadPixels * width / imageWidth &&
-            abs(previous.bottom - next.bottom) <= smartPadPixels * height / imageHeight
+            abs(previous.left - next.left) <= smartPadPixels * vScaleX() &&
+            abs(previous.top - next.top) <= smartPadPixels * vScaleY() &&
+            abs(previous.right - next.right) <= smartPadPixels * vScaleX() &&
+            abs(previous.bottom - next.bottom) <= smartPadPixels * vScaleY()
         if (!sticky) smartPreview = next
         smartPointer = if (hit == null) null else PointF(x, y)
         invalidate()
@@ -320,7 +349,8 @@ internal class ScreenTextRegionView(
 
     /** Screen-space pad for smart hits: enough for glyph ascenders and the OCR crop. */
     private val smartPadPixels: Int
-        get() = (6 * density * imageWidth / maxOf(1, width)).toInt().coerceAtLeast(2)
+        get() = activeViewport?.let { it.dpToImage(6f, density).toInt() }
+            ?: (6 * density * imageWidth / maxOf(1, width)).toInt().coerceAtLeast(2)
 
     private fun clearSmartPreview() {
         smartPath = emptyList()
@@ -352,8 +382,8 @@ internal class ScreenTextRegionView(
             .coerceIn(0f, height - size)
         val target = RectF(left, top, left + size, top + size)
         val pixel = toImage(point.x, point.y)
-        val radiusX = size * imageWidth / width / 6
-        val radiusY = size * imageHeight / height / 6
+        val radiusX = size / vScaleX().coerceAtLeast(1e-4f) / 6
+        val radiusY = size / vScaleY().coerceAtLeast(1e-4f) / 6
         canvas.save()
         canvas.clipRect(target)
         paint.style = Paint.Style.FILL
@@ -376,9 +406,7 @@ internal class ScreenTextRegionView(
     private fun drawConstruction(canvas: Canvas) {
         val draftView = Path()
         val pointer = if (freehandPressed) null else lastPointer
-        draftPath(pointer).transform(android.graphics.Matrix().apply {
-            setScale(width.toFloat() / imageWidth, height.toFloat() / imageHeight)
-        }, draftView)
+        draftPath(pointer).transform(imageToView(), draftView)
         val lit = Path(draftView)
         confirmedPath?.let { lit.op(it, Path.Op.UNION) }
         paint.style = Paint.Style.FILL; paint.color = 0x80000000.toInt()
@@ -389,7 +417,7 @@ internal class ScreenTextRegionView(
             canvas.drawPath(draftView, paint)
         }
         if (shape != ScreenshotRegionShape.FREEHAND) for (point in draft) {
-            val x = point.x * width / imageWidth; val y = point.y * height / imageHeight
+            val x = vx(point.x); val y = vy(point.y)
             paint.style = Paint.Style.FILL; paint.color = 0xff4096ff.toInt(); canvas.drawCircle(x,y,4*density,paint)
             paint.style = Paint.Style.STROKE; paint.color = Color.WHITE; paint.strokeWidth = 1.5f*density; canvas.drawCircle(x,y,4*density,paint)
         }
@@ -398,6 +426,7 @@ internal class ScreenTextRegionView(
     private var lastPointer: PointF? = null
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (readOnly) return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 lastSmartTap = null
@@ -504,7 +533,7 @@ internal class ScreenTextRegionView(
                     // A tap fixes one vertex; the second tap of a double tap closes the region.
                     val now = event.eventTime
                     val doubleTap = now - lastUpAt < ViewConfiguration.getDoubleTapTimeout() &&
-                        ScreenshotStrokeGeometry.distance(geo(point), geo(PointF(lastUpX, lastUpY))) < 24 * density * imageWidth / width
+                        ScreenshotStrokeGeometry.distance(geo(point), geo(PointF(lastUpX, lastUpY))) < 24 * density / vScaleX().coerceAtLeast(1e-4f)
                     lastUpAt = now; lastUpX = point.x; lastUpY = point.y
                     if (doubleTap) {
                         if (draft.isNotEmpty()) draft[draft.size - 1] = point

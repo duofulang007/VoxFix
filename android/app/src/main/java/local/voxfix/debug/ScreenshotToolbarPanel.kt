@@ -22,9 +22,8 @@ internal class ScreenshotToolbarPanel(context: Context) : FrameLayout(context) {
     var onDragEnd: (() -> Unit)? = null
     private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
     private var body: ScrollView?=null
-    private val GRIP=18
-    private val GRIP_INSET=8
-    private val GRIP_GAP=4
+    /** 主栏竖向位置跨 setTools 存活；body==null（空工具列表）时也不清零，下次有内容还能恢复。 */
+    private var bodyScrollY=0
     private val grip=ImageView(context).apply {
         setImageResource(R.drawable.snow_grip); setColorFilter(0xFF8C8C8C.toInt(),PorterDuff.Mode.SRC_IN)
         contentDescription="按住拖动工具栏"; tooltipText=contentDescription
@@ -32,8 +31,10 @@ internal class ScreenshotToolbarPanel(context: Context) : FrameLayout(context) {
         setPadding(dp(1),dp(1),dp(1),dp(1))
     }
     init {
-        background=GradientDrawable().apply { setColor(0xFF1C1C1E.toInt()); cornerRadius=dp(8).toFloat() }
-        elevation=dp(6).toFloat()
+        background=GradientDrawable().apply {
+            setColor(ScreenshotUiTokens.PANEL); cornerRadius=dp(ScreenshotToolbarMetrics.PANEL_RADIUS).toFloat()
+        }
+        elevation=dp(ScreenshotToolbarMetrics.PANEL_ELEVATION).toFloat()
         ScreenshotTouchTargets.install(this)
         var lastX=0f; var lastY=0f; var dragging=false
         grip.setOnTouchListener { _, event ->
@@ -49,42 +50,77 @@ internal class ScreenshotToolbarPanel(context: Context) : FrameLayout(context) {
         }
     }
     fun setTools(items: List<Pair<View,Boolean>>,cancel: View?,available: Int,visibleHeight: Int) {
-        val previousScroll=body?.scrollY ?: 0
+        body?.let { bodyScrollY=it.scrollY }
         removeAllViews(); body=null
-        addView(grip,LayoutParams(dp(GRIP),dp(32),Gravity.LEFT or Gravity.CENTER_VERTICAL).apply { leftMargin=dp(GRIP_INSET) })
-        val closeWidth=if(cancel==null) 0 else dp(32)
-        val closeGap=if(cancel!=null && items.isNotEmpty()) dp(8) else 0
-        val room=(available-dp(24)-closeWidth-closeGap-dp(GRIP+GRIP_INSET+GRIP_GAP)).coerceAtLeast(dp(32))
+        val cell=ScreenshotToolbarMetrics.MAIN_CELL
+        val rowHeight=dp(cell)
+        addView(grip,LayoutParams(dp(ScreenshotToolbarMetrics.GRIP_WIDTH),rowHeight,Gravity.LEFT or Gravity.CENTER_VERTICAL).apply {
+            leftMargin=dp(ScreenshotToolbarMetrics.GRIP_INSET)
+        })
+        val closeWidth=if(cancel==null) 0 else rowHeight
+        val closeGap=if(cancel!=null && items.isNotEmpty()) dp(ScreenshotToolbarMetrics.MAIN_GAP) else 0
+        val gripLead=dp(ScreenshotToolbarMetrics.GRIP_WIDTH+ScreenshotToolbarMetrics.GRIP_INSET+ScreenshotToolbarMetrics.GRIP_GAP)
+        val room=(available-dp(24)-closeWidth-closeGap-gripLead).coerceAtLeast(rowHeight)
         val content=LinearLayout(context).apply { orientation=LinearLayout.VERTICAL }
         var row=LinearLayout(context).apply { gravity=Gravity.CENTER_VERTICAL }
         var width=0; var widest=0; var rowCount=1; var previousSeparator=false
-        content.addView(row,LinearLayout.LayoutParams(-2,dp(32)))
+        content.addView(row,LinearLayout.LayoutParams(-2,rowHeight))
+        val separatorCell=ScreenshotToolbarMetrics.SEPARATOR_SIDE*2+ScreenshotToolbarMetrics.SEPARATOR_WIDTH
         for((view,separator) in items) {
-            val cellWidth=if(separator) dp(25) else dp(32)
-            var gap=if(width==0 || separator || previousSeparator) 0 else dp(8)
+            val cellWidth=if(separator) dp(separatorCell) else rowHeight
+            var gap=if(width==0 || separator || previousSeparator) 0 else dp(ScreenshotToolbarMetrics.MAIN_GAP)
             if(separator && (width==0 || width+cellWidth>room)) continue
             if(width>0 && width+gap+cellWidth>room) {
                 widest=maxOf(widest,width); width=0; gap=0; rowCount++
                 row=LinearLayout(context).apply { gravity=Gravity.CENTER_VERTICAL }
-                content.addView(row,LinearLayout.LayoutParams(-2,dp(32)).apply { topMargin=dp(8) })
+                content.addView(row,LinearLayout.LayoutParams(-2,rowHeight).apply { topMargin=dp(ScreenshotToolbarMetrics.MAIN_GAP) })
             }
             if(gap>0) row.addView(Space(context),LinearLayout.LayoutParams(gap,1))
-            if(separator) row.addView(view,LinearLayout.LayoutParams(dp(1),dp(16)).apply { marginStart=dp(12); marginEnd=dp(12) })
-            else row.addView(view,LinearLayout.LayoutParams(dp(32),dp(32)))
+            if(separator) row.addView(view,LinearLayout.LayoutParams(dp(ScreenshotToolbarMetrics.SEPARATOR_WIDTH),dp(ScreenshotToolbarMetrics.SEPARATOR_HEIGHT)).apply {
+                marginStart=dp(ScreenshotToolbarMetrics.SEPARATOR_SIDE); marginEnd=dp(ScreenshotToolbarMetrics.SEPARATOR_SIDE)
+            })
+            else row.addView(view,LinearLayout.LayoutParams(rowHeight,rowHeight))
             width+=gap+cellWidth; previousSeparator=separator
         }
         val bodyWidth=if(items.isEmpty()) 0 else maxOf(widest,width)
         val rowsLimit=if(visibleHeight>=dp(400)) 2 else 1
-        val bodyHeight=if(items.isEmpty()) 0 else dp(minOf(rowCount,rowsLimit)*32+(minOf(rowCount,rowsLimit)-1)*8)
-        if(bodyWidth>0) addView(ScrollView(context).also { body=it }.apply {
-            contentDescription="截图工具栏，可上下滚动"; isVerticalScrollBarEnabled=rowCount>rowsLimit
-            addView(content)
-            if(previousScroll>0) post { scrollTo(0,previousScroll) }
-        },LayoutParams(bodyWidth,bodyHeight).apply { leftMargin=dp(GRIP+GRIP_INSET+GRIP_GAP); topMargin=dp(4) })
-        val lead=dp(GRIP_INSET+GRIP)+(if(bodyWidth>0) dp(GRIP_GAP) else 0)
-        packedWidth=lead+bodyWidth+closeGap+closeWidth+dp(12)
-        packedHeight=dp(8)+maxOf(bodyHeight,if(cancel!=null) dp(32) else 0)
-        if(cancel!=null) addView(cancel,LayoutParams(dp(32),dp(32),Gravity.RIGHT or Gravity.CENTER_VERTICAL).apply { rightMargin=dp(12) })
+        val shownRows=minOf(rowCount,rowsLimit)
+        val bodyHeight=if(items.isEmpty()) 0 else dp(shownRows*cell+(shownRows-1)*ScreenshotToolbarMetrics.MAIN_GAP)
+        if(bodyWidth>0) {
+            val scroller=ScrollView(context).also { body=it }.apply {
+                contentDescription="截图工具栏，可上下滚动"; isVerticalScrollBarEnabled=rowCount>rowsLimit
+                addView(content)
+                // 等布局完成再恢复：post{scrollTo} 在 extent=0 时被夹成 0，主栏会跳回第一行。
+                if(bodyScrollY>0) ScreenshotScrollMemory.applyAfterLayout(this,bodyScrollY,horizontal=false)
+            }
+            val holderParams=LayoutParams(bodyWidth,bodyHeight).apply {
+                leftMargin=gripLead; topMargin=dp(ScreenshotToolbarMetrics.PANEL_PAD_V)
+            }
+            if(rowCount<=rowsLimit) addView(scroller,holderParams)
+            else {
+                // 多出来的工具藏在第二屏里，只靠一条 1dp 滚动条等于没有提示。
+                val fade=View(context).apply {
+                    background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                        intArrayOf(android.graphics.Color.TRANSPARENT,ScreenshotUiTokens.PANEL))
+                    isClickable=false
+                }
+                val holder=FrameLayout(context).apply {
+                    addView(scroller,LayoutParams(bodyWidth,bodyHeight))
+                    addView(fade,LayoutParams(bodyWidth,dp(14),Gravity.BOTTOM))
+                }
+                fun syncFade() { fade.visibility=if(scroller.canScrollVertically(1)) View.VISIBLE else View.GONE }
+                scroller.setOnScrollChangeListener { _,_,_,_,_ -> syncFade() }
+                addView(holder,holderParams)
+                holder.post { syncFade() }
+            }
+        }
+        val lead=dp(ScreenshotToolbarMetrics.GRIP_INSET+ScreenshotToolbarMetrics.GRIP_WIDTH)+
+            (if(bodyWidth>0) dp(ScreenshotToolbarMetrics.GRIP_GAP) else 0)
+        packedWidth=lead+bodyWidth+closeGap+closeWidth+dp(ScreenshotToolbarMetrics.PANEL_PAD_H)
+        packedHeight=dp(ScreenshotToolbarMetrics.PANEL_PAD_V*2)+maxOf(bodyHeight,if(cancel!=null) rowHeight else 0)
+        if(cancel!=null) addView(cancel,LayoutParams(rowHeight,rowHeight,Gravity.RIGHT or Gravity.CENTER_VERTICAL).apply {
+            rightMargin=dp(ScreenshotToolbarMetrics.PANEL_PAD_H)
+        })
         layoutParams=LayoutParams(packedWidth,packedHeight)
     }
 }

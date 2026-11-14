@@ -4,16 +4,14 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import java.io.File
-import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import java.security.MessageDigest
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Downloads the optional 461.9 MB translation model with Range resume and a SHA-256 gate.
  *  Deliberately no foreground service: the accessibility service keeps the process alive while
- *  a capture session is open, and a killed process resumes from the .part file next time. */
+ *  a capture session is open, and a killed process resumes from the .part file next time.
+ *  2026-11-14：传输/校验核心抽取到 DownloadEngine（更新 APK 共用），本对象只保留
+ *  状态发布、重试节奏与对外 API。 */
 object TranslateDownloader {
     sealed class State {
         object Idle : State()
@@ -26,14 +24,9 @@ object TranslateDownloader {
     private val worker = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "VoxFix-translate-download") }
     private val cancelled = AtomicBoolean(false)
     private val running = AtomicBoolean(false)
-    @Volatile private var connection: HttpURLConnection? = null
     @Volatile var state: State = State.Idle
         private set
     private var listener: ((State) -> Unit)? = null
-
-    private const val CONNECT_TIMEOUT = 15_000
-    private const val READ_TIMEOUT = 30_000
-    private const val MAX_REDIRECTS = 5
 
     private val sources = listOf(
         "https://hf-mirror.com/tencent/Hy-MT2-1.8B-1.25Bit-GGUF/resolve/main/Hy-MT2-1.8B-1.25Bit.gguf",
@@ -73,16 +66,13 @@ object TranslateDownloader {
                 if (cancelled.get()) publish(State.Idle)
                 else publish(State.Failed(message(error)))
                 android.util.Log.w("VoxFix", "TRANSLATE_MODEL_FAILED", error)
-            } finally {
-                connection = null
             }
         }
     }
 
     fun cancel() {
         cancelled.set(true)
-        runCatching { connection?.disconnect() }
-        connection = null
+        DownloadEngine.disconnectCurrent()
         if (!running.get()) publish(State.Idle)
     }
 
@@ -91,10 +81,24 @@ object TranslateDownloader {
         val backoff = longArrayOf(2_000L, 8_000L, 30_000L)
         for (attempt in 0..3) {
             try {
-                if (store.partial.length() != TranslateModelStore.BYTES) fetch(store)
-                verify(store)
-                if (cancelled.get()) throw InterruptedException("cancelled")
-                if (!store.partial.renameTo(store.model)) error("无法重命名模型文件")
+                DownloadEngine.download(
+                    sources = sources,
+                    partial = store.partial,
+                    target = store.model,
+                    expectedBytes = TranslateModelStore.BYTES,
+                    expectedSha256 = TranslateModelStore.SHA256,
+                    allowHttpLoopback = false,
+                    cancelled = { cancelled.get() },
+                    onProgress = { progress ->
+                        when (progress) {
+                            is DownloadEngine.Progress.Downloading ->
+                                publish(State.Running(progress.downloaded, progress.total))
+                            DownloadEngine.Progress.Verifying ->
+                                publish(State.Running(TranslateModelStore.BYTES, TranslateModelStore.BYTES, verifying = true))
+                        }
+                    }
+                )
+                if (cancelled.get()) throw DownloadEngine.Cancelled()
                 return store.model
             } catch (error: Exception) {
                 last = error
@@ -105,120 +109,6 @@ object TranslateDownloader {
         throw last ?: IllegalStateException("下载失败")
     }
 
-    private fun fetch(store: TranslateModelStore) {
-        var lastError: Exception? = null
-        for (source in sources) {
-            try {
-                fetchFrom(source, store.partial)
-                return
-            } catch (error: Exception) {
-                lastError = error
-                if (cancelled.get()) throw error
-                android.util.Log.w("VoxFix", "TRANSLATE_SOURCE_FAILED $source", error)
-            }
-        }
-        throw lastError ?: IllegalStateException("下载地址不可用")
-    }
-
-    private fun fetchFrom(source: String, partial: File) {
-        var offset = if (partial.exists()) partial.length() else 0L
-        if (offset > TranslateModelStore.BYTES) {
-            partial.delete()
-            offset = 0
-        }
-        var url = URL(source)
-        var redirects = 0
-        while (true) {
-            if (cancelled.get()) throw InterruptedException("cancelled")
-            require(url.protocol == "https") { "模型下载需要安全连接" }
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = false
-                connectTimeout = CONNECT_TIMEOUT
-                readTimeout = READ_TIMEOUT
-                setRequestProperty("User-Agent", "VoxFix-translate")
-                setRequestProperty("Accept-Encoding", "identity")
-                if (offset > 0) setRequestProperty("Range", "bytes=$offset-")
-            }
-            connection = conn
-            val code = conn.responseCode
-            if (code in 300..399) {
-                val location = conn.getHeaderField("Location") ?: error("重定向缺少地址")
-                conn.disconnect()
-                if (++redirects > MAX_REDIRECTS) error("重定向次数过多")
-                url = URL(url, location)
-                continue
-            }
-            if (code == 416) {
-                conn.disconnect()
-                if (offset == 0L) error("下载地址拒绝了请求")
-                partial.delete()
-                offset = 0
-                continue
-            }
-            if (code !in 200..299) {
-                val message = "下载失败 HTTP $code"
-                conn.disconnect()
-                error(message)
-            }
-            val append = code == 206 && offset > 0
-            if (code == 206) {
-                val range = conn.getHeaderField("Content-Range")
-                if (!validRange(range,offset)) {
-                    conn.disconnect()
-                    error("下载续传范围不匹配，请重试")
-                }
-            }
-            if (!append) offset = 0
-            val handle = FileOutputStream(partial, append)
-            try {
-                conn.inputStream.use { input ->
-                    val buffer = ByteArray(256 * 1024)
-                    var downloaded = offset
-                    while (true) {
-                        if (cancelled.get()) throw InterruptedException("cancelled")
-                        val read = input.read(buffer)
-                        if (read < 0) break
-                        if (downloaded+read > TranslateModelStore.BYTES) error("下载文件超过预期大小")
-                        handle.write(buffer, 0, read)
-                        val before = downloaded
-                        downloaded += read
-                        if (downloaded / (1024 * 1024) != before / (1024 * 1024))
-                            publish(State.Running(downloaded, TranslateModelStore.BYTES))
-                    }
-                }
-                handle.flush()
-                handle.fd.sync()
-            } finally {
-                handle.close()
-                conn.disconnect()
-                connection = null
-            }
-            if (partial.length() != TranslateModelStore.BYTES) {
-                error("文件长度不符：${partial.length()}")
-            }
-            return
-        }
-    }
-
-    private fun verify(store: TranslateModelStore) {
-        publish(State.Running(TranslateModelStore.BYTES, TranslateModelStore.BYTES, verifying = true))
-        val digest = MessageDigest.getInstance("SHA-256")
-        store.partial.inputStream().use { input ->
-            val buffer = ByteArray(1024 * 1024)
-            while (true) {
-                if (cancelled.get()) throw InterruptedException("cancelled")
-                val read = input.read(buffer)
-                if (read < 0) break
-                digest.update(buffer, 0, read)
-            }
-        }
-        val actual = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
-        if (actual != TranslateModelStore.SHA256) {
-            store.partial.delete()
-            error("文件校验失败，已删除，请重新下载")
-        }
-    }
-
     private fun publish(next: State) {
         state = next
         val target = listener ?: return
@@ -227,6 +117,7 @@ object TranslateDownloader {
 
     private fun message(error: Exception): String = when (error) {
         is InterruptedException -> "下载已取消"
+        is DownloadEngine.Cancelled -> "下载已取消"
         else -> error.message?.takeIf { it.isNotBlank() } ?: "下载失败，请重试"
     }
 

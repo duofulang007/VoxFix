@@ -68,7 +68,7 @@ internal object ScreenshotDrawingRefinementChecks {
                 if(view is ViewGroup) for(i in 0 until view.childCount) find(view.getChildAt(i),label)?.let { return it }
                 return null
             }
-            check(find(controls,"边框宽")!=null && find(controls,"线宽 40")==null) { "rectangle highlight exposes pen width" }
+            check(find(controls,"高亮边框设置")!=null && find(controls,"线宽 40")==null) { "rectangle highlight exposes pen width" }
             check(find(controls,"透明度")==null) { "highlight must not expose an opacity slider" }
             // Highlight has no opacity role any more; the slider contract is checked on spotlight.
             layer.tool=ScreenshotDrawingTool.SPOTLIGHT
@@ -107,6 +107,83 @@ internal object ScreenshotDrawingRefinementChecks {
             input.close(); check(layer.history.items==before) { "cancel changed existing marks" }
             layer.beginTextPreview(point,null); layer.previewText("保存后"); layer.addText(point,"保存后")
             check(layer.history.items.last().text=="保存后"); layer.undo(); check(layer.history.items==before)
+
+            // —— 位置记忆：refresh 整块重建后横向位置必须原地恢复（「点一下回到最前面」回归线）——
+            layer.tool=ScreenshotDrawingTool.TEXT
+            val scrollControls=ScreenshotDrawingControls(context,layer,{ _,_,_-> },false)
+            fun relayoutScroll() {
+                scrollControls.measure(View.MeasureSpec.makeMeasureSpec(840,View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(400,View.MeasureSpec.AT_MOST))
+                scrollControls.layout(0,0,840,scrollControls.measuredHeight)
+            }
+            relayoutScroll()
+            val scrollRow=scrollControls.getChildAt(0) as ScreenshotStyleRow
+            (scrollRow.getChildAt(0) as android.widget.HorizontalScrollView).scrollTo(180,0)
+            scrollControls.refresh(); relayoutScroll()
+            val restored=(scrollControls.getChildAt(0) as ScreenshotStyleRow).currentScroll()
+            check(kotlin.math.abs(restored-180)<=2) { "refresh 后横向位置没有恢复：$restored" }
+
+            // —— 触摸：滤镜强度滑杆在横向滚动行内必须能拖（DOWN 需声明父级不得拦截）——
+            layer.tool=ScreenshotDrawingTool.FILTER
+            layer.changeArea(ScreenshotAreaMode.PEN)
+            val dragControls=ScreenshotDrawingControls(context,layer,{ _,_,_-> },false)
+            fun relayoutDrag() {
+                dragControls.measure(View.MeasureSpec.makeMeasureSpec(840,View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(200,View.MeasureSpec.AT_MOST))
+                dragControls.layout(0,0,840,dragControls.measuredHeight)
+            }
+            relayoutDrag()
+            fun locateView(view: View,label: String): View? {
+                if(view.contentDescription==label) return view
+                if(view is ViewGroup) for(i in 0 until view.childCount) locateView(view.getChildAt(i),label)?.let { return it }
+                return null
+            }
+            val bar=locateView(dragControls,"强度") as android.widget.SeekBar
+            val barRect=android.graphics.Rect(); bar.getDrawingRect(barRect)
+            dragControls.offsetDescendantRectToMyCoords(bar,barRect)
+            // 滑杆排在行尾：先把行滚到它可见（真实场景里看得见才按得到）。
+            val dragRow=dragControls.getChildAt(0) as ScreenshotStyleRow
+            val dragHsv=dragRow.getChildAt(0) as android.widget.HorizontalScrollView
+            dragHsv.scrollTo((barRect.centerX()-360).coerceAtLeast(0),0)
+            dragControls.offsetDescendantRectToMyCoords(bar,barRect)
+            fun drag(action: Int,x: Float,y: Float) {
+                val event=MotionEvent.obtain(0,1,action,x,y,0)
+                try { dragControls.dispatchTouchEvent(event) } finally { event.recycle() }
+            }
+            // 布局坐标不含滚动偏移：视觉 x = 布局 x - scrollX。
+            val scrollBefore=dragHsv.scrollX
+            val cx=(barRect.exactCenterX()-scrollBefore).coerceAtLeast(0f); val cy=barRect.exactCenterY()
+            drag(MotionEvent.ACTION_DOWN,cx,cy)
+            drag(MotionEvent.ACTION_MOVE,cx+bar.width*0.9f,cy)
+            drag(MotionEvent.ACTION_UP,cx+bar.width*0.9f,cy)
+            check(layer.style.strength>0.9f) { "强度滑杆拖动被横向滚动容器拦截：${layer.style.strength}" }
+            check(dragHsv.scrollX==scrollBefore) { "拖滑杆时整行跟着滚动了" }
+
+            // —— SELECT 选中对象：样式行是第二个滚动容器（前面是选区操作条），同样必须恢复。
+            // 这是 2026-11-14 用户实测「点一下样式行就回最前」的残留根因（只记 getChildAt(0)）。
+            layer.tool=ScreenshotDrawingTool.SELECT
+            touch(MotionEvent.ACTION_DOWN,101f,200f); touch(MotionEvent.ACTION_UP,101f,200f)
+            check((layer.selectedIndex ?: -1)>=0) { "SELECT 场景前置：没有选中对象" }
+            val selectControls=ScreenshotDrawingControls(context,layer,{ _,_,_-> },false)
+            fun relayoutSelect() {
+                selectControls.measure(View.MeasureSpec.makeMeasureSpec(840,View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(400,View.MeasureSpec.AT_MOST))
+                selectControls.layout(0,0,840,selectControls.measuredHeight)
+            }
+            relayoutSelect()
+            fun styleRowOf(host: android.view.ViewGroup): ScreenshotStyleRow? {
+                for(i in 0 until host.childCount) {
+                    val child=host.getChildAt(i)
+                    if(child is ScreenshotStyleRow) return child
+                    if(child is android.view.ViewGroup) styleRowOf(child)?.let { return it }
+                }
+                return null
+            }
+            val selectRow=styleRowOf(selectControls) ?: error("SELECT 面板缺少样式行")
+            (selectRow.getChildAt(0) as android.widget.HorizontalScrollView).scrollTo(140,0)
+            selectControls.refresh(); relayoutSelect()
+            val restoredSelect=styleRowOf(selectControls)!!.currentScroll()
+            check(kotlin.math.abs(restoredSelect-140)<=2) { "SELECT 下样式行位置没有恢复：$restoredSelect" }
         } finally { layer.close(); renderer.close(); image.recycle() }
     }
 }

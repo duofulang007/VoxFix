@@ -29,7 +29,8 @@ internal class TranslatePairBar(
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(4), dp(3), dp(4), dp(3))
         background = GradientDrawable().apply {
-            setColor(Color.WHITE)
+            // 与截图工具条同一块深色面板：白底在暗色截图上是一块刺眼的白条。
+            setColor(ScreenshotUiTokens.PANEL)
             cornerRadius = dp(8).toFloat()
         }
         elevation = dp(6).toFloat()
@@ -63,7 +64,7 @@ internal class TranslatePairBar(
             row.addView(TextView(context).apply {
                 text = "⇄"
                 textSize = 15f
-                setTextColor(0xFF666666.toInt())
+                setTextColor(ScreenshotUiTokens.TEXT_DIM)
                 gravity = Gravity.CENTER
                 contentDescription = "交换源语言和目标语言"
                 isClickable = true
@@ -90,8 +91,8 @@ internal class TranslatePairBar(
             contentDescription = description
             isClickable = true
             isFocusable = true
-            setTextColor(if (active) COLOR_PRIMARY else COLOR_TEXT)
-            background = if (active) rounded(0x1F1677FF) else null
+            setTextColor(if (active) ScreenshotUiTokens.TEXT_ACCENT else ScreenshotUiTokens.TEXT)
+            background = if (active) rounded(ScreenshotUiTokens.TONAL_CELL) else null
             setOnClickListener { action() }
         }, LayoutParams(LayoutParams.WRAP_CONTENT, dp(32)))
     }

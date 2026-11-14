@@ -38,7 +38,7 @@ internal class ScreenshotPinEditor(private val context: Context,private val imag
     private val bar=LinearLayout(context).apply { orientation=LinearLayout.VERTICAL; background=surface() }
     private val styles=ScrollView(context).apply { background=surface() }
     private var controls: ScreenshotDrawingControls?=null
-    private var controlKey: Pair<ScreenshotDrawingTool?,Int?>?=null
+    private var controlKey: ScreenshotDrawingTool?=null
     private var input: ScreenshotAnnotationInput?=null
     private var valuePopup: PopupWindow?=null
     private var top=0; private var bottom=0
@@ -159,12 +159,14 @@ internal class ScreenshotPinEditor(private val context: Context,private val imag
         undoButton?.apply { isEnabled=layer.history.canUndo; alpha=if(isEnabled) 1f else .4f }
         redoButton?.apply { isEnabled=layer.history.canRedo; alpha=if(isEnabled) 1f else .4f }
         val scroll=styles.scrollY
-        val key=layer.inspectedTool to layer.selectedIndex
+        // key 只看工具：选中变化走 refresh()，横向滚动位置不再随点选丢失。
+        val key=layer.inspectedTool
         if(controls==null || key!=controlKey) {
             styles.removeAllViews(); controls=ScreenshotDrawingControls(context,layer,::editValue)
             styles.addView(controls); controlKey=key
         } else controls?.refresh()
-        styles.post { styles.scrollTo(0,scroll) }
+        // 等布局完成再滚：post{scrollTo} 在 extent=0 时被夹成 0。
+        ScreenshotScrollMemory.applyAfterLayout(styles,scroll,horizontal=false)
         place()
     }
     private fun place() {

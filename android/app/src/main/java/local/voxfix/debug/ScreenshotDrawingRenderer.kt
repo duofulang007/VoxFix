@@ -14,8 +14,15 @@ internal class ScreenshotDrawingRenderer(private var image: Bitmap,
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap=Paint.Cap.ROUND; strokeJoin=Paint.Join.ROUND }
     private val penPaint=Paint()
     private data class FilterKey(val left:Int,val top:Int,val right:Int,val bottom:Int,val type:ScreenshotFilter,val strength:Float)
-    // Recorded hardware frames can outlive cache entries; GC owns the bitmap lifetime.
-    private val filters=object : LruCache<FilterKey,Bitmap>(24*1024*1024) {
+    /**
+     * 滤镜结果缓存。
+     *
+     * 容量必须放得下「一整张图的全部打码区域」：长截图自动打码会产生上百个区域
+     * （实测一条 916×10192 的记录有 107 个 FILTER），按原尺寸各存一份约 40MB。
+     * 原来 24MB 装不下，每帧都被驱逐再重算，`dumpsys gfxinfo` 单帧 250–450ms。
+     * 缓存命中后静止时零重算；滚动时也不再反复驱逐。
+     */
+    private val filters=object : LruCache<FilterKey,Bitmap>(96*1024*1024) {
         override fun sizeOf(key: FilterKey,value: Bitmap)=value.allocationByteCount
     }
     fun close() { filters.evictAll() }
@@ -232,7 +239,12 @@ internal class ScreenshotDrawingRenderer(private var image: Bitmap,
         }
         return true
     }
-    fun draw(canvas: Canvas,marks: List<ScreenshotDrawingStroke>,crop: Rect,watermark: ScreenshotWatermark? = null) {
+    /**
+     * @param visible 当前可见的图片区域；给了就跳过完全在视口外的滤镜区域。
+     * 长图整幅时有上百个打码块，视口外的那些不该参与计算——它们既看不见，又要花掉
+     * 一次全区域滤波的时间。
+     */
+    fun draw(canvas: Canvas,marks: List<ScreenshotDrawingStroke>,crop: Rect,watermark: ScreenshotWatermark? = null,visible: RectF? = null) {
         // The watermark sits on the screenshot and under every annotation, so marks stay readable.
         watermark?.draw(canvas,crop,fontUnit())
         val spots=marks.filter { it.tool==ScreenshotDrawingTool.SPOTLIGHT }
@@ -249,6 +261,9 @@ internal class ScreenshotDrawingRenderer(private var image: Bitmap,
         }
         val byId=marks.associateBy { it.id }
         for(stroke in marks) if(stroke.tool!=ScreenshotDrawingTool.SPOTLIGHT) {
+            // 打码块是唯一"必须算完才能画"的对象；视口外直接跳过，长图上能省掉大部分计算。
+            if(stroke.tool==ScreenshotDrawingTool.FILTER && visible!=null && stroke.rotation==0f &&
+                !RectF.intersects(localBounds(stroke),visible)) continue
             if(stroke.tool==ScreenshotDrawingTool.SERIAL && stroke.boundTextId!=0L)
                 byId[stroke.boundTextId]?.takeIf { it.tool==ScreenshotDrawingTool.TEXT }?.let {
                     ScreenshotSerialLabels.draw(canvas,stroke,labelInkBounds(it),fontUnit())

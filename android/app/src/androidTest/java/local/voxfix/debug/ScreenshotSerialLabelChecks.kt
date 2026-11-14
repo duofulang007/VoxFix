@@ -106,8 +106,8 @@ internal object ScreenshotSerialLabelChecks {
             check(layer.style.fontSize==serial.style.fontSize+1f)
             layer.applyStyle(layer.style.copy(serialShape=ScreenshotSerialShape.SOLID_CIRCLE,serialGeometryVersion=1))
             val solidControls=ScreenshotDrawingControls(context,layer,{ _,_,_-> },false)
-            check(!find(solidControls,"填充色")!!.isEnabled && !find(solidControls,"交叉线填充")!!.isEnabled)
-            check(!find(solidControls,"背景填充 浅红")!!.isEnabled)
+            // 填充参数已收进弹层（原版是单触发器 + Popover），这里断言「入口被禁用」。
+            check(!find(solidControls,"填充色设置")!!.isEnabled) { "实心圆的填充入口应禁用" }
             layer.applyStyle(layer.style.copy(serialShape=ScreenshotSerialShape.CIRCLE))
             val circleControls=ScreenshotDrawingControls(context,layer,{ _,_,_-> },false)
             check(!find(circleControls,"选择字体")!!.isEnabled && find(circleControls,"字号 ${ScreenshotFontSize.format(layer.style.fontSize)}")!!.isEnabled)
@@ -119,7 +119,10 @@ internal object ScreenshotSerialLabelChecks {
             val restoredNumber=find(restoredControls,"序号 0，可滚轮调整")
             check(restoredNumber!=null && restoredNumber!!.isEnabled) { "切回带数字类型后编号输入未恢复" }
             find(circleControls,"绘图颜色 红色")!!.performClick(); check(layer.style.color==0xFFF5222D.toInt())
-            find(circleControls,"背景填充 浅蓝")!!.performClick(); check(layer.style.hasFill && layer.style.fillColor==0xFFBAE0FF.toInt())
+            find(circleControls,"填充色设置")!!.performClick()
+            val fillPanel=ScreenshotStylePopups.lastPanel ?: error("填充弹层没有构建")
+            find(fillPanel,"背景填充 浅蓝")!!.performClick()
+            check(layer.style.hasFill && layer.style.fillColor==0xFFBAE0FF.toInt())
 
             var family=""
             val panel=ScreenshotFontPanel(context,"sans-serif") { family=it }

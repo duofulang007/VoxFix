@@ -1087,7 +1087,12 @@ open class VoxFixImeService : InputMethodService() {
                 val opened = ScreenshotEditorHost.open(id) { saved ->
                     main.post { if (!destroyed && web === owner) script("globalThis.voxfixImageSaved?.($saved)") }
                 }
-                if (!opened) main.post { if (!destroyed && web === owner) script("globalThis.voxfixImageSaved?.(false)") }
+                // 打不开时必须给出原因：键盘只显示"正在打开图片编辑"，静默失败会让用户以为功能坏了。
+                if (!opened) main.post {
+                    if (!destroyed && web === owner) {
+                        script("globalThis.voxfixImageEditFailed?.(${JSONObject.quote("当前有其它截图任务在进行，请先关闭后再编辑")})")
+                    }
+                }
             }
             JSONObject().put("ok", true)
         }

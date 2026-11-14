@@ -21,6 +21,10 @@ class ScreenshotToolbarEditor(context: Context, private val section: ScreenshotT
     private var config = section?.let { ScreenshotToolbarPreferences.load(context,it) }
         ?: ScreenshotToolbarLayout.decode(preferences.getString(KEY,null))
     private var preview: ScrollView? = null
+    private var tray: ScrollView? = null
+    /** 等布局完成再应用的滚动位置；importScroll（切 Tab 回来）优先于本次实况。 */
+    private var pendingPreviewScroll = 0
+    private var pendingTrayScroll = 0
     private var scrollStep = 0
     private val autoScroll = object : Runnable {
         override fun run() {
@@ -94,8 +98,14 @@ class ScreenshotToolbarEditor(context: Context, private val section: ScreenshotT
         }
     }
 
+    /** 导出/恢复两个滚动容器（预览 + 隐藏托盘）的位置：设置页切 Tab 用，拖一下不再回顶。 */
+    fun exportScroll(): Pair<Int,Int> = Pair(preview?.scrollY ?: 0, tray?.scrollY ?: 0)
+    fun importScroll(value: Pair<Int,Int>) { pendingPreviewScroll = value.first; pendingTrayScroll = value.second }
+
     private fun render() {
-        val previousScroll = preview?.scrollY ?: 0
+        // 重建场景沿用本次实况（滚回顶部就记 0）；importScroll（切 Tab 回来）只作用于首次构造。
+        if (preview != null) pendingPreviewScroll = preview!!.scrollY
+        if (tray != null) pendingTrayScroll = tray!!.scrollY
         val wasAtBottom = preview?.let { it.scrollY>0 && it.scrollY+it.height >= (it.getChildAt(0)?.height ?: 0)-dp(8) } ?: false
         removeAllViews()
         val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
@@ -113,7 +123,9 @@ class ScreenshotToolbarEditor(context: Context, private val section: ScreenshotT
         addView(ScrollView(context).apply {
             isFillViewport = true; minimumHeight = dp(96); addView(surface)
             preview = this
-            post { scrollTo(0,if (wasAtBottom) (surface.height-height).coerceAtLeast(0) else previousScroll) }
+            // 等布局完成再恢复；贴底是语义行为（跟最新一行走），保留 fullScroll。
+            if (wasAtBottom) post { fullScroll(View.FOCUS_DOWN) }
+            else if (pendingPreviewScroll > 0) ScreenshotScrollMemory.applyAfterLayout(this,pendingPreviewScroll,horizontal=false)
         },LayoutParams(-1,0,1f))
         addView(TextView(context).apply {
             text = "隐藏的工具"; textSize = 16f; setTextColor(TEXT); setTypeface(typeface,android.graphics.Typeface.BOLD)
@@ -122,7 +134,11 @@ class ScreenshotToolbarEditor(context: Context, private val section: ScreenshotT
         val hidden = Surface(true)
         val columns = ((resources.displayMetrics.widthPixels-dp(40)+dp(8))/dp(40)).coerceAtLeast(1)
         val trayHeight = dp(20+((config.hidden.size+columns-1)/columns)*40).coerceIn(dp(56),dp(128))
-        addView(ScrollView(context).apply { addView(hidden) },LayoutParams(-1,trayHeight))
+        addView(ScrollView(context).apply {
+            addView(hidden); tray = this
+            // 「隐藏的工具」托盘同样记住位置（此前完全没有恢复）。
+            if (pendingTrayScroll > 0) ScreenshotScrollMemory.applyAfterLayout(this,pendingTrayScroll,horizontal=false)
+        },LayoutParams(-1,trayHeight))
     }
 
     private inner class Surface(private val hidden: Boolean) : ViewGroup(context) {

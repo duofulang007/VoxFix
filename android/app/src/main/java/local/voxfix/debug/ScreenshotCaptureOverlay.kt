@@ -25,6 +25,7 @@ import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import kotlin.math.abs
+import kotlin.math.exp
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -69,61 +70,58 @@ class ScreenshotCaptureOverlay(
     private val project: ScreenshotProject?=null
 ) {
     private companion object {
-        const val BUTTON = 32
-        const val ICON = 24
-        const val PANEL_H = 12
-        const val PANEL_V = 4
-        const val ITEM_SPACING = 8
-        const val SEPARATOR_WIDTH = 1
-        const val SEPARATOR_HEIGHT = 16
-        const val SEPARATOR_SIDE = 12
-        const val PANEL_RADIUS = 8
-        const val COLOR_TEXT = 0xFFFFFFFF.toInt()
-        const val COLOR_TEXT_DISABLED = 0x66FFFFFF
-        const val COLOR_DANGER = 0xFFFF4D4F.toInt()
-        const val COLOR_PRIMARY = 0xFF1677FF.toInt()
-        const val COLOR_SEPARATOR = 0xFF3A3A3C.toInt()
-        const val COLOR_PANEL = 0xFF1C1C1E.toInt()
+        // 几何与色值统一在 ScreenshotToolbarMetrics / ScreenshotUiTokens（原版常量 + 手机侧扩展）。
+        const val BUTTON = ScreenshotToolbarMetrics.MAIN_CELL
+        const val ICON = ScreenshotToolbarMetrics.MAIN_ICON
+        const val PANEL_H = ScreenshotToolbarMetrics.PANEL_PAD_H
+        const val PANEL_V = ScreenshotToolbarMetrics.PANEL_PAD_V
+        const val ITEM_SPACING = ScreenshotToolbarMetrics.MAIN_GAP
+        const val SEPARATOR_WIDTH = ScreenshotToolbarMetrics.SEPARATOR_WIDTH
+        const val SEPARATOR_HEIGHT = ScreenshotToolbarMetrics.SEPARATOR_HEIGHT
+        const val SEPARATOR_SIDE = ScreenshotToolbarMetrics.SEPARATOR_SIDE
+        const val PANEL_RADIUS = ScreenshotToolbarMetrics.PANEL_RADIUS
+        const val COLOR_TEXT = ScreenshotUiTokens.TEXT
+        const val COLOR_TEXT_DISABLED = ScreenshotUiTokens.TEXT_DISABLED
+        const val COLOR_DANGER = ScreenshotUiTokens.DANGER
+        const val COLOR_PRIMARY = ScreenshotUiTokens.PRIMARY
+        const val COLOR_SEPARATOR = ScreenshotUiTokens.SEPARATOR
+        const val COLOR_PANEL = ScreenshotUiTokens.PANEL
     }
     private fun dp(n: Int) = (n * context.resources.displayMetrics.density).toInt()
     /**
-     * 画布基准尺寸 = 整幅（contain）。之后所有缩放都走 View 变换（scaleX/scaleY），
-     * 不触发 relayout，所以能跟手；子图层（选框/绘制/文字）的「图片→视图」线性映射
-     * 一个字节都不用改——系统会把触摸坐标按变换反算，放大后画笔照样落在正确像素上。
+     * 画布视口：图片坐标 ↔ 视图坐标的唯一换算来源，也是缩放/平移的唯一真源。
+     *
+     * 改造前靠 View 变换（`content.scaleX/scaleY`）放大，那是在**已经按布局尺寸栅格化过的
+     * 纹理**上做二次放大：长图（916×10192 布局到 216 宽）放大 4 倍必然发虚、边缘出双线。
+     * 现在 content 恒等于窗口尺寸，底图与矢量都按当前比例重绘，长图 1:1 也清晰；
+     * 同时捏合锚点用的 focus 与 offset 统一是视图坐标，不会再出现"两套坐标系混用"导致的漂移。
      */
-    private fun applyCanvasBase(w: Int, h: Int) {
+    private val viewport = ScreenshotViewport(image.width, image.height)
+    private fun applyCanvasBase(w: Int, h: Int, resetView: Boolean = false) {
         if (w <= 0 || h <= 0 || image.width <= 0 || image.height <= 0) return
-        val fit = ScreenshotCanvasFit.of(image.width, image.height, w, h)
+        // 编辑已保存的截图时，画布范围 = 当初框选的那一块：底图是整屏原始像素，
+        // 直接铺满会让用户看到一张陌生的全屏截图、找不到自己截的内容（2026-11-14 用户反馈）。
+        // 新截图流程相反——必须看到全屏才能框选，所以那里保持整图。
+        val region = if (project != null) (picked ?: Rect(0, 0, image.width, image.height))
+        else Rect(0, 0, image.width, image.height)
+        viewport.setContentRect(region.left.toFloat(), region.top.toFloat(),
+            region.right.toFloat(), region.bottom.toFloat())
+        val fit = ScreenshotCanvasFit.of(viewport.contentWidth.toInt(), viewport.contentHeight.toInt(), w, h)
         canvasFit = fit
-        // 窗口尺寸中途变化（旋转/分屏/键盘）会改变 maxZoom：旧 zoom 可能越界，先夹回合法区间，
-        // 否则捏合的 coerceIn 区间与档位错位，会卡在「缩不回去」的状态。
-        zoom = ScreenshotCanvasZoom.clamp(zoom, maxZoom)
-        // 单位按整幅宽度冻结：缩放不改变已存笔画的像素粗细与字号。
-        drawing.freezeUnits((image.width * fit.containScale).toInt().coerceAtLeast(1))
-        val targetW = maxOf(1,(image.width*fit.containScale).toInt())
-        val targetH = maxOf(1,(image.height*fit.containScale).toInt())
-        val params = (content.layoutParams as? FrameLayout.LayoutParams)
-            ?: FrameLayout.LayoutParams(targetW,targetH)
-        if (params.width != targetW || params.height != targetH || params.gravity != Gravity.CENTER) {
-            params.width = targetW; params.height = targetH; params.gravity = Gravity.CENTER
-            content.layoutParams = params
-        }
-        // 换窗口尺寸时保留「看到哪一块」的相对位置，而不是跳回整幅。
-        // content.left 要等这一帧 layout 完才有值，变换必须在布局后再算一遍，
-        // 否则居中偏移会被重复计入 translation，画布整体跑偏。
-        applyTransform()
-        content.post {
-            if (!disposed) {
-                // 首次布局把内容放到视口中央；之后的位置交给人手，不再自动归位。
-                if (!canvasPositioned) {
-                    canvasPositioned = true
-                    val rw = root.width.toFloat(); val rh = root.height.toFloat()
-                    content.translationX = (rw - content.width * zoom) / 2f - content.left
-                    content.translationY = (rh - content.height * zoom) / 2f - content.top
-                }
-                applyTransform()
-            }
-        }
+        // 单位按整幅（= 画布范围）宽度冻结：缩放不改变已存笔画的像素粗细与字号。
+        drawing.freezeUnits((viewport.contentWidth * fit.containScale).toInt().coerceAtLeast(1))
+        // 首次布局整幅居中；窗口尺寸变化（旋转/分屏/键盘）保留当前倍率与视野中心，
+        // 不把用户重新丢回整幅。恢复工程后画布范围会变，那次必须重新居中（resetView）。
+        if (resetView || !canvasPositioned) { canvasPositioned = true; viewport.fit(w.toFloat(), h.toFloat(), fit) }
+        else viewport.resize(w.toFloat(), h.toFloat(), fit)
+        drawing.viewport = viewport
+        selector.viewport = viewport
+        backdropView.viewport = viewport
+        drawing.backdrop = backdropTiles
+        // 底图改由 ScreenshotCanvasSurface 直接采样源纹理，ImageView 那份低分辨率绘制必须让位，
+        // 否则同一张图会被画两遍（旧的一份在上层放大后端就是"两层影像"）。
+        background.visibility = View.GONE
+        invalidateCanvas()
         if (fit.canFitWidth && !zoomHinted) {
             zoomHinted = true
             root.post { if (!disposed) showFeedback("双指缩放可看细节，双击在整幅与满宽之间切换") }
@@ -132,11 +130,15 @@ class ScreenshotCaptureOverlay(
     private var zoomHinted = false
     private var canvasPositioned = false
     private var canvasFit: ScreenshotCanvasFit.Fit? = null
-    /** 1f = 整幅；上限由「适应宽度」倍数推出，长图也能放到 1:1 以上。 */
-    private var zoom = 1f
+    /** 以整幅为 1 的缩放倍率（对外语义不变），实际比例由 [viewport] 持有。 */
+    private val zoom: Float
+        get() = canvasFit?.let { fit ->
+            val min = fit.containScale
+            if (min > 0f) viewport.scale / min else 1f
+        } ?: 1f
     private var zoomAnimator: ValueAnimator? = null
     /** 双击动画/惯性仍在跑时，任何新的 zoom/translation 写者都要先停掉它：
-     *  动画每帧绝对写 translation，与捏合/拖动的增量写叠加就是重影与「捏不动」。 */
+     *  动画每帧绝对写 offset，与捏合/拖动的增量写叠加就是重影与「捏不动」。 */
     private fun cancelZoomAnimation() { zoomAnimator?.cancel() }
     private val maxZoom: Float get() = ScreenshotCanvasZoom.maxZoom(canvasFit)
     /** 「适应宽度」对应的缩放倍数（整幅为 1）。 */
@@ -179,6 +181,12 @@ class ScreenshotCaptureOverlay(
         private val flingVelocity = VelocityTracker.obtain()
         private var flingLastX = 0
         private var flingLastY = 0
+        // QuickScale：双击后不松手继续上下拖 → 连续缩放，与相册/标注 App 的手感一致。
+        private var quickScaleArmed = false
+        private var quickScaleStartY = 0f
+        private var quickScaleAnchorX = 0f
+        private var quickScaleAnchorY = 0f
+        private var quickScaleTarget = 1f
         override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -199,7 +207,13 @@ class ScreenshotCaptureOverlay(
                         abs(event.x - lastTapX) < dp(32) && abs(event.y - lastTapY) < dp(32)
                     if (doubleTap) {
                         lastTapAt = 0L
-                        handleDoubleTap(event.x, event.y)
+                        // 双击立即起动画（保留"双击有反应"的直觉），同时武装 QuickScale：
+                        // 手指不抬起继续上下拖就接管成连续缩放——手机上看照片/标注的通行手势。
+                        quickScaleArmed = true
+                        quickScaleStartY = event.y
+                        quickScaleAnchorX = event.x
+                        quickScaleAnchorY = event.y
+                        quickScaleTarget = handleDoubleTap(event.x, event.y) ?: viewport.scale
                         return true
                     }
                     return false
@@ -217,6 +231,22 @@ class ScreenshotCaptureOverlay(
                     return false
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    if (quickScaleArmed) {
+                        val dy = event.y - quickScaleStartY
+                        if (abs(dy) > dp(10)) {
+                            // 接管：停掉双击动画，从双击的目标比例起按位移指数缩放（向上拖=放大）。
+                            // 用指数而不是线性，小位移时不会过冲，长拖也能到上限。
+                            quickScaleArmed = false
+                            cancelZoomAnimation()
+                            val span = root.height.coerceAtLeast(1) * 0.6f
+                            val factor = exp(-dy / span)
+                            if (viewport.zoomTo(quickScaleTarget * factor, quickScaleAnchorX, quickScaleAnchorY, canvasFit)) {
+                                gestureActive = true
+                                invalidateCanvas()
+                            }
+                        }
+                        return true
+                    }
                     if (twoFinger) return true
                     if (panning) return true
                     if (!canPanCanvas()) return false
@@ -236,25 +266,20 @@ class ScreenshotCaptureOverlay(
                         lastTapAt = SystemClock.uptimeMillis(); lastTapX = event.x; lastTapY = event.y
                     }
                     tapEligible = false
-                    panning = false; twoFinger = false
+                    panning = false; twoFinger = false; quickScaleArmed = false
                     gestureActive = false
                     placeControls()
                     return false
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     tapEligible = false
-                    panning = false; twoFinger = false
+                    panning = false; twoFinger = false; quickScaleArmed = false
                     gestureActive = false
                     placeControls()
                     return false
                 }
             }
             return false
-        }
-        override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-            super.onLayout(changed, l, t, r, b)
-            // 居中偏移是父布局给的；位置一变 translation 的基准就变了，必须按新偏移重算。
-            if (changed) post { if (!disposed) applyTransform() }
         }
         override fun onTouchEvent(event: MotionEvent): Boolean {
             // POINTER_DOWN 已在拦截层喂过：这里再喂一次会让检测器重复建立跨度。
@@ -269,17 +294,18 @@ class ScreenshotCaptureOverlay(
                 MotionEvent.ACTION_MOVE -> {
                     if (twoFinger) {
                         // 双指整体移动 = 平移；缩放交给 scaleDetector（它只报比例变化）。
+                        // focus 与 viewport.offset 同属视图坐标（content 不再做 View 变换），
+                        // 所以增量直接就是屏幕像素，不需要再乘 zoom。
                         val fx = focusX(event); val fy = focusY(event)
-                        panByScreen((fx - lastFocusX) * zoom, (fy - lastFocusY) * zoom)
+                        panByScreen(fx - lastFocusX, fy - lastFocusY)
                         lastFocusX = fx; lastFocusY = fy
                         return true
                     }
                     if (panning) {
-                        // dx/dy 是内容局部坐标（系统按 scale 反算过），乘 zoom 换成屏幕像素。
-                        panByScreen((event.x - lastX) * zoom, (event.y - lastY) * zoom)
+                        panByScreen(event.x - lastX, event.y - lastY)
                         // VERBOSE 才输出：INFO 级每帧一条会自己把拖动拖慢。
                         if (android.util.Log.isLoggable("VoxFix", android.util.Log.VERBOSE)) {
-                            android.util.Log.v("VoxFix", "CANVAS_DY ty=${content.translationY} zoom=$zoom")
+                            android.util.Log.v("VoxFix", "CANVAS_DY oy=${viewport.offsetY} scale=${viewport.scale}")
                         }
                         lastX = event.x; lastY = event.y
                         return true
@@ -299,6 +325,7 @@ class ScreenshotCaptureOverlay(
                 MotionEvent.ACTION_UP -> {
                     val wasZoomed = twoFinger
                     twoFinger = false
+                    quickScaleArmed = false
                     if (panning && !wasZoomed && canPanCanvas()) {
                         // 松手甩出去：OverScroller 按系统的摩擦曲线衰减，速度够才启动。
                         flingVelocity.computeCurrentVelocity(1000, 10000f)
@@ -317,7 +344,7 @@ class ScreenshotCaptureOverlay(
                     return true
                 }
                 MotionEvent.ACTION_CANCEL -> {
-                    twoFinger = false; panning = false
+                    twoFinger = false; panning = false; quickScaleArmed = false
                     flingScroller.abortAnimation()
                     flingVelocity.clear()
                     gestureActive = false
@@ -349,11 +376,11 @@ class ScreenshotCaptureOverlay(
             val dx = flingScroller.currX - flingLastX
             val dy = flingScroller.currY - flingLastY
             flingLastX = flingScroller.currX; flingLastY = flingScroller.currY
-            val beforeX = content.translationX
-            val beforeY = content.translationY
+            val beforeX = viewport.offsetX
+            val beforeY = viewport.offsetY
             panByScreen(dx.toFloat(), dy.toFloat())
-            val stuckX = dx != 0 && content.translationX == beforeX
-            val stuckY = dy != 0 && content.translationY == beforeY
+            val stuckX = dx != 0 && viewport.offsetX == beforeX
+            val stuckY = dy != 0 && viewport.offsetY == beforeY
             if ((stuckX && stuckY) || (stuckX && dy == 0) || (stuckY && dx == 0)) {
                 flingScroller.abortAnimation()
                 gestureActive = false
@@ -381,18 +408,13 @@ class ScreenshotCaptureOverlay(
             // （表现为重影/捏不动）。写者唯一化——先停动画，本次手势成为唯一来源。
             cancelZoomAnimation()
             gestureActive = true
-            val next = ScreenshotCanvasZoom.pinchTarget(zoom, detector.scaleFactor, maxZoom)
-            if (next == zoom) return true
-            val ratio = next / zoom
-            // focusX/focusY 是内容局部坐标（系统已按 scale 反算过），
-            // 要让焦点下的像素不动，平移只需补上 focus*(1-ratio)——不要再减去 content.left。
-            applyCanvasState(next,
-                content.translationX + detector.focusX * (1f - ratio),
-                content.translationY + detector.focusY * (1f - ratio))
+            // focusX/focusY 就是视图坐标（content 不再做 View 变换），视口内部
+            // 用 `offset' = focus - (focus - offset) * ratio` 保证焦点下的像素不动，
+            // 这里不需要任何手工补偿——旧实现少乘 zoom 的漂移从此不存在。
+            if (viewport.zoomBy(detector.scaleFactor, detector.focusX, detector.focusY, canvasFit)) invalidateCanvas()
             return true
         }
     })
-    /** 双击：整幅 ↔ 适应宽度；两者相同（普通截图）时不做无意义的缩放。 */
     /**
      * 单指平移的准入：无工具时整条手势交给画布（含惯性）。
      * SELECT 时不拦截——点到对象由选择逻辑接管，点到空白由绘图层经 onCanvasPan 转发平移，
@@ -402,53 +424,54 @@ class ScreenshotCaptureOverlay(
         drawing.tool == null && !editing && annotationEditor == null && stackPopup == null &&
             regionOperation == null && !moveMode && !selector.selectionInProgress
 
-    /** 双击：整幅 ↔ 满宽，以双击点为锚点放大，和看照片一致。 */
-    private fun handleDoubleTap(x: Float, y: Float) {
-        if (busy || editing) return
-        val target = ScreenshotCanvasZoom.doubleTapTarget(zoom, canvasFit) ?: return
-        animateZoom(target, x, y)
+    /** 双击：整幅 ↔ 满宽，以双击点为锚点放大，和看照片一致。@return 目标比例（无档位可切时为 null）。 */
+    private fun handleDoubleTap(x: Float, y: Float): Float? {
+        if (busy || editing) return null
+        val targetZoom = ScreenshotCanvasZoom.doubleTapTarget(zoom, canvasFit) ?: return null
+        val min = canvasFit?.containScale?.takeIf { it > 0f } ?: 1f
+        val target = targetZoom * min
+        animateZoomTo(target, x, y)
+        return target
     }
 
     /**
-     * 屏幕像素平移。单指拖动先把局部 dx 乘 zoom（见 onTouchEvent）；
-     * 双指平移、惯性 fling 的增量本来就是屏幕像素，直接传进来。
+     * 屏幕像素平移。双指/单指/惯性 fling 传进来的都是视图坐标增量
+     * （content 不再做 View 变换，event.x 就是屏幕像素）。
      * 平移也是 touch 驱动的写者：拖动接手时先停掉可能还在跑的双击动画，并持有 gestureActive
      * （动画取消回调会把它复位，这里重新置位，保证手势期间 placeControls 不插进来重排）。
      */
     private fun panByScreen(dx: Float, dy: Float) {
         cancelZoomAnimation()
         gestureActive = true
-        applyCanvasState(zoom, content.translationX + dx, content.translationY + dy)
-    }
-    /** zoom 与 translation 的唯一落点：clamp + applyTransform 只在这里发生，捏合/拖动/双击动画共用。 */
-    private fun applyCanvasState(newZoom: Float, tx: Float, ty: Float) {
-        zoom = ScreenshotCanvasZoom.clamp(newZoom, maxZoom)
-        content.translationX = tx
-        content.translationY = ty
-        applyTransform()
+        // 贴边时继续拖不重绘：长图整幅显示时纵向正好铺满，任何拖动都会被边界吃掉。
+        if (viewport.panBy(dx, dy)) invalidateCanvas()
     }
     /** 松手吸附已移除：吸附会在整幅与满宽之间来回跳，编辑长图时根本没法停在中间比例。
      *  档位切换只通过双击显式触发。 */
-    /** [focusX]/[focusY] 是内容局部坐标（双击点、或默认画布中心），动画期间保持该点不动。 */
-    private fun animateZoom(target: Float, focusX: Float = content.width / 2f, focusY: Float = content.height / 2f) {
+    /**
+     * 双击缩放动画：以视图坐标 [focusX]/[focusY] 为锚点，220ms 插值到 [targetScale]。
+     * 每帧按「起始比例 + 起始偏移 + 锚点」绝对计算，不做增量累加（增量会和捏合叠出重影）。
+     */
+    private fun animateZoomTo(targetScale: Float, focusX: Float, focusY: Float) {
         cancelZoomAnimation()
-        val start = zoom
-        if (start <= 0f || target <= 0f) { applyCanvasState(target, content.translationX, content.translationY); placeControls(); return }
-        val baseX = content.translationX
-        val baseY = content.translationY
+        val start = viewport.scale
+        if (start <= 0f || targetScale <= 0f) { placeControls(); return }
+        val baseX = viewport.offsetX
+        val baseY = viewport.offsetY
         gestureActive = true
-        zoomAnimator = ValueAnimator.ofFloat(start, target).apply {
+        zoomAnimator = ValueAnimator.ofFloat(start, targetScale).apply {
             duration = 220
             addUpdateListener {
                 val value = it.animatedValue as Float
                 val ratio = value / start
-                applyCanvasState(value, baseX + focusX * (1f - ratio), baseY + focusY * (1f - ratio))
+                if (viewport.set(value, baseX + focusX * (1f - ratio), baseY + focusY * (1f - ratio), canvasFit)) invalidateCanvas()
             }
             // 自然结束与被取消（捏合/拖动接管）都会走到这里：gestureActive 复位与控制栏
             // 重排收口在一个地方，取消路径不再泄漏 gestureActive（否则 placeControls 永远不跑）。
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: android.animation.Animator) {
                     gestureActive = false
+                    invalidateCanvas()
                     placeControls()
                 }
             })
@@ -456,29 +479,20 @@ class ScreenshotCaptureOverlay(
         }
     }
     /**
-     * 应用变换并夹住边界。区间是连续的：内容左/上边缘的屏幕位置被限制在
-     * 「min(0, 视口-内容) … max(0, 视口-内容)」，跨过"内容恰好占满视口"的临界点时
-     * 不再在「居中/贴边」两个分支之间跳变——那个跳变就是用户看到的抽搐。
+     * 视口变化后刷新所有画布层。
+     *
+     * 这里不再改 View 变换——content 尺寸恒等于窗口，缩放与平移全部由视口换算后重绘。
+     * 手势进行中不整栏重排：placeControls 要 measure 二级栏两次并 requestLayout，
+     * 每帧跑一遍就是抽搐与掉帧残留（用户口中的"重影"）的主因。
      */
-    private fun applyTransform() {
-        val rw = root.width.toFloat()
-        val rh = root.height.toFloat()
-        if (rw <= 0f || rh <= 0f) return
-        content.pivotX = 0f; content.pivotY = 0f
-        content.scaleX = zoom; content.scaleY = zoom
-        // 选框把手等屏幕尺寸 UI 依赖当前缩放，保持它们视觉大小恒定。
+    private fun invalidateCanvas() {
         drawing.viewZoom = zoom
-        val scaledW = content.width * zoom
-        val scaledH = content.height * zoom
-        val leftBase = content.left.toFloat()
-        val topBase = content.top.toFloat()
-        val loX = minOf(0f, rw - scaledW); val hiX = maxOf(0f, rw - scaledW)
-        val loY = minOf(0f, rh - scaledH); val hiY = maxOf(0f, rh - scaledH)
-        content.translationX = (leftBase + content.translationX).coerceIn(loX, hiX) - leftBase
-        content.translationY = (topBase + content.translationY).coerceIn(loY, hiY) - topBase
-        // 手势进行中不整栏重排：placeControls 要 measure 二级栏两次并 requestLayout，
-        // 每帧跑一遍就是缩放/拖动抽搐与"重影"（掉帧把旧帧留在屏幕上）的主因。
-        // 双击动画期间 gestureActive 可能已被松手复位，用 isRunning 再挡一层。
+        // 底图只在视口变化时重画；标注变化走 drawing 自己的 invalidate，不会连累它。
+        backdropView.invalidate()
+        drawing.invalidate()
+        selector.invalidate()
+        resultLayer.invalidate()
+        qrMarkers.invalidate()
         if (!gestureActive && zoomAnimator?.isRunning != true) scheduleControls()
     }
     /** 手势结束后的整栏重排走这里；手势中由各入口置位。 */
@@ -494,13 +508,22 @@ class ScreenshotCaptureOverlay(
     }
     // 画布在 root 中的原点与比例：root↔图片坐标的所有换算都走这里，
     // 否则画布被缩放/平移后，工具栏和状态条会锚在错误位置。
-    private fun canvasLeft() = content.left.toFloat() + content.translationX
-    private fun canvasTop() = content.top.toFloat() + content.translationY
-    private fun canvasScaleX() = if (image.width > 0) content.width * zoom / image.width else 1f
-    private fun canvasScaleY() = if (image.height > 0) content.height * zoom / image.height else 1f
-    private fun canvasX(imageX: Int) = canvasLeft() + imageX * canvasScaleX()
-    private fun canvasY(imageY: Int) = canvasTop() + imageY * canvasScaleY()
+    // 画布在 root 中的原点与比例：root ↔ 图片坐标的所有换算都走 viewport。
+    // content 恒等于 root 的尺寸（不再居中缩小、也不再做 View 变换），所以 viewport 的
+    // offset 直接就是 root 坐标，不需要再叠加 content.left/top——旧实现正因为多叠了一次
+    // 局部偏移，缩放后工具栏与状态条会锚在错误位置。
+    private fun canvasLeft() = viewport.offsetX
+    private fun canvasTop() = viewport.offsetY
+    private fun canvasScaleX() = viewport.scale
+    private fun canvasScaleY() = viewport.scale
+    private fun canvasX(imageX: Int) = viewport.toScreenX(imageX.toFloat())
+    private fun canvasY(imageY: Int) = viewport.toScreenY(imageY.toFloat())
     private val background = ImageView(context).apply { scaleType = ImageView.ScaleType.FIT_XY; setImageBitmap(image) }
+    /** 分块底图缓存：底图层与绘图层（仅高亮时）共享同一份。 */
+    private val backdropTiles by lazy { ScreenshotTileBackdrop(image) }
+    private val backdropView = ScreenshotBackdropView(context).apply {
+        backdrop = backdropTiles
+    }
     private var picked: Rect? = null
     private var busy = false
     /** 忙碌来源：ocr=识别文字，qr=二维码识别；转圈归属见 updateBusySpinner。 */
@@ -566,18 +589,22 @@ class ScreenshotCaptureOverlay(
         setPadding(dp(2),dp(4),dp(2),dp(4)); contentDescription = "选中对象操作"; visibility = View.GONE
     }
     private var selectActionKey: String? = null
+    /** 主栏结构签名：未变就跳过 rebuildToolbar（见 sync 内守卫）。 */
+    private var toolbarSignature: List<Any?>? = null
+    /** 二级栏贴上/贴下方向的滞回状态，防止在临界值来回翻转（屏闪抽搐来源之一）。 */
+    private var secondaryAbove = false
     private var annotationEditor: View? = null
     private var annotationBackdrop: View? = null
     private var annotationField: ScreenshotTextEditor? = null
     private var annotationInput: ScreenshotAnnotationInput? = null
-    private var drawingControlKey: Pair<ScreenshotDrawingTool?,Int?>?=null
+    private var drawingControlKey: ScreenshotDrawingTool?=null
     private var resultTool: ScreenshotAction?=null
     private var toolbarAnchorKey=""
     private var toolbarAnchor=android.graphics.Point()
     /** Set once the user drags the grip: the bar then stays where they put it. */
     private var toolbarManual: android.graphics.Point?=null
     private val detailBody = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.TOP }
-    private var secondaryMaxHeight=dp(280)
+    private var secondaryMaxHeight=dp(ScreenshotToolbarMetrics.DETAIL_MAX)
     private val secondaryPanel=object : LinearLayout(context) {
         override fun onMeasure(widthSpec: Int,heightSpec: Int) {
             val parentLimit=if(View.MeasureSpec.getMode(heightSpec)==View.MeasureSpec.UNSPECIFIED) secondaryMaxHeight else View.MeasureSpec.getSize(heightSpec)
@@ -646,7 +673,7 @@ class ScreenshotCaptureOverlay(
     private fun setSecondaryCollapsed(value: Boolean) {
         if (secondaryCollapsed == value) return
         secondaryCollapsed = value
-        if (!value) secondaryManual = null   // 重新展开时回到「贴着一级栏」，不留在被拖走的位置
+        if (!value) { secondaryManual = null; secondaryAbove = false }   // 重新展开时回到「贴着一级栏」，不留在被拖走的位置
         sync()
     }
     private val resultActions=LinearLayout(context).apply {
@@ -735,10 +762,6 @@ class ScreenshotCaptureOverlay(
     }
     private val resultLayer = FrameLayout(context).apply { visibility = View.INVISIBLE }
     private fun surface(radius: Int) = GradientDrawable().apply { setColor(COLOR_PANEL); cornerRadius = dp(radius).toFloat() }
-    /** Active tools paint a filled blue tile, matching Snow Shot's selected tool. */
-    private fun activeSurface(radius: Int) = GradientDrawable().apply {
-        setColor(COLOR_PRIMARY); cornerRadius = dp(radius).toFloat()
-    }
     private val toolbar = ScreenshotToolbarPanel(context)
     /** A10/A11: the selection readout switches between physical pixels and density-independent dp. */
     private var logicalUnits = false
@@ -925,6 +948,8 @@ class ScreenshotCaptureOverlay(
         root.addView(content,FrameLayout.LayoutParams(-1,-1))
         drawing.colorSamplingBase={ if(resultLayer.visibility==View.VISIBLE) (if(showingTranslation) translationLayer else textLayer)?.render(Rect(0,0,image.width,image.height)) else null }
         content.addView(background,FrameLayout.LayoutParams(-1,-1))
+        // 底图独立成层：静态像素只在自己失效时重绘，标注变化完全不碰它。
+        content.addView(backdropView,FrameLayout.LayoutParams(-1,-1))
         content.addView(selector,FrameLayout.LayoutParams(-1,-1))
         content.addView(resultLayer,FrameLayout.LayoutParams(-1,-1))
         content.addView(drawing,FrameLayout.LayoutParams(-1,-1))
@@ -945,7 +970,7 @@ class ScreenshotCaptureOverlay(
         secondaryPanel.addView(detailBody,LinearLayout.LayoutParams(-1,-2))
         initSelectionActions()
         selectActionsScroll.addView(selectActions,android.widget.FrameLayout.LayoutParams(-2,-2))
-        secondaryPanel.addView(selectActionsScroll,LinearLayout.LayoutParams(-1,dp(80)))
+        secondaryPanel.addView(selectActionsScroll,LinearLayout.LayoutParams(-1,dp(88)))
         resultActions.addView(eyeAction,LinearLayout.LayoutParams(dp(44),dp(44)))
         resultActions.addView(View(context).apply { setBackgroundColor(COLOR_SEPARATOR) },LinearLayout.LayoutParams(dp(1),dp(16)).apply { marginStart=dp(8); marginEnd=dp(8) })
         resultActions.addView(editAction,LinearLayout.LayoutParams(dp(44),dp(44)))
@@ -970,6 +995,11 @@ class ScreenshotCaptureOverlay(
         }
         root.addOnLayoutChangeListener { _,_,_,_,_,_,_,_,_ -> placeControls() }
         restoreProject()
+        if (project != null) {
+            // 布局可能已经先跑过一轮，那一轮 `picked` 还是 null，画布范围被当成整图——
+            // 结果就是"显示整屏截图、找不到自己框的那块"。这里无论先后都按选区重排一次。
+            root.post { if (!disposed) applyCanvasBase(root.width, root.height, resetView = true) }
+        }
         sync()
     }
     /** Reopen a saved record: same base image, same marks, same text, viewport no longer draggable. */
@@ -999,11 +1029,21 @@ class ScreenshotCaptureOverlay(
         document.activeStyle?.let { drawing.restoreStyle(it) }
         drawing.onCanvasPan = ::panByScreen
         rebuildDrawingStyles()
+        // 本函数没有配对 sync（其余 rebuildDrawingStyles 调用点都有），面板定位在这里补一次。
+        placeControls()
         status.visibility=View.GONE
+        // 选区层只服务"新截图框选"：编辑已有图片时整层隐藏，画面上只剩图片本身与工具。
+        // 必须放在下面两处早退之前——无文字工程会在 text 判空处直接 return，
+        // 那之后再设 GONE 永远走不到；而该层默认 VISIBLE、rect 为空，
+        // 空 RectF 会让它的四块遮罩退化成一整幅 50% 黑，并且它的触摸监听会吞掉
+        // 绘图/平移的全部手势（现象：进编辑器一片暗、点哪儿都没反应）。
+        selector.readOnly = true
+        selector.visibility=View.GONE
         val text=document.text ?: return
         if(text.blocks.isEmpty()) return
         resultTool=ScreenshotAction.RECOGNIZE
         val layer=ScreenshotTextLayer(context,image,text.blocks,::textChanged,{ setEditing(true,document = true) })
+        layer.viewport=viewport
         layer.historyChanged=::sync
         textLayer=layer
         resultLayer.removeAllViews()
@@ -1011,6 +1051,7 @@ class ScreenshotCaptureOverlay(
         if(text.translation.isNotEmpty()) {
             val translated=ScreenshotTextLayer(context,image,text.translation,{},{ setEditing(true,document = true) },
                 fitToBlock=true,translationRegion=picked)
+            translated.viewport=viewport
             translated.historyChanged=::sync
             translationLayer=translated
             resultLayer.addView(translated,FrameLayout.LayoutParams(-1,-1))
@@ -1019,8 +1060,6 @@ class ScreenshotCaptureOverlay(
         showingTranslation=text.mode==ScreenshotTextMode.TRANSLATION && translationLayer!=null
         if(showingTranslation) { textLayer?.visibility=View.GONE; showPairBar() } else translationLayer?.visibility=View.GONE
         resultLayer.visibility=View.VISIBLE
-        // 选区层只服务"新截图框选"，编辑已有图片时整层隐藏：画面上只剩图片本身与工具。
-        selector.visibility=View.GONE
     }
     /** The style card only exists when the active tool really has options; an empty card is a white bar. */
     private fun drawingStyleCardVisible(): Boolean =
@@ -1068,7 +1107,14 @@ class ScreenshotCaptureOverlay(
         scrollAction.isEnabled = scrollAction.isEnabled && onScrollRequested != null
         recordAction.isEnabled = recordAction.isEnabled && onRecordRequested != null
         if(annotationEditor!=null) actions.filter { it.action!=ScreenshotAction.CLOSE }.forEach { it.isEnabled=false }
-        rebuildToolbar()
+        // 主栏重建守卫：rebuildToolbar 的全部结构性输入都在签名里（state、busy 分支、翻译链、
+        // 组记忆、最近工具指纹）。sync 有约 57 处调用点，每次都 removeAllViews 整条重建主栏
+        // 是「点一下闪一下」的主因之一。
+        // ⚠️ rebuildToolbar 新增状态输入时必须同步扩这个签名。
+        closeStack()
+        val toolbarNext=listOf<Any?>(state,busySource,translateAfterRecognition,
+            groupEntries.hashCode(),toolMemory?.fingerprint())
+        if(toolbarNext!=toolbarSignature) { toolbarSignature=toolbarNext; rebuildToolbar() }
         val working = busy || translating
         pairBar?.visibility = if (resultTool==ScreenshotAction.TRANSLATE && !editing) View.VISIBLE else View.GONE
         pairBar?.isEnabled=!working
@@ -1159,22 +1205,23 @@ class ScreenshotCaptureOverlay(
         }
         val row1=LinearLayout(context).apply { gravity=Gravity.CENTER_VERTICAL }
         val row2=LinearLayout(context).apply { gravity=Gravity.CENTER_VERTICAL }
-        selectActions.addView(row1,LinearLayout.LayoutParams(-2,dp(36)))
-        selectActions.addView(row2,LinearLayout.LayoutParams(-2,dp(36)).apply { topMargin=dp(4) })
+        // 行高与二级栏单行统一为 40dp：改造前两行 36dp 塞进 80dp 容器，比同一面板里的其他行矮一截。
+        selectActions.addView(row1,LinearLayout.LayoutParams(-2,dp(40)))
+        selectActions.addView(row2,LinearLayout.LayoutParams(-2,dp(40)).apply { topMargin=dp(4) })
         fun cell(row: LinearLayout,view: View,width: Int)=row.addView(view,
-            LinearLayout.LayoutParams(width,dp(36)).apply { marginEnd=dp(4) })
+            LinearLayout.LayoutParams(width,dp(40)).apply { marginEnd=dp(4) })
         fun divider(row: LinearLayout) {
             val box=FrameLayout(context)
             box.addView(View(context).apply { setBackgroundColor(COLOR_SEPARATOR) },
                 FrameLayout.LayoutParams(dp(1),dp(16),Gravity.CENTER))
             cell(row,box,dp(9))
         }
-        cell(row1,addRegionButton,dp(36)); cell(row1,subtractRegionButton,dp(36)); divider(row1)
-        for(button in listOf(regionRectButton,regionPolylineButton,regionCurveButton,regionFreehandButton)) cell(row1,button,dp(36))
-        for(button in listOf(recaptureButton,qrButton)) cell(row2,button,dp(36))
+        cell(row1,addRegionButton,dp(40)); cell(row1,subtractRegionButton,dp(40)); divider(row1)
+        for(button in listOf(regionRectButton,regionPolylineButton,regionCurveButton,regionFreehandButton)) cell(row1,button,dp(40))
+        for(button in listOf(recaptureButton,qrButton)) cell(row2,button,dp(40))
         divider(row2)
-        cell(row2,hideBarButton,dp(36))
-        cell(row2,recaptureDraftButton,dp(98))
+        cell(row2,hideBarButton,dp(40))
+        cell(row2,recaptureDraftButton,dp(100))
     }
     /** Edit-selection mode mirrors Snow Shot's move tool: the bar owns the add/subtract controls. */
     private fun toggleMoveMode() {
@@ -1494,7 +1541,7 @@ class ScreenshotCaptureOverlay(
         // selector 还在改选区，工具栏却已高亮新工具——「工具栏冲突/反直觉」的直接来源之一。
         if(moveMode || regionOperation!=null) { moveMode=false; setRegionOperation(null) }
         // 换工具时二级栏回到「展开 + 贴着主栏」：第一次点开永远是展开的，收起状态不跨工具残留。
-        if (drawing.tool != tool) { secondaryCollapsed = false; secondaryManual = null }
+        if (drawing.tool != tool) { secondaryCollapsed = false; secondaryManual = null; secondaryAbove = false }
         resultTool=null; showingOriginal=false; showingTranslation=false
         resultLayer.visibility=if(textLayer!=null) View.VISIBLE else View.INVISIBLE
         textLayer?.visibility=View.VISIBLE; translationLayer?.visibility=View.GONE; pairBar?.visibility=View.GONE
@@ -1503,16 +1550,21 @@ class ScreenshotCaptureOverlay(
     }
     private fun rebuildDrawingStyles() {
         val scroll=drawingStyles.scrollY
-        val key=drawing.inspectedTool to drawing.selectedIndex
+        // key 只看工具，不再含 selectedIndex：DrawingControls 的全部状态都是 getter 实时读、
+        // 子面板每次 refresh 重新构建，选中变化走 refresh() 就够——否则每点一次对象就整块
+        // 新建控件，横向滚动位置随之丢失（「点一下回到最前面」的来源之一）。
+        val key=drawing.inspectedTool
         val controls=(drawingStyles.getChildAt(0) as? ScreenshotDrawingControls)?.takeIf { drawingControlKey==key }?.also { it.refresh() }
             ?: ScreenshotDrawingControls(context,drawing,::editDrawingValue,showSelectActions=false,
                 showDrawTemplates=::showDrawTemplates).also {
                 drawingStyles.removeAllViews(); drawingStyles.addView(it); drawingControlKey=key
             }
-        drawingStyles.post { drawingStyles.scrollTo(0,scroll) }
+        // 必须等布局完成再滚：post{scrollTo} 在 extent=0 时被夹成 0，位置静默丢失。
+        ScreenshotScrollMemory.applyAfterLayout(drawingStyles,scroll,horizontal=false)
         drawingStyles.visibility=if(controls.hasContent && drawing.tool!=null && annotationEditor==null) View.VISIBLE else View.GONE
         syncSelectSideActions()
-        placeControls()
+        // placeControls 由配对的 sync() 提供（全部调用方都跟着 sync）；同帧跑两遍
+        // placeControls（各含 measure×2 + requestLayout）是「点一下闪一下」的另一半。
     }
     /**
      * Selected-object actions sit in the detail bar's right column: the rows above rarely fill the
@@ -1547,8 +1599,8 @@ class ScreenshotCaptureOverlay(
         closeStack(); closeDrawingEditor()
         val input=ScreenshotAnnotationInput(root,drawing,point,index,{
             val rect=drawing.textBounds(point,index)
-            android.graphics.RectF(rect.left*content.width/image.width,rect.top*content.height/image.height,
-                rect.right*content.width/image.width,rect.bottom*content.height/image.height)
+            android.graphics.RectF(viewport.toScreenX(rect.left),viewport.toScreenY(rect.top),
+                viewport.toScreenX(rect.right),viewport.toScreenY(rect.bottom))
         }, {
             val top=toolbar.translationY+toolbarHeight+dp(8)
             android.graphics.RectF(toolbar.translationX,top,toolbar.translationX+maxOf(toolbarWidth,dp(176)),top+dp(44))
@@ -1719,14 +1771,16 @@ class ScreenshotCaptureOverlay(
             }
         },{ message -> if(token==actionGeneration && !disposed) { busy=false; sync(); showFeedback(message) } })
     }
-    /** 上游标记中心落在识别框四角质心，按控件尺寸换算成视口坐标。 */
+    /** 上游标记中心落在识别框四角质心，按当前视口换算成视图坐标。 */
     private fun refreshQrMarkers() {
         val crop=picked
-        val width=if(qrMarkers.width>0) qrMarkers.width else content.width
-        val height=if(qrMarkers.height>0) qrMarkers.height else content.height
-        if (crop==null || width<=0 || height<=0) { qrMarkers.setMarkers(emptyList()); return }
-        qrMarkers.setMarkers(ScreenshotQrMarkers.centersFor(
-            qrHits.orEmpty(),crop,width,height,image.width,image.height))
+        if (crop==null || !viewport.hasSize) { qrMarkers.setMarkers(emptyList()); return }
+        // centersFor 内部按「图片坐标 × 显示宽/图片宽」换算，这里把显示宽高给成
+        // viewport 的实际显示尺寸，再补上图片原点的视图偏移——缩放/平移后标记才跟着图走。
+        val centers=ScreenshotQrMarkers.centersFor(qrHits.orEmpty(),crop,
+            viewport.displayWidth.toInt().coerceAtLeast(1),viewport.displayHeight.toInt().coerceAtLeast(1),
+            image.width,image.height)
+        qrMarkers.setMarkers(centers.map { android.graphics.PointF(it.x+viewport.offsetX,it.y+viewport.offsetY) })
     }
     /** 原版 setOcrBusy/setQrBusy/翻译 streaming：把蓝色转圈盖在对应按钮的图标之上。 */
     /** 原版 setOcrBusy/setQrBusy/翻译 streaming：忙碌时对应按钮的图标被蓝色转圈替代。 */
@@ -1799,10 +1853,10 @@ class ScreenshotCaptureOverlay(
     private fun pinImage() {
         if(busy || translating || editing) return
         val region=picked ?: return
-        if(content.width<=0 || content.height<=0) return
+        if(!viewport.hasSize) return
         val location=IntArray(2); content.getLocationOnScreen(location)
-        val screenRect=Rect(location[0]+region.left*content.width/image.width,location[1]+region.top*content.height/image.height,
-            location[0]+region.right*content.width/image.width,location[1]+region.bottom*content.height/image.height)
+        val screenRect=Rect((location[0]+canvasX(region.left)).toInt(),(location[1]+canvasY(region.top)).toInt(),
+            (location[0]+canvasX(region.right)).toInt(),(location[1]+canvasY(region.bottom)).toInt())
         try { ScreenshotPins.show(context,currentImage(),screenRect,currentDocument(region),image); exit() }
         catch(error: Exception) { showFeedback("无法贴图，请检查截图服务是否启用") }
     }
@@ -1858,6 +1912,7 @@ class ScreenshotCaptureOverlay(
         }
         if(resultTool==null) resultTool=ScreenshotAction.RECOGNIZE
         val layer = ScreenshotTextLayer(context,image,blocks,::textChanged, { setEditing(true, document = true) })
+        layer.viewport=viewport
         layer.historyChanged=::sync
         translationLayer = null
         textLayer = layer; showingOriginal = false
@@ -1865,6 +1920,9 @@ class ScreenshotCaptureOverlay(
         resultLayer.addView(layer,FrameLayout.LayoutParams(-1,-1))
         resultLayer.visibility = View.VISIBLE
         // The capture range must stay visible; only the recognized text loses its own frame.
+        // 识别结果依赖这一层画出捕获范围，所以这里显式退出只读态（工程编辑模式下
+        // restoreProject 会把它设为只读，识别后要能重新看到框）。
+        selector.readOnly = false
         selector.visibility = View.VISIBLE
         status.visibility = View.GONE
         sync()
@@ -1919,6 +1977,7 @@ class ScreenshotCaptureOverlay(
         showingTranslation = false
         translationLayer?.let { resultLayer.removeView(it) }
         val streamingLayer=ScreenshotTextLayer(context,image,blocks, {}, { },fitToBlock=true,translationRegion=picked)
+        streamingLayer.viewport=viewport
         for (index in 0 until streamingLayer.childCount) streamingLayer.getChildAt(index).isEnabled=false
         translationLayer=streamingLayer
         resultLayer.addView(streamingLayer,FrameLayout.LayoutParams(-1,-1))
@@ -1937,6 +1996,7 @@ class ScreenshotCaptureOverlay(
                 } else {
                     translationLayer?.let { resultLayer.removeView(it) }
                     val layer = ScreenshotTextLayer(context,image,result, {}, { setEditing(true, document = true) }, fitToBlock = true, translationRegion=picked)
+                    layer.viewport=viewport
                     layer.historyChanged=::sync
                     translationLayer = layer
                     resultLayer.addView(layer, FrameLayout.LayoutParams(-1,-1))
@@ -2122,7 +2182,7 @@ class ScreenshotCaptureOverlay(
                 }
             },80)
         } else {
-            layer?.endEditing(); hideKeyboard(); applyTransform()
+            layer?.endEditing(); hideKeyboard(); invalidateCanvas()
         }
         sync()
     }
@@ -2132,11 +2192,10 @@ class ScreenshotCaptureOverlay(
     private fun applyImeShift() {
         val layer = if (showingTranslation) translationLayer else textLayer
         // 不重置缩放/平移：那是用户选定的视角，键盘弹起只改文字层可视范围。
-        applyTransform()
+        invalidateCanvas()
         if (!editing || layer == null || root.height == 0) return
-        // 视口按画布坐标传（root 像素 / zoom），缩放或平移后编辑框才夹在正确位置。
-        layer.setEditingViewport(((bars.top+dp(8)-canvasTop())/zoom).toInt(),
-            ((root.height-maxOf(imeBottom,bars.bottom)-dp(96)-canvasTop())/zoom).toInt())
+        // 文字层与画布共用同一套视口映射，所以可视范围直接给屏幕坐标（旧口径要除以 zoom）。
+        layer.setEditingViewport(bars.top+dp(8), root.height-maxOf(imeBottom,bars.bottom)-dp(96))
     }
     /** The grip moves the whole bar instead of letting the auto anchor decide again. */
     private fun dragToolbar(dx: Float,dy: Float) {
@@ -2202,18 +2261,34 @@ class ScreenshotCaptureOverlay(
         if(lp.width!=detailWidth || lp.height!=-2) secondaryPanel.layoutParams=FrameLayout.LayoutParams(detailWidth,-2)
         // 先按内容测高，再决定贴上还是贴下：旧判据只看「下方还剩 104dp」，三行详细栏（比如滤镜的
         // 类型／面积／强度）会超出屏幕底部被裁掉——看得见最后一行却点不到滑杆。
-        if(secondaryMaxHeight!=dp(280)) secondaryMaxHeight=dp(280)
-        secondaryPanel.measure(View.MeasureSpec.makeMeasureSpec(detailWidth,View.MeasureSpec.EXACTLY),
-            View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED))
-        val contentHeight=secondaryPanel.measuredHeight.coerceIn(1,dp(280))
+        // 单行化之后上限从 280dp 收到 120dp：内容本来就只有一条 40dp 的行，多出来的高度只是遮挡画布。
+        val detailMax=dp(ScreenshotToolbarMetrics.DETAIL_MAX)
+        if(secondaryMaxHeight!=detailMax) secondaryMaxHeight=detailMax
+        if(secondaryPanel.visibility==View.VISIBLE) {
+            secondaryPanel.measure(View.MeasureSpec.makeMeasureSpec(detailWidth,View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED))
+        }
+        val contentHeight=secondaryPanel.measuredHeight.coerceIn(1,detailMax)
         val below=(safeBottom-y-toolbarHeight-dp(8)).coerceAtLeast(0)
         val above=(y-safeTop-dp(8)).coerceAtLeast(0)
-        val detailsAbove=below<contentHeight && above>below
-        val detailHeight=(if(detailsAbove) above else below).coerceAtLeast(1).coerceAtMost(dp(280))
+        // 滞回：贴上/贴下在临界值来回翻转就是「二级栏上下跳」。只有上方明显更宽裕（24dp）
+        // 才翻上去；翻回来同理。用户拖过（secondaryManual）与刚换工具/重新展开时重置。
+        val wantAbove=below<contentHeight && above>below
+        val detailsAbove=when {
+            secondaryPanel.visibility!=View.VISIBLE -> false
+            secondaryManual!=null -> secondaryAbove
+            wantAbove && !secondaryAbove && above-below>=dp(24) -> true
+            !wantAbove && secondaryAbove && below>=contentHeight+dp(24) -> false
+            else -> secondaryAbove
+        }
+        secondaryAbove=detailsAbove
+        val detailHeight=(if(detailsAbove) above else below).coerceAtLeast(1).coerceAtMost(detailMax)
         val detailTop=if(detailsAbove) y-dp(8)-detailHeight else y+toolbarHeight+dp(8)
         if(secondaryMaxHeight!=detailHeight) { secondaryMaxHeight=detailHeight; secondaryPanel.requestLayout() }
-        secondaryPanel.measure(View.MeasureSpec.makeMeasureSpec(detailWidth,View.MeasureSpec.EXACTLY),
-            View.MeasureSpec.makeMeasureSpec(detailHeight,View.MeasureSpec.AT_MOST))
+        if(secondaryPanel.visibility==View.VISIBLE) {
+            secondaryPanel.measure(View.MeasureSpec.makeMeasureSpec(detailWidth,View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(detailHeight,View.MeasureSpec.AT_MOST))
+        }
         // 用户拖过就听用户的；没拖过就贴着主栏（下沿放不下改贴上沿）。
         val secondaryPos = secondaryManual
         if (secondaryPos != null) {
@@ -2353,6 +2428,42 @@ class ScreenshotCaptureOverlay(
         }
         params = layout
         windowManager.addView(root,layout); root.requestFocus(); root.requestApplyInsets()
+        applyDebugZoomIfRequested()
+    }
+    /**
+     * 调试用：`settings put global voxfix_debug_zoom 4.2` 后打开记录，直接把画布放到该倍率。
+     *
+     * adb 无法模拟双指，没有这个入口就测不到"放大后滚动"的真实帧耗时——而长图只有放大后
+     * 才需要滚动，整幅时高度正好等于视口。只在可调试包生效。
+     */
+    private fun applyDebugZoomIfRequested() {
+        val debuggable = (context.applicationInfo.flags and
+            android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (!debuggable) return
+        val value = runCatching {
+            android.provider.Settings.Global.getString(context.contentResolver, "voxfix_debug_zoom")
+        }.getOrNull()?.toFloatOrNull() ?: return
+        root.post {
+            if (disposed) return@post
+            val current = zoom
+            if (current > 0f && value > 0f && viewport.zoomBy(value / current, root.width / 2f, root.height / 2f, canvasFit)) {
+                invalidateCanvas()
+            }
+        }
+    }
+    /**
+     * 把整个编辑器窗口画到一张位图上。
+     *
+     * 调试取证用：本机 `screencap` 抓 accessibility overlay 会冻结在某一帧
+     * （实测连续点击工具后 `gfxinfo` 帧数在涨、截图字节完全不变），
+     * 只有进程内绘制能拿到真实合成结果。
+     */
+    fun snapshot(): Bitmap {
+        val w = root.width.coerceAtLeast(1)
+        val h = root.height.coerceAtLeast(1)
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        root.draw(android.graphics.Canvas(bitmap))
+        return bitmap
     }
     fun dismiss(windowManager: WindowManager) {
         disposed=true; actionGeneration++; actionWorker.shutdown()
@@ -2360,6 +2471,8 @@ class ScreenshotCaptureOverlay(
         cancelZoomAnimation()
         drawTemplatePopup?.dismiss()
         closeDrawingEditor(); drawing.close()
+        // 分块底图随窗口一起释放：不回收的话 30MB 分块会留在内存里。
+        backdropTiles.release(); drawing.backdrop = null
         closeStack()
         hideKeyboard(); background.setImageDrawable(null)
         translationGeneration++; translating = false
@@ -2375,6 +2488,26 @@ class ScreenshotCaptureOverlay(
         run: () -> Unit
     ) : ImageView(context) {
         var active = false
+        private val cellRadius = dp(6)
+        /**
+         * 手机侧扩展：原版未选中完全透明，靠鼠标 hover 出浅底提示「可点」；
+         * 触屏没有 hover，照抄就等于一排看不见边界的图标（用户找不到 T 文本入口的直接原因）。
+         */
+        private val idleSurface = GradientDrawable().apply {
+            setColor(android.graphics.Color.TRANSPARENT); cornerRadius = cellRadius.toFloat()
+            setStroke(dp(1).coerceAtLeast(1), ScreenshotUiTokens.OUTLINE_IDLE_MAIN)
+        }
+        /** 原版选中态是 antd `Tonal`：浅主色底 + 主色图标（不是实心蓝底白图标）。 */
+        private val tonalSurface = GradientDrawable().apply {
+            setColor(ScreenshotUiTokens.TONAL_BG); cornerRadius = cellRadius.toFloat()
+            setStroke(dp(1).coerceAtLeast(1), ScreenshotUiTokens.OUTLINE_SELECTED_MAIN)
+        }
+        /** 水波要裁成圆角；改造前 mask 为 null，按下时水波是方块。 */
+        private val rippleMask = GradientDrawable().apply {
+            setColor(android.graphics.Color.WHITE); cornerRadius = cellRadius.toFloat()
+        }
+        private val idleBackground = RippleDrawable(ColorStateList.valueOf(0x1FFFFFFF), idleSurface, rippleMask)
+        private val tonalBackground = RippleDrawable(ColorStateList.valueOf(0x331677FF), tonalSurface, rippleMask)
         private val idleIcon = icon
         private val busyDrawable = ScreenshotBusySpinnerDrawable(context)
         private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -2400,8 +2533,9 @@ class ScreenshotCaptureOverlay(
         }
         init {
             setImageResource(icon); scaleType = ImageView.ScaleType.CENTER_INSIDE
+            // 32dp 格 + 24dp 图标 = 4dp 内边距；设备断言锁定这两个值，描边只能画在 background 里。
             setPadding(dp((BUTTON-ICON)/2),dp((BUTTON-ICON)/2),dp((BUTTON-ICON)/2),dp((BUTTON-ICON)/2))
-            background = RippleDrawable(ColorStateList.valueOf(0x14000000),null,null)
+            background = idleBackground
             isClickable = true; isFocusable = true
             setOnClickListener { if (!disposed && !closeRequested) { toolMemory?.remember(action); run() } }
         }
@@ -2415,11 +2549,13 @@ class ScreenshotCaptureOverlay(
             val color = when {
                 !isEnabled -> COLOR_TEXT_DISABLED
                 danger -> COLOR_DANGER
-                active -> 0xFFFFFFFF.toInt()
+                active -> COLOR_PRIMARY
                 else -> COLOR_TEXT
             }
             setColorFilter(color,PorterDuff.Mode.SRC_IN)
-            background = if(active) activeSurface(6) else RippleDrawable(ColorStateList.valueOf(0x1FFFFFFF),null,null)
+            // 只在状态切换时换对象，避免每次 drawableStateChanged 都新建 drawable 打断水波。
+            val wanted = if(active) tonalBackground else idleBackground
+            if (background !== wanted) background = wanted
         }
         override fun drawableStateChanged() { super.drawableStateChanged(); refreshTint() }
     }

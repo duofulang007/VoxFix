@@ -47,6 +47,13 @@ RECONCILE_SEC = 3.0      # adb devices 对账周期（事件流的兜底）
 MAINT_SEC = 10.0         # 慢速维护周期（PowerShell 枚举，开销大）
 TRACK_RETRY_SEC = 2.0    # track-devices 断开后重连间隔
 HEADLESS_RETRY_SEC = 30.0
+SCRCPY_LAUNCH_LOG = os.path.join(LOG_DIR, "scrcpy-launch.log")  # scrcpy 自己的输出
+LAUNCH_ATTEMPTS = 3        # 可见投屏拉起后存活校验失败的重试次数
+LAUNCH_CHECKS = (3.0, 4.0)  # 拉起后 3 秒、7 秒两次存活校验（覆盖延迟退出）
+LAST_VISIBLE_LAUNCH = {"t": 0.0}   # 上次可见投屏拉起成功时刻
+HEADLESS_AFTER_VISIBLE_SEC = 8.0   # 可见投屏成功后再等这么久，避让并发启动
+_launch_lock = threading.Lock()
+USB_ONLINE = {"value": False}   # 拉起线程据此判断"这条线还在不在"
 CREATE_NO_WINDOW = 0x08000000
 PING_PORT = 18768          # 手机端 AdbWireless.PROBE_PORT 要与此一致
 PING_REPLY = b"VOXFIX\n"
@@ -288,16 +295,89 @@ def single_instance() -> bool:
     return True
 
 
-def on_usb_plug(first: bool) -> None:
+def launch_visible(attempts: int = LAUNCH_ATTEMPTS) -> None:
+    """拉起可见投屏，并校验它真的活了；失败时把 scrcpy 自己的输出留档。
+
+    2026-11-14：原实现只 spawn 一次、不校验存活。开机后首次拉起时 scrcpy
+    （首次 push scrcpy-server / 首次初始化 D3D11 / Defender 首次扫描 exe）
+    有概率起不来或起后就退，此时没有任何重试，USB 状态也不再变化，
+    于是表现为「开机后插线不弹，再拔插一次才好」。
+    """
     if visible_scrcpy_running():
         log("投屏窗口已在运行 → 不重复拉起")
         return
-    spawn([SCRCPEX, "-s", USB_SERIAL])
-    log("USB 插入 → 已拉起投屏窗口（事件触发）" if not first
-        else "启动时设备已在线 → 拉起投屏窗口")
+    for attempt in range(1, attempts + 1):
+        LAST_VISIBLE_LAUNCH["t"] = time.monotonic()   # 每次尝试都刷新避让窗口
+        if not USB_ONLINE["value"]:
+            log(f"投屏第 {attempt} 次拉起前设备已离线 → 放弃本次")
+            return
+        fh = None
+        try:
+            fh = open(SCRCPY_LAUNCH_LOG, "ab")
+            fh.write((f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} "
+                      f"第 {attempt} 次拉起 {USB_SERIAL} =====\n").encode())
+            fh.flush()
+        except OSError as error:
+            log(f"scrcpy 输出留档不可写（继续拉起）: {error}")
+            fh = None
+        try:
+            proc = subprocess.Popen(
+                [SCRCPEX, "-s", USB_SERIAL],
+                stdin=subprocess.DEVNULL,
+                stdout=fh if fh else subprocess.DEVNULL,
+                stderr=subprocess.STDOUT if fh else subprocess.DEVNULL,
+                creationflags=CREATE_NO_WINDOW, close_fds=True)
+        except Exception as error:
+            log(f"投屏拉起异常（{attempt}/{attempts}）: {error}")
+            if fh:
+                fh.close()
+            time.sleep(2)
+            continue
+        if fh:
+            fh.close()
+        died = False
+        for wait in LAUNCH_CHECKS:
+            time.sleep(wait)
+            if proc.poll() is not None:
+                died = True
+                break
+        if not died:
+            LAST_VISIBLE_LAUNCH["t"] = time.monotonic()   # 让无窗口通道延后启动
+            log(f"投屏窗口已拉起且存活（pid {proc.pid}，第 {attempt} 次尝试）"
+                if attempt > 1 else f"USB 插入 → 已拉起投屏窗口（pid {proc.pid}）")
+            return
+        log(f"投屏拉起后退出（exit={proc.returncode}，"
+            f"第 {attempt}/{attempts} 次），scrcpy 输出见 "
+            f"{os.path.basename(SCRCPY_LAUNCH_LOG)}")
+        time.sleep(2)
+    log("投屏连续拉起失败 → 放弃本次（下次插拔再试）")
+
+
+def _launch_guarded() -> None:
+    try:
+        launch_visible()
+    except Exception as error:
+        log(f"拉起投屏线程异常: {error}")
+    finally:
+        _launch_lock.release()
+
+
+def on_usb_plug(first: bool) -> None:
+    """插线事件：异步拉起可见投屏，主循环不阻塞（重试期间仍要发心跳）。"""
+    USB_ONLINE["value"] = True
+    if not _launch_lock.acquire(blocking=False):
+        log("投屏拉起正在进行 → 本次跳过")
+        return
+    # 触发瞬间就记时间，别等校验成功 —— 否则主循环会在拉起过程中抢跑无窗口通道
+    LAST_VISIBLE_LAUNCH["t"] = time.monotonic()
+    if first:
+        log("启动时设备已在线 → 拉起投屏窗口")
+    threading.Thread(target=_launch_guarded, daemon=True,
+                     name="launch-visible").start()
 
 
 def on_usb_unplug() -> None:
+    USB_ONLINE["value"] = False
     log("USB 拔出 → 投屏随断连自动关闭")
     for pid, cmdline in process_commands().items():
         if "scrcpy" in (cmdline or "") and "--no-window" not in (cmdline or ""):
@@ -402,6 +482,11 @@ def main() -> None:
 
             if not headless_pid and serial and \
                     time.monotonic() - last_headless_try > HEADLESS_RETRY_SEC:
+                # 刚拉起过可见投屏就等一下：两个 scrcpy 同时启动会抢设备 server，
+                # 先起的那个报「Device disconnected / Demuxer connection error」退出
+                # （2026-11-14 抓到的插线即弹失败根因）
+                if time.monotonic() - LAST_VISIBLE_LAUNCH["t"] < HEADLESS_AFTER_VISIBLE_SEC:
+                    continue
                 last_headless_try = time.monotonic()
                 spawn([SCRCPEX, "--no-window", "--no-video",
                        "--no-audio", "-s", serial])

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108" role="img" aria-label="VoxFix 输入法 图标 A 收敛">
+  <!-- 108dp 自适应画布。图形外沿 43dp = 系统可见区 66dp 的 65.2%，四边留白各 11.5dp。
+       全体按旧稿 0.7528 等比收敛：框线 4.43→3.34、V 笔画 5.70→4.29，比例完全继承。 -->
+  <rect width="108" height="108" fill="#FFFFFF"/>
+  <g fill="none" stroke="#111111" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke-width="3.34">
+      <path d="M34.16 42.4 V 34.16 H 42.4"/>
+      <path d="M65.6 34.16 H 73.84 V 42.4"/>
+      <path d="M73.84 65.6 V 73.84 H 65.6"/>
+      <path d="M42.4 73.84 H 34.16 V 65.6"/>
+    </g>
+    <path d="M45.11 45.11 L 54 62.89 L 62.89 45.11" stroke-width="4.29"/>
+  </g>
+</svg>

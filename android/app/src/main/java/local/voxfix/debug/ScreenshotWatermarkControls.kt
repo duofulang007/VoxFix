@@ -1,8 +1,6 @@
 package local.voxfix.debug
 
 import android.content.Context
-import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -12,102 +10,125 @@ import android.widget.TextView
 import kotlin.math.roundToInt
 
 /**
- * T23 watermark palette: text, size presets + wheel, device font list, colour, angle, gap and
- * opacity (`screenshottoolpalettestylecontrols.cpp` watermark family). The original also offers
- * saved templates with `{text}`/timestamp placeholders; those are not implemented yet.
+ * 水印参数：一条横向属性行。
+ *
+ * 顺序对齐原版 `buildWatermarkFamily`：颜色 → 文字 → 字体（字号 + 族）→ 模板 → 角度 → 间距 → 透明度。
+ * 改造前这里是 11 行 ≈500dp（三个滑杆各占一整行、每行 chip 等分整宽），
+ * 二级栏上限 280dp，等于每改一次水印都要在纵向列表里找位置。
  */
 internal class ScreenshotWatermarkControls(context: Context,private val drawing: ScreenshotDrawingLayer,
-    private val edit: (String,String,(String)->Unit) -> Unit) : LinearLayout(context) {
+    private val edit: (String,String,(String)->Unit) -> Unit) : ScreenshotStyleRow(context) {
     private val watermark get()=drawing.watermark
-    private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
     private fun set(value: ScreenshotWatermark)=drawing.setWatermark(value)
-    private fun chip(text: String,selected: Boolean=false,description: String=text,run:()->Unit)=TextView(context).apply {
-        this.text=text; textSize=13f; gravity=Gravity.CENTER; contentDescription=description; tooltipText=description
-        setTextColor(if(selected) 0xFF69B1FF.toInt() else 0xFFFFFFFF.toInt())
-        background=GradientDrawable().apply { setColor(if(selected) 0x331677FF else Color.TRANSPARENT); cornerRadius=dp(4).toFloat() }
-        minHeight=dp(44); isFocusable=true; setOnClickListener { run() }
-    }
-    private fun row(views: List<View>)=LinearLayout(context).also { line ->
-        views.forEach { line.addView(it,LayoutParams(0,dp(44),1f)) }; addView(line,LayoutParams(-1,-2))
-    }
-    private fun wheel(view: View,run:(Int)->Unit)=view.apply {
-        setOnGenericMotionListener { _,event ->
-            val delta=event.getAxisValue(MotionEvent.AXIS_VSCROLL)
-            if(event.actionMasked==MotionEvent.ACTION_SCROLL && delta.isFinite() && delta!=0f) { run(if(delta>0) 1 else -1); true }
-            else false
-        }
-    }
-    private fun slider(label: String,value: Int,max: Int,readout: String,block:(Int)->Unit) {
+
+    /** 按住期间只预览，抬手才写回 history（否则一次拖动灌进几十条撤销）。 */
+    private fun stepper(label: String,min: Float,max: Float,value: Float,fallback: Float,
+                        description: (String) -> String, block:(ScreenshotWatermark,Float)->ScreenshotWatermark): View =
+        ScreenshotStepper(context,label,min,max,value,fallback,
+            begin={ drawing.beginWatermarkPreview() },
+            apply={ next -> drawing.previewWatermark(block(watermark,next)) },
+            commit={ drawing.finishWatermarkPreview(true) },
+            format={ v -> ScreenshotFontSize.format(v) },
+            description=description)
+
+    private fun opacity() {
+        val percent=(watermark.opacity*100).roundToInt().coerceIn(0,100)
         val line=LinearLayout(context).apply { gravity=Gravity.CENTER_VERTICAL }
-        val text=TextView(context).apply { text="$label $readout"; textSize=12f; setTextColor(0xFFFFFFFF.toInt()) }
-        line.addView(text,LayoutParams(dp(96),dp(44)))
+        val readout=TextView(context).apply {
+            text="透明度 $percent%"; textSize=12f; setTextColor(ScreenshotUiTokens.TEXT)
+            contentDescription="透明度 $percent%"
+        }
+        line.addView(readout,LayoutParams(dp(56),dp(ScreenshotToolbarMetrics.STYLE_CELL)))
+        var base=watermark
+        var tracking=false
+        var cancelled=false
         line.addView(SeekBar(context).apply {
-            this.max=max; progress=value.coerceIn(0,max); contentDescription=label
+            max=100; progress=percent; contentDescription="透明度"
+            // 滑杆处于横向滚动行内：DOWN 时声明父级不得拦截（同滤镜强度）。
+            bindUninterruptedDrag { cancelled=true; tracking=false; drawing.finishWatermarkPreview(false) }
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onStartTrackingTouch(bar: SeekBar) {}
-                override fun onProgressChanged(bar: SeekBar,progress: Int,fromUser: Boolean) { if(fromUser) block(progress) }
-                override fun onStopTrackingTouch(bar: SeekBar) {}
+                override fun onStartTrackingTouch(bar: SeekBar) { base=watermark; cancelled=false; tracking=true; drawing.beginWatermarkPreview() }
+                override fun onProgressChanged(bar: SeekBar,value: Int,fromUser: Boolean) {
+                    readout.text="透明度 $value%"; readout.contentDescription="透明度 $value%"; bar.stateDescription="$value%"
+                    if(fromUser) {
+                        val next=base.copy(opacity=value/100f)
+                        if(tracking) drawing.previewWatermark(next) else set(next)
+                    }
+                }
+                override fun onStopTrackingTouch(bar: SeekBar) { if(tracking) drawing.finishWatermarkPreview(!cancelled); tracking=false }
             })
-        },LayoutParams(0,dp(44),1f))
-        addView(line)
+        },LayoutParams(dp(130),dp(ScreenshotToolbarMetrics.STYLE_CELL)))
+        addCell(line,196)
     }
+
     init {
-        orientation=VERTICAL; contentDescription="水印参数"
-        row(listOf(chip(if(watermark.text.isEmpty()) "水印文字" else "水印文字：${watermark.text.take(8)}") {
-            edit("水印文字",watermark.text) { drawing.setWatermark(watermark.copy(text=it)) }
-        }))
-        // Templates reference `{text}` / timestamp tokens; applying one stamps the time.
-        row(listOf(chip(if(watermark.template.isEmpty()) "水印模板" else "水印模板：${watermark.template.take(8)}",
-            selected=watermark.template.isNotEmpty(),description="水印模板，支持 {text} 与日期占位") {
-            edit("水印模板",watermark.template) { value ->
-                if(value.isBlank()) drawing.setWatermark(watermark.copy(template="",appliedAt=0L))
-                else drawing.setWatermark(watermark.copy(template=value,appliedAt=System.currentTimeMillis()))
-            }
-        }))
+        contentDescription="水印参数"
         val store=ScreenshotWatermarkTemplateStore(context)
+
+        addCell(textCell(if(watermark.text.isEmpty()) "水印文字" else "水印文字：${watermark.text.take(8)}",
+            watermark.text.isNotEmpty(),"水印文字") {
+            edit("水印文字",watermark.text) { set(watermark.copy(text=it)) }
+        },88)
+        addCell(textCell(if(watermark.template.isEmpty()) "水印模板" else "水印模板：${watermark.template.take(8)}",
+            watermark.template.isNotEmpty(),"水印模板，支持 {text} 与日期占位") {
+            edit("水印模板",watermark.template) { value ->
+                if(value.isBlank()) set(watermark.copy(template="",appliedAt=0L))
+                else set(watermark.copy(template=value,appliedAt=System.currentTimeMillis()))
+            }
+        },88)
         lateinit var picker: TextView
-        picker=chip("选择模板",description="已保存的水印模板，点按应用、长按删除") {
+        picker=textCell("选择模板",false,"已保存的水印模板，点按应用、长按删除") {
             ScreenshotWatermarkTemplatePicker.show(picker,store) { value ->
-                drawing.setWatermark(watermark.copy(template=value,appliedAt=System.currentTimeMillis()))
+                set(watermark.copy(template=value,appliedAt=System.currentTimeMillis()))
             }
         }
-        row(listOf(picker,chip("存为模板",description="把当前水印模板按名称存入列表") {
-            if(watermark.template.isBlank()) return@chip
+        addCell(picker,80)
+        addCell(textCell("存为模板",false,"把当前水印模板按名称存入列表") {
+            if(watermark.template.isBlank()) return@textCell
             edit("模板名称","模板 ${store.templates().size+1}") { name -> store.save(name,watermark.template) }
-        }))
-        // `watermarkFontSizes()`: S/M/L/XL are 12/16/24/30, the summary button steps by one.
-        val size=ScreenshotFontSize.format(watermark.fontSize)
-        val sizeRow=mutableListOf<View>(wheel(chip("字号 $size",description="水印字号 $size") {
-            edit("水印字号",size) { value ->
-                value.toFloatOrNull()?.takeIf { it.isFinite() && it in ScreenshotFontSize.MIN..ScreenshotFontSize.MAX_WATERMARK }
-                    ?.let { drawing.setWatermark(watermark.copy(fontSize=it)) }
-            }
-        }) { delta -> drawing.setWatermark(watermark.copy(fontSize=(watermark.fontSize+delta).coerceIn(ScreenshotFontSize.MIN,ScreenshotFontSize.MAX_WATERMARK))) })
+        },80)
+        groupBreak()
+
+        // `watermarkFontSizes()`: S/M/L/XL are 12/16/24/30；摘要按钮逐格走。
+        addCell(stepper("水印字号",ScreenshotFontSize.MIN,ScreenshotFontSize.MAX_WATERMARK,
+            watermark.fontSize,24f,{ "水印字号 $it" }) { current,next -> current.copy(fontSize=next) },100)
         listOf(12f,16f,24f,30f).forEach { preset ->
-            sizeRow.add(chip(ScreenshotFontSize.format(preset),watermark.fontSize==preset,"水印字号 ${ScreenshotFontSize.format(preset)}") {
-                drawing.setWatermark(watermark.copy(fontSize=preset))
-            })
+            addCell(textCell(ScreenshotFontSize.format(preset),watermark.fontSize==preset,
+                "水印字号 ${ScreenshotFontSize.format(preset)}") {
+                set(watermark.copy(fontSize=preset))
+            },36)
         }
-        row(sizeRow)
+        groupBreak()
+
         lateinit var family: TextView
-        family=chip(watermark.fontFamily,description="水印字体") { ScreenshotFontPicker.showFamily(family,watermark.fontFamily) { value -> drawing.setWatermark(watermark.copy(fontFamily=value)) } }
-        row(listOf(family))
+        family=textCell(watermark.fontFamily,true,"水印字体") {
+            ScreenshotFontPicker.showFamily(family,watermark.fontFamily) { value -> set(watermark.copy(fontFamily=value)) }
+        }
+        family.isSingleLine=true
+        family.ellipsize=android.text.TextUtils.TruncateAt.END
+        family.gravity=Gravity.START or Gravity.CENTER_VERTICAL
+        addCell(family,76)
         lateinit var color: TextView
-        color=chip("水印颜色",description="水印颜色") {
+        color=textCell("水印颜色",true,"水印颜色") {
             val base=watermark
+            // 颜色走预览通道：实时回调只 previewWatermark（每帧 invalidate，不重建整条工具栏），
+            // dismiss 提交一次、cancel(false) 回滚。原实现每帧 setWatermark→changed()→全量重建，
+            // 拖色环时整条二级栏+主栏都在闪。
+            drawing.beginWatermarkPreview()
             ScreenshotColorPicker.show(color,"水印颜色",base.color,false,
-                { value -> value?.let { drawing.setWatermark(watermark.copy(color=it)) } },
-                { committed -> if(!committed) drawing.setWatermark(base) },sample=drawing::pickColor)
+                { value -> value?.let { drawing.previewWatermark(base.copy(color=it)) } },
+                drawing::finishWatermarkPreview,sample=drawing::pickColor)
         }
-        row(listOf(color))
-        slider("角度",(watermark.angle+90).roundToInt(),180,"${watermark.angle.roundToInt()}°") { value ->
-            drawing.setWatermark(watermark.copy(angle=(value-90).toFloat()))
-        }
-        slider("间距",(watermark.gap-10).roundToInt(),190,"${watermark.gap.roundToInt()}") { value ->
-            drawing.setWatermark(watermark.copy(gap=(value+10).toFloat()))
-        }
-        slider("透明度",(watermark.opacity*100).roundToInt(),100,"${(watermark.opacity*100).roundToInt()}%") { value ->
-            drawing.setWatermark(watermark.copy(opacity=value/100f))
-        }
+        addCell(color,64)
+        groupBreak()
+
+        addCell(stepper("角度",ScreenshotStyleBounds.WATERMARK_ANGLE_MIN.toFloat(),
+            ScreenshotStyleBounds.WATERMARK_ANGLE_MAX.toFloat(),watermark.angle,0f,
+            { "角度 $it°" }) { current,next -> current.copy(angle=next) },100)
+        addCell(stepper("间距",ScreenshotStyleBounds.WATERMARK_GAP_MIN.toFloat(),
+            ScreenshotStyleBounds.WATERMARK_GAP_MAX.toFloat(),watermark.gap,30f,
+            { "间距 $it" }) { current,next -> current.copy(gap=next) },100)
+        groupBreak()
+        opacity()
     }
 }

@@ -11,6 +11,8 @@ import kotlin.math.roundToInt
 /** Phone-only precision feedback; never part of the document renderer or export. */
 internal class ScreenshotPenFeedback(private val target: View,private val imageWidth: Int,private val imageHeight: Int) {
     private val density=target.resources.displayMetrics.density
+    /** 有视口时端点与放大镜都按视口换算；为空时退回「视图宽/图片宽」的旧映射。 */
+    var viewport: ScreenshotViewport? = null
     private var focus: ScreenshotDrawingPoint?=null
     private var finger: ScreenshotDrawingPoint?=null
     private var magnifier: Magnifier?=null
@@ -33,9 +35,11 @@ internal class ScreenshotPenFeedback(private val target: View,private val imageW
     }
     fun draw(canvas: Canvas,endpoints: List<ScreenshotDrawingPoint>) {
         val active=focus
+        val vp=viewport?.takeIf { it.hasSize }
         for(point in active?.let(::listOf) ?: endpoints) {
             val radius=(if(active==null) 4f else 7f)*density
-            val x=point.x*target.width/imageWidth; val y=point.y*target.height/imageHeight
+            val x=vp?.toScreenX(point.x) ?: (point.x*target.width/imageWidth)
+            val y=vp?.toScreenY(point.y) ?: (point.y*target.height/imageHeight)
             paint.color=Color.WHITE; paint.strokeWidth=3.5f*density
             canvas.drawCircle(x,y,radius,paint)
             paint.color=0xFF4096FF.toInt(); paint.strokeWidth=1.5f*density
@@ -52,8 +56,9 @@ internal class ScreenshotPenFeedback(private val target: View,private val imageW
         val rootLocation=IntArray(2); val targetLocation=IntArray(2)
         root.getLocationInWindow(rootLocation); target.getLocationInWindow(targetLocation)
         visible.offset(rootLocation[0]-targetLocation[0],rootLocation[1]-targetLocation[1])
-        val sx=target.width.toFloat()/imageWidth; val sy=target.height.toFloat()/imageHeight
-        val box=lensBounds(ScreenshotDrawingPoint(pointer.x*sx,pointer.y*sy),SelBox.of(visible),density) ?: return
+        val vp=viewport?.takeIf { it.hasSize }
+        val box=lensBounds(ScreenshotDrawingPoint(vp?.toScreenX(pointer.x) ?: (pointer.x*target.width/imageWidth),
+            vp?.toScreenY(pointer.y) ?: (pointer.y*target.height/imageHeight)),SelBox.of(visible),density) ?: return
         val width=box.width.roundToInt().coerceAtLeast(1); val height=box.height.roundToInt().coerceAtLeast(1)
         var lens=magnifier
         if(lens==null || lens.width!=width || lens.height!=height) {
@@ -64,7 +69,8 @@ internal class ScreenshotPenFeedback(private val target: View,private val imageW
                     Magnifier.SOURCE_BOUND_MAX_VISIBLE,Magnifier.SOURCE_BOUND_MAX_VISIBLE).build()
             magnifier=lens
         }
-        val x=(point.x*sx).coerceIn(0f,target.width.toFloat()); val y=(point.y*sy).coerceIn(0f,target.height.toFloat())
+        val x=(vp?.toScreenX(point.x) ?: (point.x*target.width/imageWidth)).coerceIn(0f,target.width.toFloat())
+        val y=(vp?.toScreenY(point.y) ?: (point.y*target.height/imageHeight)).coerceIn(0f,target.height.toFloat())
         lens.show(x,y,box.centerX,box.centerY)
         // The native source is clamped at screen edges; keep the reticle on the actual point.
         lens.sourcePosition?.let { source ->

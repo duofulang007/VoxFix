@@ -44,7 +44,8 @@ internal object ScreenshotSerialChecks {
             layer.layout(0,0,320,320); layer.region=Rect(0,0,320,320); layer.tool=ScreenshotDrawingTool.SERIAL
             layer.applyStyle(defaults)
             val controls=ScreenshotDrawingControls(context,layer,{ _,_,_-> },false)
-            check(find(controls,"圆形（无数字）")!=null && find(controls,"交叉线填充")!=null && find(controls,"字号 54")!=null)
+            // 填充细节收进弹层，行内只留触发器。
+            check(find(controls,"圆形（无数字）")!=null && find(controls,"填充色设置")!=null && find(controls,"字号 54")!=null)
             check(find(controls,"透明度")==null)
             find(controls,"圆形（无数字）")!!.performClick()
             check(layer.style.serialShape==ScreenshotSerialShape.CIRCLE)

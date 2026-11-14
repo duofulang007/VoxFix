@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- 应用内更新：下载完成后调系统安装器；运行时还需用户开「安装未知应用」appops。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
     <application android:label="VoxFix 输入法" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:theme="@style/Theme.VoxFix" android:allowBackup="false" android:supportsRtl="true">
         <service android:name=".VoxFixImeService" android:label="VoxFix" android:permission="android.permission.BIND_INPUT_METHOD" android:exported="true">
@@ -26,8 +28,11 @@
         <activity android:name=".ScreenshotToolbarSettingsActivity" android:exported="false" />
         <activity android:name=".LexiconActivity" android:exported="false" />
         <activity android:name=".DictionaryActivity" android:exported="false" />
+        <activity android:name=".AboutActivity" android:exported="false" />
+        <activity android:name=".LicenseActivity" android:exported="false" />
         <provider android:name=".MemeContentProvider" android:authorities="${applicationId}.memes" android:exported="false" android:grantUriPermissions="true" />
         <provider android:name=".ScreenshotContentProvider" android:authorities="${applicationId}.screenshots" android:exported="false" android:grantUriPermissions="true" />
+        <provider android:name=".update.UpdateApkProvider" android:authorities="${applicationId}.updateapk" android:exported="false" android:grantUriPermissions="true" />
         <receiver android:name=".ClipboardImportReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="local.voxfix.debug.IMPORT_TEXT" />

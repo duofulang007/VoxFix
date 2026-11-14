@@ -7,7 +7,10 @@ import org.json.JSONObject
 /**
  * 功能模块清单与开关状态。单一真相源：SharedPreferences("voxfix-modules")。
  *
- * 规则（见 docs/App外壳设计-2026-11-13.md §4）：
+ * 规则（见 docs/App外壳设计-2026-11-13.md §4，2026-11-14 收敛）：
+ *  - 三大能力：输入法（键盘本体，常开无开关）、截图（screentext 全家）、语音（voice）。
+ *  - 词典 / 表情 / 剪贴板 / 电脑同步不再设开关：功能本体常开，入口不再被隐藏
+ *    （旧开关只控制菜单项显隐，功能本体从不读取，属于无效控制）。
  *  - 关闭 = 隐藏全部入口 + 不初始化运行时；数据保留，随时可开回。
  *  - 父项关闭时子项一律视为关闭（isOn 会一路检查祖先）。
  *  - 键盘本身不是模块，不设开关。
@@ -20,27 +23,17 @@ enum class Module(
     val group: ModuleGroup
 ) {
     VOICE("voice", true, "语音输入", "本地离线识别，长按空格说话", ModuleGroup.INPUT),
-    DICTIONARY("dictionary", true, "个人词典", "纠正常错词，作用于语音结果", ModuleGroup.INPUT),
-    EMOJI("emoji", true, "表情搜索", "同屏搜图并直接插入", ModuleGroup.INPUT),
 
-    SCREENTEXT("screentext", true, "屏幕取字", "贴边弧线滑入，整屏或框选取字", ModuleGroup.SCREEN),
-    SCREENSHOT("screenshot", true, "截图与标注", "框选、绘图、识别、保存工程", ModuleGroup.SCREEN),
+    SCREENTEXT("screentext", true, "屏幕取字", "贴边弧线滑入，取字与截图总开关", ModuleGroup.SCREEN),
     SCROLL("scroll", true, "长截屏", "滚动拼接长页面", ModuleGroup.SCREEN),
     WATERMARK("watermark", true, "水印", "文字与图片水印", ModuleGroup.SCREEN),
     RECORD("record", true, "录屏", "选区录制，含音轨", ModuleGroup.SCREEN),
-    TRANSLATE("translate", false, "离线翻译", "需下载 462MB 模型", ModuleGroup.SCREEN),
-
-    CLIPBOARD("clipboard", true, "剪贴板", "文本与图片历史，可引用到候选", ModuleGroup.DATA),
-    PCSYNC("pcsync", false, "电脑同步", "USB 与电脑双向搬运", ModuleGroup.DATA);
+    TRANSLATE("translate", false, "离线翻译", "需下载 462MB 模型", ModuleGroup.SCREEN);
 
     /** 祖先模块。用 when 而非构造参数，避免枚举项互相引用的初始化顺序问题。 */
     val parent: Module?
         get() = when (this) {
-            DICTIONARY -> VOICE
-            SCREENSHOT -> SCREENTEXT
-            SCROLL, WATERMARK, RECORD -> SCREENSHOT
-            TRANSLATE -> SCREENTEXT
-            PCSYNC -> CLIPBOARD
+            SCROLL, WATERMARK, RECORD, TRANSLATE -> SCREENTEXT
             else -> null
         }
 
@@ -50,28 +43,22 @@ enum class Module(
     val iconRes: Int
         get() = when (this) {
             VOICE -> R.drawable.ic_vx_mic
-            DICTIONARY -> R.drawable.ic_vx_check
-            EMOJI -> R.drawable.ic_vx_smile
             SCREENTEXT -> R.drawable.ic_vx_scan
-            SCREENSHOT -> R.drawable.ic_vx_crop
             SCROLL -> R.drawable.ic_vx_scroll
             WATERMARK -> R.drawable.ic_vx_water
             RECORD -> R.drawable.ic_vx_record
             TRANSLATE -> R.drawable.ic_vx_translate
-            CLIPBOARD -> R.drawable.ic_vx_clip
-            PCSYNC -> R.drawable.ic_vx_plug
         }
 
     companion object {
-        /** 展示顺序：输入 → 屏幕 → 数据，同级按声明顺序。 */
+        /** 展示顺序：输入 → 屏幕，同级按声明顺序。 */
         fun ordered(): List<Module> = Module.values().toList()
     }
 }
 
 enum class ModuleGroup(val label: String) {
     INPUT("输入"),
-    SCREEN("屏幕"),
-    DATA("数据")
+    SCREEN("屏幕")
 }
 
 object Modules {

@@ -25,6 +25,15 @@ private const val DEBUG_RECORD = "local.voxfix.debug.DEBUG_RECORD"
 private const val DEBUG_SCROLL = "local.voxfix.debug.DEBUG_SCROLL"
 /** Debug builds only: opens the saved clipboard record `id` in the project editor, no taps needed. */
 private const val DEBUG_EDIT = "local.voxfix.debug.DEBUG_EDIT"
+/**
+ * Debug builds only: writes the editor window to `files/canvas-snapshot.png`.
+ *
+ * 为什么需要它：本机 `screencap` 抓 accessibility overlay 会冻结在某一帧
+ * （实测连续点击工具后 `gfxinfo` 帧数在涨、截图字节完全不变），
+ * 无法用它判断画布画对了没有。这个入口在进程内把 root 画到 Bitmap，
+ * 拿到的是真实的合成结果。
+ */
+private const val DEBUG_SNAPSHOT = "local.voxfix.debug.DEBUG_SNAPSHOT"
 
 class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPreferenceChangeListener {
     private val main = Handler(Looper.getMainLooper())
@@ -86,6 +95,21 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
                     android.util.Log.i("VoxFix", "DEBUG_EDIT $id")
                     if (id.isNotEmpty()) openSavedProject(id) {}
                 }
+                DEBUG_SNAPSHOT -> {
+                    // Debug-only: 进程内把编辑器窗口画到文件，绕开本机对 overlay 失效的 screencap。
+                    main.post {
+                        val view = screenshot ?: run { android.util.Log.w("VoxFix","DEBUG_SNAPSHOT no-editor"); return@post }
+                        val bitmap = runCatching { view.snapshot() }.getOrNull()
+                        if (bitmap == null) { android.util.Log.w("VoxFix","DEBUG_SNAPSHOT failed"); return@post }
+                        runCatching {
+                            java.io.File(filesDir,"canvas-snapshot.png").outputStream().use {
+                                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)
+                            }
+                            android.util.Log.i("VoxFix","DEBUG_SNAPSHOT ok ${bitmap.width}x${bitmap.height}")
+                        }
+                        bitmap.recycle()
+                    }
+                }
             }
         }
     }
@@ -140,7 +164,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(screenState, filter, RECEIVER_NOT_EXPORTED)
         else registerReceiver(screenState, filter)
         if (debuggable) {
-            val debugFilter = IntentFilter(DEBUG_CAPTURE).apply { addAction(DEBUG_RECORD); addAction(DEBUG_SCROLL); addAction(DEBUG_EDIT) }
+            val debugFilter = IntentFilter(DEBUG_CAPTURE).apply { addAction(DEBUG_RECORD); addAction(DEBUG_SCROLL); addAction(DEBUG_EDIT); addAction(DEBUG_SNAPSHOT) }
             if (android.os.Build.VERSION.SDK_INT >= 33) {
                 registerReceiver(debugCapture, debugFilter, RECEIVER_EXPORTED)
                 registerReceiver(debugRecord, debugFilter, RECEIVER_EXPORTED)

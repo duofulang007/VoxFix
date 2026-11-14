@@ -21,6 +21,13 @@ internal object ScreenshotFontFamilies {
         }
         result.sorted()
     }
+    /** 搜索过滤（纯函数，JVM 可测）：空查询返回全部，其余忽略大小写与首尾空白。 */
+    fun matching(query: String): List<String> {
+        val trimmed=query.trim()
+        if(trimmed.isEmpty()) return names
+        return names.filter { it.contains(trimmed,ignoreCase=true) }
+    }
+
     /** Unknown names silently fall back on Android; validate against the device's published families. */
     fun resolve(value: String): String? {
         val family=value.trim()

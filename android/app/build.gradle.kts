@@ -1,4 +1,8 @@
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
+
+// 版本单一来源：defaultConfig 与 APK 命名、发版 manifest.json 都引用它。
+val appVersionName = "0.4.0"
+val appVersionCode = 4
 android {
     namespace = "local.voxfix.debug"
     compileSdk = 35
@@ -8,8 +12,8 @@ android {
         applicationId = "local.voxfix.debug"
         minSdk = 30
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0-r5"
+        versionCode = appVersionCode
+        versionName = appVersionName
         testInstrumentationRunner = "local.voxfix.debug.VoxFixSmokeInstrumentation"
         ndk { abiFilters += "arm64-v8a" }
     }
@@ -29,6 +33,30 @@ android {
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 }
+
+// APK 命名（2026-11-14 定稿）：VoxFix-<versionName>-<versionCode>-<yyyyMMdd>-<git短sha7>.apk
+// 例 VoxFix-0.4.0-4-20261114-a1b2c3d.apk。无 git 环境回退 nosha/nodate，保证打包机也能构建；
+// manifest.json 里的 apkUrls 记录实际文件名，不依赖固定 APK 名（docs/关于与应用内更新-2026-11-14.md）。
+// 实现走 Copy 任务：AGP VariantOutput.outputFileName 与 java.time/java.util 在本机
+// Kotlin DSL 脚本编译里均不可解析（AGP 8.7.3 实测），Copy 方案零 AGP API 依赖。
+val gitSha: String = runCatching {
+    providers.exec { commandLine("git", "rev-parse", "--short=7", "HEAD") }.standardOutput.asText.get().trim()
+}.getOrElse { "nosha" }
+val buildDate: String = runCatching {
+    providers.exec { commandLine("git", "log", "-1", "--format=%cd", "--date=format:%Y%m%d") }
+        .standardOutput.asText.get().trim()
+}.getOrElse { "nodate" }
+
+val renameDebugApk by tasks.registering(Copy::class) {
+    dependsOn("assembleDebug")
+    from(layout.buildDirectory.dir("outputs/apk/debug")) { include("app-debug.apk") }
+    // 不能复制回 debug 目录本身——AGP 的 createDebugApkListingFileRedirect 也把它当输出；
+    // 规范命名产物放 named/，装机与发布都从这里取。
+    into(layout.buildDirectory.dir("outputs/apk/named"))
+    rename { "VoxFix-$appVersionName-$appVersionCode-$buildDate-$gitSha.apk" }
+}
+// AGP 的 assembleDebug 是延迟注册，named() 严格查找不到——用 matching 安全挂接。
+tasks.matching { it.name == "assembleDebug" }.configureEach { finalizedBy("renameDebugApk") }
 val verifyVoiceModels by tasks.registering(Exec::class) {
     workingDir("../..")
     commandLine(file("../../.venv/Scripts/python.exe"), "tools/prepare_desktop_voice.py")
@@ -96,4 +124,6 @@ dependencies {
     // expose; this is the pinned onnxruntime build the desktop prototype used.
     implementation(files("../../.android/app-tools/onnxruntime-android-1.20.0.aar"))
     testImplementation("junit:junit:4.13.2")
+    // 让 UpdateCore 的 org.json 解析在 JVM 单测里跑真实现（android.jar 里的 org.json 是 stub）。
+    testImplementation("org.json:json:20231013")
 }

@@ -129,6 +129,21 @@ try{
   assert.match(await page.locator('.empty-state').textContent(),/读取失败/);
   await page.evaluate(()=>{imageRows=[];VoxFixIme.screenshotList=()=>JSON.stringify({items:imageRows});voxfixOpenImages();});
   assert(await action('image-manage').isDisabled(),'Empty lists do not enter selection');
+  // 来源角标只标「电脑」：编辑过的记录（kind=project）也必须保留来源，不能被"可编辑"之类顶掉。
+  // 每条记录都能点编辑，标"可编辑"没有区分度，还会盖掉真正有用的来源信息。
+  await page.evaluate(()=>{
+    imageRows=[{id:'c'.repeat(32),width:200,height:100,source:'pc',kind:'project'}];
+    VoxFixIme.screenshotList=()=>JSON.stringify({items:imageRows});
+    voxfixOpenImages();
+  });
+  assert.equal(await page.locator('.clip-image-tile .clip-source-ribbon').count(),1,'缩略图只有一个来源角标');
+  assert.equal((await page.locator('.clip-image-tile .clip-source-ribbon').first().textContent()).trim(),'电脑','编辑过的电脑图片仍要标"电脑"');
+  await page.evaluate(()=>{
+    imageRows=[{id:'d'.repeat(32),width:200,height:100,kind:'project'}];
+    VoxFixIme.screenshotList=()=>JSON.stringify({items:imageRows});
+    voxfixOpenImages();
+  });
+  assert.equal(await page.locator('.clip-image-tile .clip-source-ribbon').count(),0,'手机内的记录不加来源角标');
   assert.deepEqual(errors,[]);
   console.log('PASS: compact preview/copy/crop/insert, long-press thumbnail delete, batch selection/confirmation, cancellation, partial failure and narrow layouts');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

@@ -52,6 +52,21 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
     }
     /** Canvas-level watermark; committed on the same stack, so undo/redo reverts it too. */
     val watermark: ScreenshotWatermark get()=history.watermark
+    /**
+     * 按住步进/拖滑杆时的临时水印。直接调 [setWatermark] 每帧都会 `history.commit` 一次，
+     * 一次手势就会灌进几十条撤销记录；所以按住期间只预览，抬手时才写回。
+     */
+    private var watermarkPreview: ScreenshotWatermark?=null
+    private val shownWatermark: ScreenshotWatermark get()=watermarkPreview ?: watermark
+    fun beginWatermarkPreview() { if(watermarkPreview==null) watermarkPreview=watermark }
+    fun previewWatermark(value: ScreenshotWatermark) {
+        beginWatermarkPreview(); watermarkPreview=value.normalized(); invalidate()
+    }
+    fun finishWatermarkPreview(commit: Boolean) {
+        val value=watermarkPreview ?: return
+        watermarkPreview=null
+        if(commit) setWatermark(value) else invalidate()
+    }
     fun setWatermark(value: ScreenshotWatermark) {
         val next=value.normalized()
         if(next==watermark) return
@@ -63,7 +78,7 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
         val snapshot=runCatching {
             val base=colorSamplingBase?.invoke() ?: image.copy(Bitmap.Config.ARGB_8888,true)
             val result=if(base.isMutable) base else base.copy(Bitmap.Config.ARGB_8888,true).also { base.recycle() }
-            renderer.draw(Canvas(result),marks(true),Rect(0,0,image.width,image.height),watermark)
+            renderer.draw(Canvas(result),marks(true),Rect(0,0,image.width,image.height),shownWatermark)
             result
         }.getOrNull()
         // The sampler needs a view group to live in and a laid-out target; being attached to a real
@@ -164,11 +179,29 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
     }
     val pixelUnit get()=savedPixelUnit.takeIf { it>0 } ?: (resources.displayMetrics.density*image.width/(width.takeIf { it>0 } ?: image.width))
     val fontUnit get()=savedFontUnit.takeIf { it>0 } ?: (resources.displayMetrics.scaledDensity*image.width/(width.takeIf { it>0 } ?: image.width))
-    private val unit get()=resources.displayMetrics.density*image.width/(width.takeIf { it>0 } ?: image.width)/viewZoom.coerceAtLeast(0.05f)
+    /**
+     * 1dp 对应多少图片像素——所有「屏幕上固定大小」的手柄、命中半径都由它换算。
+     *
+     * 有视口时直接 `density / scale`（与旧的 `density*image.width/视图宽/viewZoom` 等价，
+     * 但不再依赖"视图宽 = 图片宽 × containScale"这个前提）；无视口时保留旧公式。
+     */
+    private val unit get()=viewport?.takeIf { it.hasSize }?.dpToImage(1f, resources.displayMetrics.density)
+        ?: (resources.displayMetrics.density*image.width/(width.takeIf { it>0 } ?: image.width)/viewZoom.coerceAtLeast(0.05f))
     private val renderer=ScreenshotDrawingRenderer(image,{ resources.displayMetrics.density }) { fontUnit }
     private val snapPreferences by lazy { ScreenshotSnapConfig.preferences(context) }
     /** 视图缩放（整幅=1）：选框把手、触点判定等屏幕尺寸 UI 用它保持视觉大小不随捏合变化。 */
     var viewZoom: Float = 1f
+    /**
+     * 画布视口。设置后本层的绘制与触摸全部走 `viewport.toScreen/toImage`，
+     * 也就是「按屏幕尺度重绘矢量 + 从源纹理直接采样底图」的路径；
+     * 为空时退回旧的 `width/image.width` 线性映射（录屏标注、贴图编辑等无缩放场景）。
+     */
+    var viewport: ScreenshotViewport? = null
+        set(value) {
+            field = value
+            penFeedback.viewport = value
+            invalidate()
+        }
     /** SELECT 在空白处拖动时转发为画布平移（屏幕像素增量）；点到对象时由选择逻辑接管，不触发。 */
     var onCanvasPan: ((Float, Float) -> Unit)? = null
     private var selectPanActive = false
@@ -359,23 +392,61 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
     override fun onDraw(canvas: Canvas) {
         val crop=region ?: return
         if(width==0 || height==0 || image.isRecycled) return
+        val vp=viewport?.takeIf { it.hasSize }
+        if(vp!=null) drawThroughViewport(canvas,vp) else drawThroughLayout(canvas)
+        if(tool==ScreenshotDrawingTool.PEN && showPenFeedback && (pending==null || continuation!=null))
+            penFeedback.draw(canvas,if(pending==null) history.items.flatMap { ScreenshotPenContinuation.endpoints(it,renderer) } else emptyList())
+    }
+    /**
+     * 视口路径：底图按可见区域从源纹理直接采样，矢量在**最终屏幕尺度**上栅格化。
+     *
+     * 与旧路径唯一区别是坐标系的来源——这里没有 `canvas.scale(视图宽/图片宽)` 再被
+     * View 变换二次放大，所以长图放大后不再发虚、也不会出现"两层影像"的观感。
+     * 绘制内容本身（线的粗细、字号、剪裁）仍在图片坐标里，与导出结果一致。
+     */
+    /**
+     * 底图分块缓存：由编辑器注入，与底图层（`ScreenshotBackdropView`）共享同一份。
+     *
+     * 正常绘制不需要它——底图是静态像素，由独立层负责。只有高亮（MULTIPLY 与底图相乘，
+     * 跨 View 无法混合）时本层才需要自己再画一遍底图。
+     */
+    var backdrop: ScreenshotTileBackdrop? = null
+
+    private fun drawThroughViewport(canvas: Canvas,viewport: ScreenshotViewport) {
+        // 高亮必须与底图在同一 canvas 里相乘，这时才承担一次底图绘制。
+        if(history.items.any { it.tool==ScreenshotDrawingTool.HIGHLIGHT }) backdrop?.draw(canvas,viewport)
+        canvas.save()
+        // panX = offset - contentLeft*scale：之后可以直接用图片坐标绘制，
+        // 与「画布只显示选区」配合时也不会整体偏移。
+        canvas.translate(viewport.panX,viewport.panY)
+        canvas.scale(viewport.scale,viewport.scale)
+        // Drawing may start outside the capture box; it stays visible there. Export still clips.
+        clip?.let { canvas.clipRect(it) }
+        val vpVisible=android.graphics.RectF(viewport.imageLeft,viewport.imageTop,viewport.imageRight,viewport.imageBottom)
+        renderer.draw(canvas,marks(true),Rect(0,0,image.width,image.height),shownWatermark,vpVisible)
+        if(tool==ScreenshotDrawingTool.SELECT || selectedIndex!=null) selection.draw(canvas)
+        if(autoFilterActive) autoFilterSession?.draw(canvas, unit, ::postInvalidateOnAnimation)
+        canvas.restore()
+    }
+    /** 旧路径：视图尺寸恒等于「图片尺寸 × 固定的 contain 比例」，由 View 自己完成缩放。 */
+    private fun drawThroughLayout(canvas: Canvas) {
         // Drawing may start outside the capture box; it stays visible there (over the dimmed area) so
         // the gesture is not silently clipped. Export still only keeps what is inside the box.
         canvas.save(); canvas.scale(width.toFloat()/image.width,height.toFloat()/image.height)
         // Recording overlay: upstream draws on the region window itself, so everything — watermark
         // and spotlight mask included — stops at the region edge. Null keeps the editor unchanged.
         clip?.let { canvas.clipRect(it) }
-        renderer.draw(canvas,marks(true),Rect(0,0,image.width,image.height),watermark)
+        renderer.draw(canvas,marks(true),Rect(0,0,image.width,image.height),shownWatermark)
         // 绘图工具下按住已画元素就进入选择移动，所以选中框也要跟着画：抬手后保留，直到在空白处
         // 起笔（放弃选择）或切换工具。
         if(tool==ScreenshotDrawingTool.SELECT || selectedIndex!=null) selection.draw(canvas)
         if(autoFilterActive) autoFilterSession?.draw(canvas, unit, ::postInvalidateOnAnimation)
         canvas.restore()
-        if(tool==ScreenshotDrawingTool.PEN && showPenFeedback && (pending==null || continuation!=null))
-            penFeedback.draw(canvas,if(pending==null) history.items.flatMap { ScreenshotPenContinuation.endpoints(it,renderer) } else emptyList())
     }
     override fun onDetachedFromWindow() {
         pending=null; pen=null; continuation=null; penFeedback.clear(); selection.cancel(); eraserPointers.clear()
+        // 分块缓存由编辑器（底图层）持有，这里只断开引用，不能回收它。
+        backdrop=null
         super.onDetachedFromWindow()
     }
     private fun penPoint(point: ScreenshotDrawingPoint): ScreenshotDrawingPoint {
@@ -419,7 +490,9 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
     /** Curve lines sample the drag path; below this spacing the extra vertices add nothing. */
     private val LINE_SAMPLE_SPACING get()=1.5f*unit
     /** Screen slop is expressed in bitmap pixels, which is the space the touches are mapped into. */
-    private val slop get()=android.view.ViewConfiguration.get(context).scaledTouchSlop*image.width/(width.takeIf { it>0 } ?: image.width).toFloat()/viewZoom.coerceAtLeast(0.05f)
+    private val slop get()=viewport?.takeIf { it.hasSize }?.let {
+        android.view.ViewConfiguration.get(context).scaledTouchSlop / it.scale
+    } ?: (android.view.ViewConfiguration.get(context).scaledTouchSlop*image.width/(width.takeIf { it>0 } ?: image.width).toFloat()/viewZoom.coerceAtLeast(0.05f))
     /** Snow Shot's eraser tolerance is an 8px viewport radius (`ERASER_RADIUS_VIEW`). */
     private fun eraseAt(point: ScreenshotDrawingPoint) {
         history.items.indices.filterTo(erased) { it !in erased && renderer.hit(history.items[it],point,ERASER_RADIUS*unit) }
@@ -449,16 +522,18 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
     }
     /** 某一根手指的画布坐标，沿用单指时代的越界夹取。 */
     private fun eraserPoint(event: MotionEvent,index: Int): ScreenshotDrawingPoint {
-        val x=event.getX(index)*image.width/width
-        val y=event.getY(index)*image.height/height
+        val vp=viewport?.takeIf { it.hasSize }
+        val x=vp?.toImageX(event.getX(index)) ?: (event.getX(index)*image.width/width)
+        val y=vp?.toImageY(event.getY(index)) ?: (event.getY(index)*image.height/height)
         return ScreenshotDrawingPoint(x.coerceIn(0f,image.width.toFloat()),y.coerceIn(0f,image.height.toFloat()))
     }
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val active=tool ?: return false
         if(region==null) return false
         if(width==0 || height==0) return false
-        val rawX=event.x*image.width/width
-        val rawY=event.y*image.height/height
+        val vp=viewport?.takeIf { it.hasSize }
+        val rawX=vp?.toImageX(event.x) ?: (event.x*image.width/width)
+        val rawY=vp?.toImageY(event.y) ?: (event.y*image.height/height)
         // Outside the clipping canvas there is no canvas at all upstream: let the touch through.
         clip?.let { if(!it.contains(rawX.toInt(),rawY.toInt())) return false }
         val point=ScreenshotDrawingPoint(rawX.coerceIn(0f,image.width.toFloat()),rawY.coerceIn(0f,image.height.toFloat()))
@@ -471,10 +546,13 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
                 if(!cancelled) when(active) {
                     ScreenshotDrawingTool.SELECT -> {
                         selection.snap = ScreenshotSnapConfig.fromPreferences(snapPreferences)
+                        // 选中集合没变（重复点同一对象）就不触发 changed()：那条链会整条重建
+                        // 二级栏+主栏，是「点选对象闪两次」的第一闪。
+                        val previous = selectedIndices
                         tapCandidates=candidates(point)
                         selection.press(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,tapCandidates)
                         selected?.let { style=it.style }
-                        changed()
+                        if(selectedIndices!=previous) changed() else invalidate()
                         // 什么都没点到：这一趟拖动转成画布平移；点到对象则保持原选择手感。
                         selectPanActive = selected == null && tapCandidates.isEmpty()
                         selectPanLast = point
@@ -532,10 +610,12 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
                 cancelled=true; quickDrag=false; pending=null; pen=null; continuation=null; erased.clear(); selection.cancel(); penFeedback.clear(); selectPanActive=false
             }
             MotionEvent.ACTION_MOVE -> if(selectPanActive) {
-                // 空白处拖动＝平移画布：point 是图片像素坐标，屏幕增量＝图片增量 ×(视图宽/图片宽) × viewZoom。
-                // 缺第一项时长图（整幅 contain 后视图宽<图片宽）平移会被放大数倍，表现为底图乱窜。
-                val viewScale=(width.takeIf { it>0 } ?: image.width.coerceAtLeast(1)).toFloat()/image.width.coerceAtLeast(1)
-                onCanvasPan?.invoke((point.x-selectPanLast.x)*viewScale*viewZoom,(point.y-selectPanLast.y)*viewScale*viewZoom)
+                // 空白处拖动＝平移画布：point 是图片像素坐标，屏幕增量 = 图片增量 × 当前比例。
+                // 视口路径下比例就是 viewport.scale；旧路径仍是「视图宽/图片宽 × viewZoom」。
+                // 少乘这一项时长图（整幅 contain 后视图宽 < 图片宽）平移会被放大数倍，表现为底图乱窜。
+                val screenScale=viewport?.takeIf { it.hasSize }?.scale
+                    ?: ((width.takeIf { it>0 } ?: image.width.coerceAtLeast(1)).toFloat()/image.width.coerceAtLeast(1)*viewZoom)
+                onCanvasPan?.invoke((point.x-selectPanLast.x)*screenScale,(point.y-selectPanLast.y)*screenScale)
                 selectPanLast = point
             }
                 else if(quickDrag) selection.move(point,event.metaState and android.view.KeyEvent.META_SHIFT_ON!=0,image.width,image.height,event.metaState and android.view.KeyEvent.META_ALT_ON!=0)
@@ -692,6 +772,6 @@ class ScreenshotDrawingLayer(context: Context,private var image: Bitmap,private 
         val result=if(output.isMutable) output else output.copy(Bitmap.Config.ARGB_8888,true).also { output.recycle() }
         val canvas=Canvas(result)
         canvas.save(); canvas.clipRect(0,0,crop.width(),minOf(crop.height(),result.height)); canvas.translate(-crop.left.toFloat(),-crop.top.toFloat())
-        renderer.draw(canvas,history.items,crop,watermark); canvas.restore(); return result
+        renderer.draw(canvas,history.items,crop,shownWatermark); canvas.restore(); return result
     }
 }

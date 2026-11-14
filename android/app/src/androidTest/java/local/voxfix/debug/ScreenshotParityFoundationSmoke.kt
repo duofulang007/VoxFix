@@ -854,8 +854,8 @@ object ScreenshotParityFoundationSmoke {
             controls.measure(View.MeasureSpec.makeMeasureSpec(840,View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(600,View.MeasureSpec.AT_MOST))
             controls.layout(0,0,840,controls.measuredHeight)
-            check(find(controls,"边框色")!=null) { "矩形高亮缺少边框色" }
-            find(controls,"边框色")
+            // 边框色/边框宽收进「高亮边框设置」弹层（原版是单触发器 + Popover）。
+            check(find(controls,"高亮边框设置")!=null) { "矩形高亮缺少边框入口" }
             layer.close()
         } finally { renderer.close(); image.recycle() }
     }

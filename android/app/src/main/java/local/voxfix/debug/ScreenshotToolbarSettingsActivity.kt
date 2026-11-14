@@ -21,9 +21,14 @@ class ScreenshotToolbarSettingsActivity : Activity() {
         val tabs = android.widget.LinearLayout(this)
         val editorHost = android.widget.FrameLayout(this)
         var current = ScreenshotToolbarSection.DRAWING
+        // 按 section 记住两个滚动容器的位置：切 Tab 回来不再回到顶部。
+        val scrollSnapshots = mutableMapOf<ScreenshotToolbarSection,Pair<Int,Int>>()
         fun show(section: ScreenshotToolbarSection) {
+            (editorHost.getChildAt(0) as? ScreenshotToolbarEditor)?.let { scrollSnapshots[current] = it.exportScroll() }
             current = section; editorHost.removeAllViews()
-            editorHost.addView(ScreenshotToolbarEditor(this,section),android.widget.FrameLayout.LayoutParams(-1,-1))
+            val editor = ScreenshotToolbarEditor(this,section)
+            scrollSnapshots[section]?.let(editor::importScroll)
+            editorHost.addView(editor,android.widget.FrameLayout.LayoutParams(-1,-1))
             for (index in ScreenshotToolbarSection.values().indices) (tabs.getChildAt(index) as android.widget.TextView).apply {
                 setTextColor(if (ScreenshotToolbarSection.values()[index] == current) 0xFF1677FF.toInt() else 0xFFD9D9D9.toInt())
                 isSelected = ScreenshotToolbarSection.values()[index] == current

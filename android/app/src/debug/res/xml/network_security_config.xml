@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 仅 debug 构建合并：更新联调走 PC 静态服务 + adb reverse，只放行 loopback 明文；
+     正式源（GitHub/镜像）一律 HTTPS，release 构建不受此文件影响。 -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

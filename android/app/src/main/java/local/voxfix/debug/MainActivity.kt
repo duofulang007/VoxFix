@@ -45,7 +45,7 @@ class MainActivity : Activity() {
         Button(this).apply { text = "个人词库与迁移"; layout.addView(this); setOnClickListener { startActivity(Intent(this@MainActivity, LexiconActivity::class.java)) } }
         Button(this).apply { text = "截图工具设置"; layout.addView(this); setOnClickListener { startActivity(Intent(this@MainActivity, ScreenTextSettingsActivity::class.java)) } }
         Button(this).apply { text = "允许麦克风"; layout.addView(this); setOnClickListener { requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1) } }
-        EditText(this).apply { hint = "在这里试用 VoxFix 输入法"; contentDescription = "VoxFix输入法试用框"; layout.addView(this) }
+        val trial = EditText(this).apply { hint = "在这里试用 VoxFix 输入法"; contentDescription = "VoxFix输入法试用框"; layout.addView(this) }
         label("中文语音输入 · 本地离线\n停止后自动补全标点。", 16f)
         status = label("正在加载离线模型…", 18f)
         level = label("未录音", 16f)
@@ -57,6 +57,15 @@ class MainActivity : Activity() {
         layout.addView(ScrollView(this).apply { addView(result) }, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(layout)
         status.text = "可启用输入法 · 语音模型按需加载"
+        // 首页向导第 3 步带 voxfix.autofocus 进来时自动聚焦试用框，键盘直接就绪；
+        // 真机脚本 `am start` 不带 extra，默认路径不变。
+        if (intent.getBooleanExtra("voxfix.autofocus", false)) {
+            trial.requestFocus()
+            trial.post {
+                getSystemService(InputMethodManager::class.java)
+                    ?.showSoftInput(trial, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+            }
+        }
     }
 
     private fun ui(action: () -> Unit) = runOnUiThread { if (!isDestroyed) action() }

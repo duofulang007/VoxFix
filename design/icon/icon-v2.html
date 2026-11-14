@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VoxFix 图标 · 尺寸修正与方案</title>
+<style>
+*{box-sizing:border-box}
+:root{
+  --ink:#111318; --ink2:#555A63; --ink3:#8A8F98; --line:#E6E7EA;
+  --bg:#F4F5F7; --card:#FFFFFF;
+}
+body{margin:0;padding:44px 32px 80px;background:var(--bg);color:var(--ink);
+  font-family:system-ui,-apple-system,"PingFang SC","MiSans","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1060px;margin:0 auto}
+h1{font-size:24px;font-weight:640;letter-spacing:-.02em;margin:0 0 8px}
+.lede{font-size:14px;line-height:1.75;color:var(--ink2);margin:0 0 8px;max-width:720px}
+.lede b{color:var(--ink);font-weight:600}
+h2{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink3);font-weight:640;margin:46px 0 14px}
+.note{font-size:12.5px;line-height:1.8;color:var(--ink3);margin:12px 0 0;max-width:760px}
+
+/* ---- 真机裁切容器：108dp 画布只显示中心 66dp ---- */
+.device{position:relative;overflow:hidden;background:#fff;flex:none}
+.device>img{position:absolute;left:-31.82%;top:-31.82%;width:163.64%;height:163.64%;max-width:none;display:block}
+.device.r23{border-radius:23%}
+
+/* ---- 诊断 ---- */
+.diag{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:22px}
+.dcard{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+.dcard .k{font-size:11.5px;color:var(--ink3);letter-spacing:.04em;margin-bottom:10px}
+.dcard .v{font-size:30px;font-weight:640;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1}
+.dcard .v small{font-size:14px;font-weight:500;color:var(--ink3);margin-left:4px;letter-spacing:0}
+.dcard .s{font-size:12.5px;color:var(--ink2);line-height:1.6;margin-top:9px}
+.dcard.bad .v{color:#C63B2F}
+.dcard.good .v{color:#1F7A4C}
+
+/* ---- 对照 ---- */
+.compare{display:flex;gap:36px;align-items:flex-start;flex-wrap:wrap;background:var(--card);
+  border:1px solid var(--line);border-radius:16px;padding:26px 28px}
+.cmp{display:flex;flex-direction:column;align-items:center;gap:12px}
+.cmp .cap{font-size:12.5px;color:var(--ink2);text-align:center;line-height:1.6}
+.cmp .cap b{display:block;color:var(--ink);font-size:13.5px;font-weight:600;margin-bottom:2px}
+.shot{width:64px;height:64px;border-radius:23%;display:block;image-rendering:auto}
+.shot-tag{font-size:11px;color:var(--ink3);margin-top:-4px}
+
+/* ---- 方案 ---- */
+.plans{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.plan{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px 18px 18px;
+  display:flex;flex-direction:column;align-items:center;gap:14px;position:relative}
+.plan.pick{border-color:#1677FF;box-shadow:0 0 0 3px rgba(22,119,255,.10)}
+.plan .badge{position:absolute;top:12px;right:12px;font-size:10.5px;letter-spacing:.04em;
+  color:#1677FF;background:#EAF3FF;border-radius:6px;padding:3px 7px;font-weight:600}
+.plan .big{width:96px;height:96px}
+.plan .meta{text-align:center}
+.plan .meta b{display:block;font-size:13.5px;font-weight:600;margin-bottom:5px}
+.plan .meta span{font-size:12px;line-height:1.65;color:var(--ink3)}
+.plan .row{display:flex;gap:8px;align-items:flex-end;padding-top:2px}
+
+/* ---- 尺寸档 ---- */
+.sizes{display:flex;gap:26px;align-items:flex-end;flex-wrap:wrap;background:var(--card);
+  border:1px solid var(--line);border-radius:16px;padding:24px 28px}
+.sz{display:flex;flex-direction:column;align-items:center;gap:9px;font-size:11px;color:var(--ink3);font-variant-numeric:tabular-nums}
+
+/* ---- 桌面场景 ---- */
+.scene{border-radius:16px;padding:26px 24px;display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;border:1px solid var(--line)}
+.scene.light{background:linear-gradient(150deg,#EDEFF2,#D9DEE5)}
+.scene.dark{background:linear-gradient(150deg,#20242B,#101318)}
+.app{display:flex;flex-direction:column;align-items:center;gap:8px;width:74px}
+.app .ph{border-radius:23%;display:block}
+.app span{font-size:10.5px;line-height:1.25;text-align:center;color:#3A3E45}
+.scene.dark .app span{color:#E3E5E9}
+
+/* ---- 规格 ---- */
+.spec{display:grid;grid-template-columns:1fr 1fr;gap:0 34px;background:var(--card);
+  border:1px solid var(--line);border-radius:16px;padding:8px 26px}
+.spec div{display:flex;justify-content:space-between;gap:16px;padding:10px 0;border-bottom:1px solid #F0F0F2;font-size:13px;color:var(--ink2)}
+.spec div:nth-last-child(-n+2){border-bottom:0}
+.spec b{color:var(--ink);font-weight:560;font-variant-numeric:tabular-nums;text-align:right}
+
+.verdict{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px 26px;margin-top:14px}
+.verdict p{margin:0 0 10px;font-size:13.5px;line-height:1.8;color:var(--ink2)}
+.verdict p:last-child{margin-bottom:0}
+.verdict b{color:var(--ink);font-weight:600}
+@media (max-width:900px){.plans{grid-template-columns:repeat(2,1fr)}.diag{grid-template-columns:1fr}.spec{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>VoxFix 图标 · 尺寸修正与候选方案</h1>
+  <p class="lede">桌面观感「太大」，根源不是画得大，而是<b>自适应图标的渲染方式</b>：Android 画布是 108dp，但启动器只取中心 <b>66dp</b> 铺满整个图标。原稿把图形按 108dp 全画布布置（外沿 57.2dp，占画布 53%），被系统裁切后实际显示为 <b>86.6%</b>，四周只剩 4.5% 留白——所以它比旁边任何图标都"顶"。</p>
+
+  <h2>诊断</h2>
+  <div class="diag">
+    <div class="dcard">
+      <div class="k">原稿设计占比</div>
+      <div class="v">53<small>%</small></div>
+      <div class="s">图形外沿 57.2dp ÷ 108dp 画布<br>设计意图是克制的</div>
+    </div>
+    <div class="dcard bad">
+      <div class="k">系统实际渲染占比</div>
+      <div class="v">86.6<small>%</small></div>
+      <div class="s">57.2dp ÷ 66dp 可见区<br>设备实拍测得 86.4%，误差 0.2pp</div>
+    </div>
+    <div class="dcard good">
+      <div class="k">改后占比（已装机实测）</div>
+      <div class="v">65.2<small>%</small></div>
+      <div class="s">图形外沿收到 43dp<br>四边留白各 11.5dp（17.4%）</div>
+    </div>
+  </div>
+
+  <h2>改前 / 改后（按设备真实裁切渲染 · 64dp 桌面尺度）</h2>
+  <div class="compare">
+    <div class="cmp">
+      <div class="device r23" style="width:64px;height:64px"><img src="voxfix-icon-c.svg" alt=""></div>
+      <div class="cap"><b>改前</b>内容 86.6%<br>留白 4.5%</div>
+    </div>
+    <div class="cmp">
+      <div class="device r23" style="width:64px;height:64px"><img src="v2-a-shrink.svg" alt=""></div>
+      <div class="cap"><b>改后</b>内容 65.2%<br>留白 17.4%</div>
+    </div>
+    <div class="cmp">
+      <img class="shot" src="current-on-device.png" alt="设备实拍">
+      <div class="shot-tag">设备实拍（改前）</div>
+    </div>
+    <div class="verdict" style="flex:1;min-width:280px;margin-top:0">
+      <p><b>只改一件事：整体收敛到 75.28%。</b>构图、比例、圆头描边、笔画粗细比全部继承原稿，不做主观改动——框线 4.43→3.34、V 笔画 5.70→4.29，与原稿严格等比。</p>
+      <p>需要另一个数字就告诉我：<b>62%</b> 更克制，<b>68%</b> 更饱满。</p>
+    </div>
+  </div>
+
+  <h2>四套候选</h2>
+  <div class="plans">
+    <div class="plan pick">
+      <div class="badge">建议</div>
+      <div class="device r23 big"><img src="v2-a-shrink.svg" alt=""></div>
+      <div class="meta"><b>A · 收敛</b><span>白底黑标不变<br>只修尺寸，最保守</span></div>
+      <div class="row">
+        <div class="device r23" style="width:44px;height:44px"><img src="v2-a-shrink.svg" alt=""></div>
+        <div class="device r23" style="width:32px;height:32px"><img src="v2-a-shrink.svg" alt=""></div>
+      </div>
+    </div>
+    <div class="plan">
+      <div class="device r23 big"><img src="v2-b-layered.svg" alt=""></div>
+      <div class="meta"><b>B · 分层</b><span>取景框降为中性灰<br>V 成为唯一主体</span></div>
+      <div class="row">
+        <div class="device r23" style="width:44px;height:44px"><img src="v2-b-layered.svg" alt=""></div>
+        <div class="device r23" style="width:32px;height:32px"><img src="v2-b-layered.svg" alt=""></div>
+      </div>
+    </div>
+    <div class="plan">
+      <div class="device r23 big"><img src="v2-c-blue.svg" alt=""></div>
+      <div class="meta"><b>C · 主色</b><span>#1677FF 底 + 白标<br>桌面识别度最高</span></div>
+      <div class="row">
+        <div class="device r23" style="width:44px;height:44px"><img src="v2-c-blue.svg" alt=""></div>
+        <div class="device r23" style="width:32px;height:32px"><img src="v2-c-blue.svg" alt=""></div>
+      </div>
+    </div>
+    <div class="plan">
+      <div class="device r23 big"><img src="v2-d-dark.svg" alt=""></div>
+      <div class="meta"><b>D · 深色</b><span>近黑底 + 浅标<br>克制，不抢壁纸</span></div>
+      <div class="row">
+        <div class="device r23" style="width:44px;height:44px"><img src="v2-d-dark.svg" alt=""></div>
+        <div class="device r23" style="width:32px;height:32px"><img src="v2-d-dark.svg" alt=""></div>
+      </div>
+    </div>
+  </div>
+  <p class="note">四套几何完全相同，只有底色与取景框灰度不同。B 的灰取景框约 38% 黑（#9CA1AA）：在 32dp 以下时 V 先被读到，取景框退为纹理。</p>
+
+  <h2>尺寸档位（A · 收敛）</h2>
+  <div class="sizes">
+    <div class="sz"><div class="device r23" style="width:72px;height:72px"><img src="v2-a-shrink.svg" alt=""></div>72dp</div>
+    <div class="sz"><div class="device r23" style="width:64px;height:64px"><img src="v2-a-shrink.svg" alt=""></div>64dp</div>
+    <div class="sz"><div class="device r23" style="width:56px;height:56px"><img src="v2-a-shrink.svg" alt=""></div>56dp</div>
+    <div class="sz"><div class="device r23" style="width:48px;height:48px"><img src="v2-a-shrink.svg" alt=""></div>48dp</div>
+    <div class="sz"><div class="device r23" style="width:40px;height:40px"><img src="v2-a-shrink.svg" alt=""></div>40dp</div>
+    <div class="sz"><div class="device r23" style="width:32px;height:32px"><img src="v2-a-shrink.svg" alt=""></div>32dp</div>
+    <div class="sz"><div class="device r23" style="width:24px;height:24px"><img src="v2-a-shrink.svg" alt=""></div>24dp</div>
+  </div>
+  <p class="note">48dp 是桌面最常见的实际绘制尺寸：框线约 1.5px、V 笔画约 1.9px，仍能读出「取景框 + V」。低于 32dp 时取景框的四角会开始融成四个点——那是这套构图的下限，与原稿一致。</p>
+
+  <h2>桌面场景（64dp）</h2>
+  <div class="scene light">
+    <div class="app"><div class="device r23 ph" style="width:64px;height:64px"><img src="v2-a-shrink.svg" alt=""></div><span>VoxFix<br>输入法</span></div>
+    <div class="app"><div class="device r23 ph" style="width:64px;height:64px"><img src="v2-b-layered.svg" alt=""></div><span>B 分层</span></div>
+    <div class="app"><div class="device r23 ph" style="width:64px;height:64px"><img src="v2-c-blue.svg" alt=""></div><span>C 主色</span></div>
+    <div class="app"><div class="device r23 ph" style="width:64px;height:64px"><img src="v2-d-dark.svg" alt=""></div><span>D 深色</span></div>
+    <div class="app"><div class="device r23 ph" style="width:64px;height:64px"><img src="voxfix-icon-c.svg" alt=""></div><span>改前</span></div>
+  </div>
+  <div class="scene dark" style="margin-top:12px">
+    <div class="app"><div class="device r23 ph" style="width:64px;height:64px"><img src="v2-a-shrink.svg" alt=""></div><span>VoxFix<br>输入法</span></div>
+    <div class="app"><div class="device r23 ph" style="width:64px;height:64px"><img src="v2-c-blue.svg" alt=""></div><span>C 主色</span></div>
+    <div class="app"><div class="device r23 ph" style="width:64px;height:64px"><img src="v2-d-dark.svg" alt=""></div><span>D 深色</span></div>
+    <div class="app"><div class="device r23 ph" style="width:64px;height:64px"><img src="voxfix-icon-c.svg" alt=""></div><span>改前</span></div>
+  </div>
+
+  <h2>几何规格（108dp 自适应画布）</h2>
+  <div class="spec">
+    <div><span>画布</span><b>108 × 108 dp</b></div>
+    <div><span>系统可见区</span><b>中心 66 dp</b></div>
+    <div><span>图形外沿</span><b>43.0 dp（65.2%）</b></div>
+    <div><span>四边留白</span><b>11.5 dp（17.4%）</b></div>
+    <div><span>取景框中心线</span><b>39.6 dp（34.16–73.84）</b></div>
+    <div><span>框线宽</span><b>3.34 dp · 圆头</b></div>
+    <div><span>角臂长</span><b>8.24 dp（20.8%）</b></div>
+    <div><span>V 宽 × 高</span><b>17.78 dp（44.8%）</b></div>
+    <div><span>V 笔画</span><b>4.29 dp · 圆头圆角</b></div>
+    <div><span>收敛系数</span><b>0.7528（相对原稿）</b></div>
+  </div>
+  <p class="note">全部取值由原稿等比换算（原框线 4.43、原 V 笔画 5.70、原外沿 57.16dp），没有新增任何主观数值。Android 交付沿用自适应图标：前景 vector + 纯色背景 + Android 13 单色层，minSdk 30 无需各密度 PNG。</p>
+
+  <h2>结论</h2>
+  <div class="verdict">
+    <p><b>A 已落地。</b>只改尺寸——问题只有「相对可见区画得太大」这一个，收敛即解决；换底色是另一件事，不该混在一起改。APK 已装机，真机桌面复核：图形居中、四边留白 17.4%，与同屏其他图标视觉重量齐平。</p>
+    <p>如果看图后觉得「还是有点重」，换 <b>B</b>——同样的几何，靠取景框降灰把视觉重心压到 V 上，是四套里最「轻」的白底方案。若嫌白底在深色壁纸上太亮，换 <b>D</b>。</p>
+    <p>换方案只动三个文件：<b>ic_launcher_foreground.xml / ic_launcher_monochrome.xml</b> 的描边色，<b>ic_launcher_background.xml</b> 的底色。尺寸数值四套通用。</p>
+  </div>
+
+</div>
+</body>
+</html>

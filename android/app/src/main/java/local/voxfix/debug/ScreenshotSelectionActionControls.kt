@@ -65,13 +65,15 @@ internal class ScreenshotSelectionActionControls(context: Context, private val d
             text = if (mixed) "透明度 -" else "透明度 $percent%"
             contentDescription = if (mixed) "透明度 Mixed" else "透明度 $percent%"
         }
-        line.addView(readout, LinearLayout.LayoutParams(dp(80), dp(32)))
+        line.addView(readout, LinearLayout.LayoutParams(dp(72), dp(32)))
         var base = style
         var tracking = false
         val bar = SeekBar(context).apply {
             max = 100
             progress = percent
             contentDescription = "选区透明度"
+            // 本视图自身就是 HorizontalScrollView：不声明豁免的话，拖动会被自己抢走变成行滚动。
+            bindUninterruptedDrag()
             isEnabled = selected > 0
             alpha = if (selected > 0) 1f else .25f
             setOnGenericMotionListener { _, event ->
@@ -91,15 +93,15 @@ internal class ScreenshotSelectionActionControls(context: Context, private val d
                 override fun onStopTrackingTouch(seek: SeekBar) { if (tracking) drawing.finishStylePreview(true); tracking = false }
             })
         }
-        line.addView(bar, LinearLayout.LayoutParams(dp(120), dp(32)))
-        row.addView(line, LinearLayout.LayoutParams(dp(200), dp(32)))
+        line.addView(bar, LinearLayout.LayoutParams(dp(104), dp(32)))
+        row.addView(line, LinearLayout.LayoutParams(dp(176), dp(32)))
     }
 
     private fun separator() {
         val divider = View(context).apply { setBackgroundColor(0x33FFFFFF) }
         row.addView(divider, LinearLayout.LayoutParams(dp(1).coerceAtLeast(1), dp(16)).apply {
-            marginStart = dp(16)
-            marginEnd = dp(16)
+            marginStart = dp(8)
+            marginEnd = dp(8)
         })
     }
 
