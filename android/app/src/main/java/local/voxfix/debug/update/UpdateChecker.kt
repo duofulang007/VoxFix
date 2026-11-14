@@ -41,8 +41,10 @@ object UpdateChecker {
     private const val KEY_LAST_CHECK = "lastCheckAt"
     private const val KEY_MANIFEST_URLS = "manifestUrls"
 
-    /** 正式源：仓库确定后填入，如 "https://github.com/<owner>/VoxFix/releases/latest/download/manifest.json"。 */
-    private const val RELEASE_MANIFEST = ""
+    /** 正式源：GitHub Releases 的 latest asset（owner/repo 取自 remote，2026-11-14 已定）。
+     *  Release 未发布前此地址 404——手动检查提示失败属预期，发布首个 Release 后即生效。 */
+    private const val RELEASE_MANIFEST =
+        "https://github.com/duofulang007/VoxFix/releases/latest/download/manifest.json"
     /** debug 联调源：PC 静态服务 + adb reverse；经 debug 网络配置放行 loopback HTTP。 */
     private const val LOOPBACK_MANIFEST = "http://127.0.0.1:18080/manifest.json"
     private const val CHECK_THROTTLE_MS = 24L * 60 * 60 * 1000
