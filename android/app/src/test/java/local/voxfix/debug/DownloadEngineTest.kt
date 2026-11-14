@@ -96,7 +96,7 @@ class DownloadEngineTest {
                 sources = listOf("http://127.0.0.1:${server.port}/missing", "http://127.0.0.1:${server.port}/apk"),
                 partial = partial, target = target,
                 expectedBytes = payload.size.toLong(), expectedSha256 = sha256,
-                allowHttpLoopback = true, cancelled = { false }, onProgress = { })
+                allowInsecureHttp = true, cancelled = { false }, onProgress = { })
             assertTrue(target.isFile)
             assertEquals(payload.size.toLong(), target.length())
             assertEquals(sha256, digestOf(target))
@@ -128,7 +128,7 @@ class DownloadEngineTest {
                 sources = listOf("http://127.0.0.1:${server.port}/apk"),
                 partial = partial, target = target,
                 expectedBytes = payload.size.toLong(), expectedSha256 = sha256,
-                allowHttpLoopback = true, cancelled = { false }, onProgress = { })
+                allowInsecureHttp = true, cancelled = { false }, onProgress = { })
             assertTrue("应发起 Range 续传请求", sawRange)
             assertEquals(payload.size.toLong(), target.length())
             assertEquals(sha256, digestOf(target))
@@ -151,7 +151,7 @@ class DownloadEngineTest {
                     partial = partial, target = target,
                     expectedBytes = payload.size.toLong(),
                     expectedSha256 = "0".repeat(64),
-                    allowHttpLoopback = true, cancelled = { false }, onProgress = { })
+                    allowInsecureHttp = true, cancelled = { false }, onProgress = { })
             }.exceptionOrNull()
             assertTrue("校验失败必须抛错", error != null)
             assertTrue("坏产物必须删除", !partial.exists())
@@ -163,7 +163,7 @@ class DownloadEngineTest {
     }
 
     @Test
-    fun `plain http is refused unless loopback allowed`() {
+    fun `plain http is refused unless insecure allowed`() {
         val server = RawServer(mapOf("/apk" to { _ -> Pair(200, payload) })).start()
         val dir = File.createTempFile("dltest", "tmp").parentFile
         val partial = File(dir, "test-gate.part")
@@ -174,7 +174,7 @@ class DownloadEngineTest {
                     sources = listOf("http://127.0.0.1:${server.port}/apk"),
                     partial = partial, target = target,
                     expectedBytes = payload.size.toLong(), expectedSha256 = sha256,
-                    allowHttpLoopback = false, cancelled = { false }, onProgress = { })
+                    allowInsecureHttp = false, cancelled = { false }, onProgress = { })
             }.exceptionOrNull()
             assertTrue("非放行场景必须拒绝 http", error != null)
             assertTrue(!target.exists())
@@ -195,7 +195,7 @@ class DownloadEngineTest {
                 sources = listOf("http://127.0.0.1:1/unreachable"),
                 partial = partial, target = target,
                 expectedBytes = payload.size.toLong(), expectedSha256 = sha256,
-                allowHttpLoopback = true, cancelled = { false }, onProgress = { })
+                allowInsecureHttp = true, cancelled = { false }, onProgress = { })
             assertEquals(sha256, digestOf(target))
         } finally {
             partial.delete(); target.delete()

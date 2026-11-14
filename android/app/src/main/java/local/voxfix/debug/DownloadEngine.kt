@@ -38,6 +38,7 @@ internal object DownloadEngine {
     /**
      * 阻塞下载。成功返回 target（partial 原子重命名），失败抛最后一个异常。
      * partial 已是完整长度时跳过网络直接校验（对应「上次下载完、校验前被打断」的续传场景）。
+     * allowInsecureHttp 仅 debug 构建传 true（局域网联调源）；正式源调用方一律传 false。
      */
     fun download(
         sources: List<String>,
@@ -45,7 +46,7 @@ internal object DownloadEngine {
         target: File,
         expectedBytes: Long,
         expectedSha256: String,
-        allowHttpLoopback: Boolean,
+        allowInsecureHttp: Boolean,
         cancelled: () -> Boolean,
         onProgress: (Progress) -> Unit
     ) {
@@ -55,7 +56,7 @@ internal object DownloadEngine {
             var fetched = false
             for (source in sources) {
                 try {
-                    fetchFrom(source, partial, expectedBytes, allowHttpLoopback, cancelled, onProgress)
+                    fetchFrom(source, partial, expectedBytes, allowInsecureHttp, cancelled, onProgress)
                     fetched = true
                     break
                 } catch (error: Exception) {
@@ -75,7 +76,7 @@ internal object DownloadEngine {
         source: String,
         partial: File,
         expectedBytes: Long,
-        allowHttpLoopback: Boolean,
+        allowInsecureHttp: Boolean,
         cancelled: () -> Boolean,
         onProgress: (Progress) -> Unit
     ) {
@@ -88,9 +89,9 @@ internal object DownloadEngine {
         var redirects = 0
         while (true) {
             if (cancelled()) throw Cancelled()
-            // 正式源强制 HTTPS；loopback HTTP 仅 debug 联调（adb reverse）放行。
-            val loopback = url.host == "127.0.0.1" || url.host == "localhost"
-            require(url.protocol == "https" || (allowHttpLoopback && loopback)) { "下载需要安全连接" }
+            // 正式源强制 HTTPS；allowInsecureHttp 仅 debug 构建传 true（局域网/loopback 联调源）。
+            val secure = url.protocol == "https"
+            require(secure || allowInsecureHttp) { "下载需要安全连接" }
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = false
                 connectTimeout = CONNECT_TIMEOUT

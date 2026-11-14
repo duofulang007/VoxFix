@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import local.voxfix.debug.AdbWireless
 import local.voxfix.debug.DownloadEngine
 import java.io.File
 import java.net.HttpURLConnection
@@ -113,7 +114,8 @@ object UpdateChecker {
                 var manifest: UpdateCore.Manifest? = null
                 for (url in urls) {
                     try {
-                        manifest = UpdateCore.parse(fetchText(url))
+                        // debug 构建放行局域网 http 联调源；正式源仍强制 https。
+                        manifest = UpdateCore.parse(fetchText(url), isDebugBuild(app))
                         break
                     } catch (error: Exception) {
                         lastError = error
@@ -142,7 +144,12 @@ object UpdateChecker {
         if (configured != null) return configured
         return buildList {
             if (RELEASE_MANIFEST.isNotEmpty()) add(RELEASE_MANIFEST)
-            if (isDebugBuild(context)) add(LOOPBACK_MANIFEST)
+            if (isDebugBuild(context)) {
+                // GitHub 直连在国内常被掐断（真机实测 unexpected end of stream）。
+                // debug 构建按序回退：loopback（USB reverse）→ 电脑助手推送过的局域网地址。
+                add(LOOPBACK_MANIFEST)
+                AdbWireless.pcAddresses(context).forEach { add("http://$it:18080/manifest.json") }
+            }
         }
     }
 
@@ -196,7 +203,7 @@ object UpdateChecker {
                     target = target,
                     expectedBytes = m.apkSizeBytes,
                     expectedSha256 = m.apkSha256,
-                    allowHttpLoopback = isDebugBuild(app),
+                    allowInsecureHttp = isDebugBuild(app),
                     cancelled = { cancelled.get() },
                     onProgress = { progress ->
                         when (progress) {

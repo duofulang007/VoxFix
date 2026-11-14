@@ -87,7 +87,7 @@ object TranslateDownloader {
                     target = store.model,
                     expectedBytes = TranslateModelStore.BYTES,
                     expectedSha256 = TranslateModelStore.SHA256,
-                    allowHttpLoopback = false,
+                    allowInsecureHttp = false,
                     cancelled = { cancelled.get() },
                     onProgress = { progress ->
                         when (progress) {

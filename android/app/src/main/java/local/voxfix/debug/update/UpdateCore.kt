@@ -17,8 +17,11 @@ object UpdateCore {
         val apkUrls: List<String>
     )
 
-    /** 坏 JSON / 缺关键字段 / 非法 sha256 / 无有效下载地址 → null；宁可「无更新」也不拿脏数据安装。 */
-    fun parse(text: String): Manifest? = runCatching {
+    /**
+     * 坏 JSON / 缺关键字段 / 非法 sha256 / 无有效下载地址 → null；宁可「无更新」也不拿脏数据安装。
+     * allowInsecureHttp 仅 debug 构建传 true：放行局域网 http 联调源（正式源调用方一律 false，强制 https）。
+     */
+    fun parse(text: String, allowInsecureHttp: Boolean = false): Manifest? = runCatching {
         val json = JSONObject(text)
         val manifest = Manifest(
             versionCode = json.getInt("versionCode"),
@@ -28,17 +31,14 @@ object UpdateCore {
             apkSizeBytes = json.optLong("apkSizeBytes", 0L),
             apkSha256 = json.optString("apkSha256").trim().lowercase(),
             apkUrls = json.optJSONArray("apkUrls")?.let { urls ->
-                // 正式源必须 https；loopback http 仅 debug 构建联调放行（与 DownloadEngine 门禁一致）。
-                (0 until urls.length()).mapNotNull { urls.optString(it).takeIf { u -> isDownloadUrl(u) } }
+                (0 until urls.length()).mapNotNull { urls.optString(it).takeIf { u -> isDownloadUrl(u, allowInsecureHttp) } }
             } ?: emptyList()
         )
         if (manifest.versionCode <= 0 || !isSha256(manifest.apkSha256) || manifest.apkUrls.isEmpty()) null else manifest
     }.getOrNull()
 
-    private fun isDownloadUrl(url: String): Boolean =
-        url.startsWith("https://") ||
-            url.startsWith("http://127.0.0.1:") ||
-            url.startsWith("http://localhost:")
+    private fun isDownloadUrl(url: String, allowInsecureHttp: Boolean): Boolean =
+        url.startsWith("https://") || (allowInsecureHttp && url.startsWith("http://"))
 
     /** 只比 versionCode 整数；versionName 仅展示，避免语义化版本比较的歧义。 */
     fun isNewer(manifestCode: Int, currentCode: Int): Boolean = manifestCode > currentCode

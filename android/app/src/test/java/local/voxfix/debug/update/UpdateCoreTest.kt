@@ -48,6 +48,20 @@ class UpdateCoreTest {
     }
 
     @Test
+    fun `insecure http urls are only accepted when explicitly allowed`() {
+        // 正式源（allowInsecureHttp=false）拒绝一切 http。
+        assertNull(UpdateCore.parse(valid.replace("https://mirror.example.com/voxfix/app.apk", "http://mirror.example.com/voxfix/app.apk")
+            .replace("https://github.com/o/VoxFix/releases/download/v0.4.1/VoxFix-0.4.1-5-20261120-a1b2c3d.apk", "http://github.com/x/y.apk")))
+        // debug 联调（allowInsecureHttp=true）放行局域网 http。
+        val lan = UpdateCore.parse(
+            valid.replace("https://mirror.example.com/voxfix/app.apk", "http://192.168.1.4:18080/voxfix-test.apk"),
+            allowInsecureHttp = true
+        )
+        assertNotNull(lan)
+        assertEquals("http://192.168.1.4:18080/voxfix-test.apk", lan!!.apkUrls[1])
+    }
+
+    @Test
     fun `compares only versionCode`() {
         assertTrue(UpdateCore.isNewer(5, 4))
         assertFalse(UpdateCore.isNewer(4, 4))
