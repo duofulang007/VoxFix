@@ -2,52 +2,80 @@ package local.voxfix.debug
 
 import android.app.Activity
 import android.os.Bundle
-import android.view.WindowInsets
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import local.voxfix.debug.ui.VoxFixTheme
+import local.voxfix.debug.ui.VoxFixUi
 
+/**
+ * 工具栏布局：绘制 / 截图两栏各自编排。
+ *
+ * 外壳与其他二级页一致；编辑器画布保持深色 [ScreenshotToolbarEditor.BACKGROUND]，
+ * 因为它预览的就是截图时那条深色工具条，不能令牌化成页面底色。
+ */
 class ScreenshotToolbarSettingsActivity : Activity() {
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
-        window.decorView.setBackgroundColor(ScreenshotToolbarEditor.BACKGROUND)
-        val pad = (8*resources.displayMetrics.density).toInt()
-        val root = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setBackgroundColor(ScreenshotToolbarEditor.BACKGROUND)
-            setPadding(pad,pad,pad,pad)
-            setOnApplyWindowInsetsListener { view,insets ->
-                val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-                view.setPadding(pad+bars.left,pad+bars.top,pad+bars.right,pad+bars.bottom); insets
-            }
-        }
-        val tabs = android.widget.LinearLayout(this)
-        val editorHost = android.widget.FrameLayout(this)
-        var current = ScreenshotToolbarSection.DRAWING
+        val palette = VoxFixTheme.palette(this)
+        val editorHost = FrameLayout(this)
         // 按 section 记住两个滚动容器的位置：切 Tab 回来不再回到顶部。
-        val scrollSnapshots = mutableMapOf<ScreenshotToolbarSection,Pair<Int,Int>>()
-        fun show(section: ScreenshotToolbarSection) {
+        val scrollSnapshots = mutableMapOf<ScreenshotToolbarSection, Pair<Int, Int>>()
+        var current = ScreenshotToolbarSection.DRAWING
+        lateinit var segmented: VoxFixUi.Segmented
+
+        fun show(index: Int) {
+            val section = ScreenshotToolbarSection.values()[index]
             (editorHost.getChildAt(0) as? ScreenshotToolbarEditor)?.let { scrollSnapshots[current] = it.exportScroll() }
-            current = section; editorHost.removeAllViews()
-            val editor = ScreenshotToolbarEditor(this,section)
+            current = section
+            editorHost.removeAllViews()
+            val editor = ScreenshotToolbarEditor(this, section)
             scrollSnapshots[section]?.let(editor::importScroll)
-            editorHost.addView(editor,android.widget.FrameLayout.LayoutParams(-1,-1))
-            for (index in ScreenshotToolbarSection.values().indices) (tabs.getChildAt(index) as android.widget.TextView).apply {
-                setTextColor(if (ScreenshotToolbarSection.values()[index] == current) 0xFF1677FF.toInt() else 0xFFD9D9D9.toInt())
-                isSelected = ScreenshotToolbarSection.values()[index] == current
+            editorHost.addView(editor, FrameLayout.LayoutParams(-1, -1))
+            segmented.selected = index
+        }
+
+        segmented = VoxFixUi.Segmented(
+            this, palette,
+            ScreenshotToolbarSection.values().map { it.label },
+            0
+        ) { show(it) }
+
+        setContentView(VoxFixUi.screenBody(
+            this, palette, "工具栏布局",
+            onBack = { finish() },
+            action = "恢复默认",
+            onAction = { (editorHost.getChildAt(0) as? ScreenshotToolbarEditor)?.reset() }
+        ) { body ->
+            val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            val side = VoxFixTheme.dp(this@ScreenshotToolbarSettingsActivity, 20)
+            column.addView(segmented, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                leftMargin = side
+                rightMargin = side
+                topMargin = VoxFixTheme.dp(this@ScreenshotToolbarSettingsActivity, 6)
+                bottomMargin = VoxFixTheme.dp(this@ScreenshotToolbarSettingsActivity, 12)
+            })
+            // 画布本身仍是截图工具条的深色，但收进圆角卡片：整页与其它二级页同一种"卡片"语言。
+            val canvas = FrameLayout(this).apply {
+                background = VoxFixTheme.round(
+                    ScreenshotToolbarEditor.BACKGROUND,
+                    VoxFixTheme.dp(this@ScreenshotToolbarSettingsActivity, 18).toFloat()
+                )
+                clipToOutline = true
             }
-        }
-        for (section in ScreenshotToolbarSection.values()) tabs.addView(android.widget.TextView(this).apply {
-            text=section.label; textSize=18f; gravity=android.view.Gravity.CENTER
-            contentDescription="${section.label}工具编排"; setOnClickListener { show(section) }
-        },android.widget.LinearLayout.LayoutParams(0,(44*resources.displayMetrics.density).toInt(),1f))
-        tabs.addView(android.widget.ImageView(this).apply {
-            contentDescription="重置当前工具编排"; setImageResource(R.drawable.snow_reload); setColorFilter(0xFFD9D9D9.toInt())
-            val inset=(12*resources.displayMetrics.density).toInt(); setPadding(inset,inset,inset,inset)
-            setOnClickListener { (editorHost.getChildAt(0) as? ScreenshotToolbarEditor)?.reset() }
-        },android.widget.LinearLayout.LayoutParams((44*resources.displayMetrics.density).toInt(),-1))
-        root.addView(tabs); root.addView(editorHost,android.widget.LinearLayout.LayoutParams(-1,0,1f))
-        setContentView(root); show(current)
-        window.decorView.post {
-            window.insetsController?.setSystemBarsAppearance(0,
-                android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
-        }
+            canvas.addView(editorHost, FrameLayout.LayoutParams(-1, -1))
+            column.addView(canvas, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+            ).apply {
+                leftMargin = side
+                rightMargin = side
+                bottomMargin = side
+            })
+            body.addView(column, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+        })
+        show(0)
     }
 }

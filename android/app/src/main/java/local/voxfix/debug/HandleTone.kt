@@ -26,6 +26,11 @@ internal object HandleToneResolver {
     @Volatile
     private var cached: HandleTone? = null
 
+    /** 「恢复弧线」清掉缓存与持久值后，下一次 show() 重新按壁纸算一遍。 */
+    fun invalidate() {
+        cached = null
+    }
+
     /** 主线程可随时调用：永不 IPC，只读内存或 prefs。 */
     fun peek(context: Context): HandleTone =
         cached ?: restore(context) ?: HandleTone.MID
@@ -40,7 +45,7 @@ internal object HandleToneResolver {
             val tone = runCatching { compute(app) }.getOrNull() ?: HandleTone.MID
             if (tone != cached) {
                 cached = tone
-                ScreenTextSettingsActivity.preferences(app).edit()
+                ScreenTextPrefs.file(app).edit()
                     .putInt(KEY_TONE, tone.ordinal).apply()
                 android.util.Log.i("VoxFix", "handle tone=$tone")
             }
@@ -49,7 +54,7 @@ internal object HandleToneResolver {
     }
 
     private fun restore(context: Context): HandleTone? {
-        val prefs = ScreenTextSettingsActivity.preferences(context)
+        val prefs = ScreenTextPrefs.file(context)
         val ordinal = prefs.getInt(KEY_TONE, -1)
         return HandleTone.entries.firstOrNull { it.ordinal == ordinal }?.also { cached = it }
     }

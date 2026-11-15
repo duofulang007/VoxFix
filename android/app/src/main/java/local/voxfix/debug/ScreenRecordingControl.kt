@@ -50,6 +50,10 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
      */
     private val panel = android.widget.HorizontalScrollView(context)
     private val panelRow = LinearLayout(context)
+    /** 「更多」第二行：只在用户展开时占高度，避免主行堆九个 chip。 */
+    private val morePanel = android.widget.HorizontalScrollView(context)
+    private val moreRow = LinearLayout(context)
+    private var moreOpen = false
     private val duration = TextView(context)
     private val start = button("开始", accent = true)
     private val close = button("关闭")
@@ -166,6 +170,8 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
 
         panel.visibility = GONE
         addView(panel)
+        morePanel.visibility = GONE
+        addView(morePanel)
         buildSettings()
         showSetupVisibility()
     }
@@ -497,44 +503,34 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         panel.setPadding(dp(12), 0, dp(12), dp(6))
         panel.isHorizontalScrollBarEnabled = false
         panel.contentDescription = "录制设置，可左右滚动"
+        morePanel.setPadding(dp(12), 0, dp(12), dp(6))
+        morePanel.isHorizontalScrollBarEnabled = false
+        morePanel.contentDescription = "更多录制设置"
         // The window is wrap-content: an unconstrained scroll view would make it wider than the
         // display and put the trailing chips out of reach.
         val maxWidth = (resources.displayMetrics.widthPixels - dp(24)).coerceAtLeast(dp(160))
-        panel.layoutParams = LayoutParams(maxWidth, LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(2)
-        }
+        panel.layoutParams = LayoutParams(maxWidth, LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) }
+        morePanel.layoutParams = LayoutParams(maxWidth, LayoutParams.WRAP_CONTENT)
         panelRow.orientation = HORIZONTAL
         panelRow.gravity = Gravity.CENTER_VERTICAL
         panelRow.removeAllViews()
+        moreRow.orientation = HORIZONTAL
+        moreRow.gravity = Gravity.CENTER_VERTICAL
+        moreRow.removeAllViews()
         optionRows.clear()
         optionLabels.clear()
         optionValues.clear()
+
+        // 主行只留三项 + 「更多」；帧率、质量、分轨、延迟下线，用内置默认值。
         val rows = ArrayList<Triple<String, () -> String, () -> Unit>>()
         rows.add(Triple("格式", { options.format.label }, { cycleFormat() }))
         rows.add(Triple("清晰度", { options.effectiveClarity.label }, { cycleClarity() }))
-        rows.add(Triple("帧率", { "${options.effectiveFrameRate} fps" }, { cycleFrameRate() }))
-        // GIF and APNG have no quality knob upstream; only MP4 (bitrate) and WebP (VP8 quality) use it.
-        if (!options.format.animated || options.format == ScreenRecordingOptions.Format.WEBP) {
-            rows.add(Triple("质量", { "${options.quality}" }, { cycleQuality() }))
-        }
         if (options.format.hasAudio) {
-            // 麦克风与系统声音是工具条上的两枚开关（与上游一致），这一行只显示合并状态并给出分轨。
             rows.add(Triple("声音", { options.audioSummary }, { cycleAudioSource() }))
-            rows.add(Triple("分轨", {
-                if (!options.audioEnabled) "无"
-                else if (options.separateAudioTracks) "${options.audioTrackCount} 轨" else "混音"
-            }, { cycleSeparate() }))
         }
-        if (options.format.animated) {
-            rows.add(Triple("循环", { if (options.loopAnimated) "开" else "关" }, { cycleLoop() }))
-        }
-        rows.add(Triple("延迟", {
-            if (options.startDelaySeconds == 0) "关闭" else "${options.startDelaySeconds} 秒"
-        }, { cycleDelay() }))
         for ((label, value, action) in rows) {
             val current = chip(label).apply {
-                // The label is only announced once; the visible chip carries label + value so a
-                // single row reads without separate column headers.
+                // 可见 chip 带 label + value，单行读得懂，不另设列头。
                 setOnClickListener { action(); rebuildSettings(); onOptionsChanged?.invoke(options) }
             }
             panelRow.addView(current)
@@ -542,14 +538,51 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
             optionLabels.add(label)
             optionValues.add(value)
         }
-        panelRow.addView(chip("文件夹").apply {
-            setTextColor(0xCCFFFFFF.toInt())
-            setOnClickListener { onOpenFolder?.invoke() }
+        panelRow.addView(chip(if (moreOpen) "收起 ▴" else "更多 ▾").apply {
+            contentDescription = "更多录制设置"
+            setOnClickListener {
+                moreOpen = !moreOpen
+                buildSettings()
+                onLayoutChanged?.invoke()
+            }
         })
+
+        if (moreOpen) {
+            if (options.format.animated) {
+                moreRow.addView(chip("循环 ${if (options.loopAnimated) "开" else "关"}").apply {
+                    setOnClickListener {
+                        cycleLoop(); rebuildSettings()
+                        onOptionsChanged?.invoke(options)
+                        onLayoutChanged?.invoke()
+                    }
+                })
+            }
+            moreRow.addView(chip("文件夹").apply {
+                setTextColor(0xCCFFFFFF.toInt())
+                setOnClickListener { onOpenFolder?.invoke() }
+            })
+            moreRow.addView(chip("恢复默认").apply {
+                setTextColor(0xCCFFFFFF.toInt())
+                setOnClickListener {
+                    options = ScreenRecordingOptions()
+                    rebuildSettings()
+                    onOptionsChanged?.invoke(options)
+                    onLayoutChanged?.invoke()
+                }
+            })
+        }
+
         panel.removeAllViews()
         panel.addView(panelRow, android.widget.FrameLayout.LayoutParams(
             android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
         ))
+        morePanel.removeAllViews()
+        if (moreOpen) {
+            morePanel.addView(moreRow, android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+            ))
+        }
+        morePanel.visibility = if (moreOpen) VISIBLE else GONE
         refreshSettings()
     }
 
@@ -594,6 +627,7 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         if (counting || finished) return
         if (panel.visibility == VISIBLE) closeSettings() else {
             panel.visibility = VISIBLE
+            morePanel.visibility = if (moreOpen) VISIBLE else GONE
             onLayoutChanged?.invoke()
         }
     }
@@ -601,6 +635,7 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
     private fun closeSettings() {
         if (panel.visibility != VISIBLE) return
         panel.visibility = GONE
+        morePanel.visibility = GONE
         onLayoutChanged?.invoke()
     }
 
@@ -617,33 +652,8 @@ internal class ScreenRecordingControl(context: Context) : LinearLayout(context) 
         options = if (options.format.animated) options.copy(animatedClarity = next) else options.copy(clarity = next)
     }
 
-    private fun cycleFrameRate() {
-        val values = options.frameRateOptions
-        val current = options.effectiveFrameRate
-        val index = values.indexOf(current).takeIf { it >= 0 } ?: 0
-        val next = values[(index + 1) % values.size]
-        options = if (options.format.animated) options.copy(animatedFrameRate = next) else options.copy(frameRate = next)
-    }
-
-    private fun cycleQuality() {
-        val values = listOf(40, 60, 80, 100)
-        val index = values.indexOf(options.quality).takeIf { it >= 0 } ?: 2
-        options = options.copy(quality = values[(index + 1) % values.size])
-    }
-
     private fun cycleLoop() {
         options = options.copy(loopAnimated = !options.loopAnimated)
-    }
-
-    /** 分轨：上游 `separate_audio_tracks`，开启后每个音源各写一条音轨。 */
-    private fun cycleSeparate() {
-        options = options.copy(separateAudioTracks = !options.separateAudioTracks)
-    }
-
-    private fun cycleDelay() {
-        val values = listOf(0, 3, 5, 10)
-        val index = values.indexOf(options.startDelaySeconds).takeIf { it >= 0 } ?: 0
-        options = options.copy(startDelaySeconds = values[(index + 1) % values.size])
     }
 
     private fun button(label: String, accent: Boolean = false): TextView =

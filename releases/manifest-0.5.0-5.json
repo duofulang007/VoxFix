@@ -1,0 +1,11 @@
+{
+  "versionCode": 5,
+  "versionName": "0.5.0",
+  "date": "2026-11-15",
+  "changelog": "二级页统一外壳；弧线一键恢复；外壳视觉 v2 与交互动效；开发者工具与用户界面分离。",
+  "apkSizeBytes": 456641342,
+  "apkSha256": "b6dec4062d93133017c8ab7d5d82b6cba2ffc8ace82142d9ed4174a5e8996e4c",
+  "apkUrls": [
+    "https://github.com/duofulang007/VoxFix/releases/download/v0.5.0/VoxFix-0.5.0.apk"
+  ]
+}

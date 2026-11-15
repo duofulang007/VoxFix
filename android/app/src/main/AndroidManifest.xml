@@ -10,7 +10,11 @@
     <!-- 应用内更新：下载完成后调系统安装器；运行时还需用户开「安装未知应用」appops。 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
-    <application android:label="VoxFix 输入法" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:theme="@style/Theme.VoxFix" android:allowBackup="false" android:supportsRtl="true">
+    <!-- hasFragileUserData：卸载时由系统额外确认「是否保留应用数据」。
+         词库、剪贴板、设置都是用户自己攒出来的，误删一次就是几个月白干；
+         保留后重装同包名同签名即可读回。系统不弹这个对话框的机型，靠应用内
+         「本地备份」（Download/VoxFix/）兜底。 -->
+    <application android:name=".VoxFixApp" android:label="VoxFix 输入法" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:theme="@style/Theme.VoxFix" android:allowBackup="false" android:hasFragileUserData="true" android:supportsRtl="true">
         <service android:name=".VoxFixImeService" android:label="VoxFix" android:permission="android.permission.BIND_INPUT_METHOD" android:exported="true">
             <intent-filter><action android:name="android.view.InputMethod" /></intent-filter>
             <meta-data android:name="android.view.im" android:resource="@xml/input_method" />
@@ -30,6 +34,8 @@
         <activity android:name=".DictionaryActivity" android:exported="false" />
         <activity android:name=".AboutActivity" android:exported="false" />
         <activity android:name=".LicenseActivity" android:exported="false" />
+        <activity android:name=".BackupActivity" android:exported="false" />
+        <activity android:name=".PcSyncActivity" android:exported="false" />
         <provider android:name=".MemeContentProvider" android:authorities="${applicationId}.memes" android:exported="false" android:grantUriPermissions="true" />
         <provider android:name=".ScreenshotContentProvider" android:authorities="${applicationId}.screenshots" android:exported="false" android:grantUriPermissions="true" />
         <provider android:name=".update.UpdateApkProvider" android:authorities="${applicationId}.updateapk" android:exported="false" android:grantUriPermissions="true" />
@@ -41,13 +47,18 @@
                 <action android:name="local.voxfix.debug.PC_STATE" />
             </intent-filter>
         </receiver>
-        <activity android:name=".HomeActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
+        <!-- singleTask：外壳是唯一入口，桌面图标、通知、adb 与快捷方式都必须回到同一个实例。
+             默认 standard 下每次外部拉起都会新建一个 HomeActivity，实测同一任务栈里堆到 4 个，
+             每个都持有四页 View 树与更新监听；返回键还要连按多次才能退出。 -->
+        <activity android:name=".HomeActivity" android:exported="true" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <!-- 保留为「试用与自检」页：真机测试脚本以 am start -n .MainActivity 拉起它，故不加 LAUNCHER。 -->
-        <activity android:name=".MainActivity" android:exported="true" android:label="试用与自检" />
+        <!-- 保留为「试用键盘」：真机测试脚本以 am start -n .MainActivity 拉起它，故不加 LAUNCHER。
+             开发者内容在 DevToolsActivity，入口仅在开发者模式开启后出现。 -->
+        <activity android:name=".MainActivity" android:exported="true" android:label="试用键盘" />
+        <activity android:name=".DevToolsActivity" android:exported="false" android:label="开发者工具" />
     </application>
 </manifest>

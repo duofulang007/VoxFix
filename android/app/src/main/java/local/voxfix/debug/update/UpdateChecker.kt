@@ -6,7 +6,9 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import local.voxfix.debug.AdbWireless
+import local.voxfix.debug.DevMode
 import local.voxfix.debug.DownloadEngine
 import java.io.File
 import java.net.HttpURLConnection
@@ -53,8 +55,12 @@ object UpdateChecker {
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor { Thread(it, "voxfix-update") }
     private val cancelled = AtomicBoolean(false)
+    /** 一次只跑一个检查任务：连点直接忽略，避免把单线程队列堆满、十几秒后才回结果。 */
+    private val checking = AtomicBoolean(false)
     @Volatile private var status = Status(Phase.HIDDEN)
     private var listener: ((Status) -> Unit)? = null
+
+    private const val TAG = "VoxFixUpdate"
 
     fun observe(l: ((Status) -> Unit)?) {
         listener = l
@@ -102,40 +108,70 @@ object UpdateChecker {
 
     // ───── 检查 ─────
 
-    /** manual=true 时失败也回调（UI 给反馈）；false 时失败静默回落 HIDDEN。回调总在主线程。 */
+    /**
+     * manual=true 时失败也回调（UI 给反馈）；false 时失败静默回落 HIDDEN。回调总在主线程。
+     *
+     * 多源全失败时给用户的是人话（「更新源上还没有发布版本」/「连不上更新服务器」），
+     * 每个源的原始异常只进 logcat —— 把 socket 原文糊到 toast 上是之前最受诟病的一处。
+     */
     fun check(context: Context, manual: Boolean, done: ((Status) -> Unit)? = null) {
         val app = context.applicationContext
+        if (!checking.compareAndSet(false, true)) return
         cancelled.set(false)
         val urls = manifestUrls(app)
         worker.execute {
-            val result = runCatching {
+            val failures = ArrayList<String>()
+            var manifest: UpdateCore.Manifest? = null
+            try {
                 if (urls.isEmpty()) error("未配置更新源")
-                var lastError: Exception? = null
-                var manifest: UpdateCore.Manifest? = null
                 for (url in urls) {
                     try {
                         // debug 构建放行局域网 http 联调源；正式源仍强制 https。
                         manifest = UpdateCore.parse(fetchText(url), isDebugBuild(app))
+                            ?: throw IllegalStateException("清单格式无效")
                         break
                     } catch (error: Exception) {
-                        lastError = error
+                        failures += "${sourceLabel(url)}：${error.message ?: error.javaClass.simpleName}"
                         if (cancelled.get()) throw error
                     }
                 }
-                val m = manifest ?: throw (lastError ?: IllegalStateException("更新清单不可用"))
-                if (!UpdateCore.isNewer(m.versionCode, currentVersionCode(app))) error("已是最新版本")
-                prefs(app).edit().putLong(KEY_LAST_CHECK, System.currentTimeMillis()).apply()
-                m
+            } catch (error: Exception) {
+                failures += error.message ?: "检查中断"
+            } finally {
+                checking.set(false)
             }
-            val next = result.fold(
-                onSuccess = { m -> Status(Phase.AVAILABLE, m) },
-                onFailure = { error ->
-                    if (manual) Status(Phase.FAILED, message = error.message ?: "检查失败")
-                    else Status(Phase.HIDDEN)
+
+            val found = manifest
+            val next = when {
+                found == null -> {
+                    Log.w(TAG, "检查更新失败：${failures.joinToString("；")}")
+                    if (manual) Status(Phase.FAILED, message = summarize(failures)) else Status(Phase.HIDDEN)
                 }
-            )
+                !UpdateCore.isNewer(found.versionCode, currentVersionCode(app)) -> {
+                    prefs(app).edit().putLong(KEY_LAST_CHECK, System.currentTimeMillis()).apply()
+                    Status(Phase.HIDDEN, found)
+                }
+                else -> {
+                    prefs(app).edit().putLong(KEY_LAST_CHECK, System.currentTimeMillis()).apply()
+                    Status(Phase.AVAILABLE, found)
+                }
+            }
             main.post { publish(next); done?.invoke(next) }
         }
+    }
+
+    /** 把多源失败折成一句人话；细节留给 logcat 的 VoxFixUpdate。 */
+    private fun summarize(failures: List<String>): String = when {
+        failures.isEmpty() -> "检查更新失败"
+        failures.any { it.contains("404") } -> "更新源上还没有发布版本"
+        else -> "连不上更新服务器，请检查网络"
+    }
+
+    /** 源的人话标签：不把 IP、端口和 socket 原文暴露到用户可读的提示里。 */
+    private fun sourceLabel(url: String): String = when {
+        url.contains("github.com", ignoreCase = true) -> "GitHub"
+        url.startsWith("http://127.0.0.1") || url.startsWith("http://localhost") -> "本机联调"
+        else -> "局域网联调"
     }
 
     private fun manifestUrls(context: Context): List<String> {
@@ -144,9 +180,9 @@ object UpdateChecker {
         if (configured != null) return configured
         return buildList {
             if (RELEASE_MANIFEST.isNotEmpty()) add(RELEASE_MANIFEST)
-            if (isDebugBuild(context)) {
-                // GitHub 直连在国内常被掐断（真机实测 unexpected end of stream）。
-                // debug 构建按序回退：loopback（USB reverse）→ 电脑助手推送过的局域网地址。
+            // 回环与局域网联调源只在开发者模式开启时参与：普通使用时它们必然连不上，
+            // 白等 6 秒连接超时，还会把 socket 原文带进检查结果（真机实测过）。
+            if (isDebugBuild(context) && DevMode.enabled(context)) {
                 add(LOOPBACK_MANIFEST)
                 AdbWireless.pcAddresses(context).forEach { add("http://$it:18080/manifest.json") }
             }

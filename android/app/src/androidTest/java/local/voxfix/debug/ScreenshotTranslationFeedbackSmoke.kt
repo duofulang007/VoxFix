@@ -22,7 +22,7 @@ internal object ScreenshotTranslationFeedbackSmoke {
         override fun available()=true
     }
     fun run(test:Instrumentation) {
-        val preferences=ScreenTextSettingsActivity.preferences(test.targetContext)
+        val preferences=ScreenTextPrefs.file(test.targetContext)
         val oldSource=preferences.getString("translate.source",null)
         val oldTarget=preferences.getString("translate.target",null)
         try {

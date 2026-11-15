@@ -114,6 +114,22 @@ function closeLocalEditor(keepDraft=false){if(!localInput&&!clipSearch)return;
   if(localInput===memeInput)nativeIme?.searchFocus?.(false);if(clipSearch){nativeIme?.searchFocus?.(false);const host=clipSearch.target==='host'?state:clipSearch.inputs.host;Object.assign(state,{language:host.language,layout:host.layout});clipSearch=null;}if(state.voice){if(keepDraft)preserveVoice(state.voice);else cancelVoice();}if(keepDraft&&!quoteEditor&&localInput===$('snippet-content'))snippetDraft={edit:snippetEdit,text:localInput.value};state.comp=null;context='';learningChain=[];associatedWords=[];editor=hostEditor;localInput=null;snippetDialog.append(snippetForm);localPanel.replaceChildren();localPanel.hidden=true;if(quoteEditor){snippetForm.querySelector('button[type=submit]').textContent='保存';snippetForm.querySelector('.note').hidden=false;if(snippetDialog.open)snippetDialog.close();}}
 const nativeSettings=nativeIme?document.createElement('dialog'):null;
 if(nativeSettings){nativeSettings.className='snippet-dialog settings-dialog';nativeSettings.setAttribute('aria-label','键盘设置');const close=document.createElement('button');close.className='settings-back';close.textContent='‹ 返回键盘';close.onclick=()=>nativeSettings.close();nativeSettings.append(close,$('custom-panel'));document.body.append(nativeSettings);}
+// 本地备份恢复：keyboard/layout 属于设置，这里覆盖 localStorage 后，下面的既有读取会自动用上；
+// snippets 属于数据，合并放在 clips/phraseGroups 定义之后（见下方 pendingMirror?.snippets 块）。
+// 另外 WebView 只在加载时执行一次顶层代码，恢复发生在运行中的话顶层这次永远等不到——
+// 所以原生还会在每次键盘弹出（updateClipboard）时检查标记并调 voxfixApplyPendingMirror 推送。
+let pendingMirror=null;
+if(nativeIme&&typeof nativeIme.takePendingMirror==='function'){try{
+  const raw=nativeIme.takePendingMirror();
+  if(raw){
+    pendingMirror=JSON.parse(raw);
+    if(pendingMirror.keyboard)try{localStorage.setItem('voxfix-keyboard-v1',JSON.stringify(pendingMirror.keyboard));}catch{}
+    if(pendingMirror.layout)try{localStorage.setItem('voxfix-layout-v1',JSON.stringify(pendingMirror.layout));}catch{}
+  }
+}catch{pendingMirror=null;}}
+// 按 key 防抖 400ms：persist() 在拖动键盘高度/字号时会连续调用，直接落盘会拖慢滑动。
+const mirrorTimers={};
+const mirrorPref=(key,value)=>{try{clearTimeout(mirrorTimers[key]);mirrorTimers[key]=setTimeout(()=>{try{nativeIme?.mirrorPref?.(key,JSON.stringify(value));}catch{/* 镜像失败不影响本机保存 */}},400);}catch{/* 无定时器环境时放弃镜像，本机 localStorage 仍然正常 */}};
 let settings = structuredClone(defaults);
 try { const stored = localStorage.getItem('voxfix-layout-v1'); if (stored) {const saved=JSON.parse(stored);settings=settingsFrom(saved);localStorage.setItem('voxfix-layout-v1',JSON.stringify({...saved,...keyboardGeometry,rememberInput:true}));} } catch { /* Keep malformed or unwritable saved data untouched. */ }
 if(nativeIme&&!settings.toolbar.includes('menu'))settings.toolbar.unshift('menu');
@@ -226,7 +242,7 @@ function finishClipboardEditor(apply){
   const prior=quoteEditor;closeLocalEditor();quoteEditor=null;state.comp=prior.comp;state.language=prior.language;state.layout=prior.layout;context=prior.context;associatedWords=prior.associatedWords;referencePopup=prior.referencePopup;referenceMatches=prior.referenceMatches;clipReference=prior.clipReference;referenceWanted=prior.referenceWanted;candidateRestoreScroll=prior.candidateScroll;render();
 }
 try{const saved=JSON.parse(localStorage.getItem('voxfix-keyboard-v1'));if(saved){if(['9','26'].includes(saved.layout))state.layout=saved.layout;if(['zh','en'].includes(saved.language))state.language=saved.language;if(typeof saved.night==='boolean')state.night=saved.night;}}catch{}
-function saveKeyboard(){const source=localInput===$('snippet-content')?(quoteEditor||snippetEdit):null;const preference=clipSearch?(clipSearch.target==='host'?state:clipSearch.inputs.host):source||fieldPreference||state;try{localStorage.setItem('voxfix-keyboard-v1',JSON.stringify({layout:preference.layout,language:preference.language,night:state.night}));return true;}catch{return false;}}
+function saveKeyboard(){const source=localInput===$('snippet-content')?(quoteEditor||snippetEdit):null;const preference=clipSearch?(clipSearch.target==='host'?state:clipSearch.inputs.host):source||fieldPreference||state;try{const value={layout:preference.layout,language:preference.language,night:state.night};localStorage.setItem('voxfix-keyboard-v1',JSON.stringify(value));mirrorPref('keyboard',value);return true;}catch{return false;}}
 let clips = ['有没有免费的', 'https://example.com/演示链接', 'obsidian'];
 // 常用语按官方结构分组存放：每个分组有自己的名称和条目。
 let phraseGroups = [{name:'常用语',items:['常用语示例','example@example.com','稍后回复你']}];
@@ -238,6 +254,53 @@ try{const saved=JSON.parse(localStorage.getItem('voxfix-snippets-v1'));if(saved)
 let pcClips=[];
 try{const saved=JSON.parse(localStorage.getItem('voxfix-pc-clips-v1'));if(Array.isArray(saved))pcClips=saved.filter(item=>typeof item==='string');}catch{/* 损坏数据视为无标记 */}
 const savePcClips=()=>{try{localStorage.setItem('voxfix-pc-clips-v1',JSON.stringify(pcClips.slice(-200)));}catch{/* 空间不足时标记不入盘，渲染回退为无标签 */}};
+// 备份恢复：clips 与常用语按并集合并——本机已有的排前面，备份里的补在后面，
+// 不做覆盖，避免「恢复旧备份反而吃掉新复制的条目」。合并规则抽成 applyPendingSnippets：
+// 顶层启动合并与原生每次键盘弹出推送（voxfixApplyPendingMirror）走同一条规则。
+function applyPendingSnippets(src){try{
+  const incoming=validateSnippets((src.clips||[]).filter(text=>typeof text==='string'));
+  clips=validateSnippets([...incoming,...clips]);
+  for(const group of migratePhraseGroups(src.phrases)){
+    const target=phraseGroups.find(item=>item.name===group.name);
+    if(target)target.items=[...new Set([...group.items,...target.items])];
+    else phraseGroups.push({name:group.name,items:[...group.items]});
+  }
+  if(Array.isArray(src.pcClips))pcClips=[...new Set([...src.pcClips,...pcClips])].slice(-200);
+  saveSnippets();savePcClips();
+}catch{/* 数据损坏就跳过，绝不打断键盘 */}}
+if(pendingMirror?.snippets)applyPendingSnippets(pendingMirror.snippets);
+// 恢复设置在运行中的键盘上也要能生效：原生在键盘每次弹出时把待应用镜像推过来，
+// 之前这里只合并 snippets，layout（工具栏顺序/键盘几何/外观）与 keyboard（9/26 键、语言、夜间）
+// 被整段忽略——卸载重装后「词库回来了、工具栏顺序没回来」就是这么产生的。
+function applyPendingKeyboard(src){try{
+  if(!src)return;
+  if(['9','26'].includes(src.layout))state.layout=src.layout;
+  if(['zh','en'].includes(src.language))state.language=src.language;
+  if(typeof src.night==='boolean')state.night=src.night;
+  try{localStorage.setItem('voxfix-keyboard-v1',JSON.stringify({layout:state.layout,language:state.language,night:state.night}));}catch{}
+}catch{}}
+function applyPendingLayout(src){
+  try{
+    const next=settingsFrom(src);
+    if(nativeIme&&!next.toolbar.includes('menu'))next.toolbar.unshift('menu');
+    settings=next;
+    try{localStorage.setItem('voxfix-layout-v1',JSON.stringify({...src,...keyboardGeometry,rememberInput:true}));}catch{}
+  }catch{/* 布局损坏就保留当前设置，不能把键盘打空 */}
+}
+globalThis.voxfixApplyPendingMirror=(raw)=>{try{
+  const parsed=JSON.parse(raw);
+  if(parsed.snippets)applyPendingSnippets(parsed.snippets);
+  if(parsed.keyboard)applyPendingKeyboard(parsed.keyboard);
+  if(parsed.layout)applyPendingLayout(parsed.layout);
+  render();
+}catch{/* 坏数据直接忽略 */}};
+// 每次键盘创建后镜像一次当前状态：用户可能从没动过设置，不主动写的话备份里
+// 会缺 keyboard/layout，恢复后外观就回默认了。延迟到首帧之后再落盘，不占启动时间。
+if(nativeIme)setTimeout(()=>{
+  try{mirrorPref('snippets',{clips,phrases:phraseGroups,pcClips});}catch{}
+  try{mirrorPref('keyboard',{layout:state.layout,language:state.language,night:state.night});}catch{}
+  try{mirrorPref('layout',settings);}catch{}
+},800);
 function currentGroup(){return phraseGroups[Math.min(state.clipGroup,phraseGroups.length-1)]||phraseGroups[0];}
 function currentList(){return state.clipTab==='images'?[]:state.clipTab==='clipboard'?clips:currentGroup().items;}
 function allPhrases(){return flattenPhrases(phraseGroups);}
@@ -1146,7 +1209,7 @@ function paintClipManagement(previous){
     overlay.motion.onfinish=()=>{if(overlay.classList.contains('closing'))overlay.remove();};
   }else if(overlay.motion.playbackRate<0){overlay.motion.playbackRate=1;overlay.motion.play();}
 }
-function saveSnippets(){try{localStorage.setItem('voxfix-snippets-v1',JSON.stringify({clips,phrases:phraseGroups,clipSignature:/^[a-f0-9]{64}$/.test(nativeClipSignature)?nativeClipSignature:''}));updatePhraseOptions();return true;}catch{const message='未能保存，请检查可用空间后重试';if(localInput===$('snippet-content'))$('snippet-error').textContent=message;else toast(message);return false;}}
+function saveSnippets(){try{localStorage.setItem('voxfix-snippets-v1',JSON.stringify({clips,phrases:phraseGroups,clipSignature:/^[a-f0-9]{64}$/.test(nativeClipSignature)?nativeClipSignature:''}));mirrorPref('snippets',{clips,phrases:phraseGroups,pcClips});updatePhraseOptions();return true;}catch{const message='未能保存，请检查可用空间后重试';if(localInput===$('snippet-content'))$('snippet-error').textContent=message;else toast(message);return false;}}
 function setSnippetList(list,tab=state.clipTab,group=currentGroup()){const previous=tab==='clipboard'?clips:group.items;if(tab==='clipboard')clips=list;else group.items=list;if(saveSnippets())return true;if(tab==='clipboard')clips=previous;else group.items=previous;return false;}
 function openSnippet(index=-1){
   splitRequest++;
@@ -1202,7 +1265,7 @@ const menuGlyphs={symbols:'符',numbers:'123',edit:'编',lexicon:'典',custom:'�
 const moduleParents={scroll:'screentext',watermark:'screentext',record:'screentext',translate:'screentext'};
 // screen-text（开启/关闭截图工具）恒可见：模块关掉后它是键盘内唯一的恢复入口；
 // 截图设置与自检随 screentext 隐藏。词典/表情/剪贴板/电脑同步已不设模块开关，功能常开。
-const menuModule={'screen-text-fix':'screentext','screenshot-settings':'screentext'};
+const menuModule={'screenshot-settings':'screentext'};
 let moduleSnapshot;
 function modulesSnapshot(){
   if(moduleSnapshot!==undefined)return moduleSnapshot;
@@ -1226,6 +1289,17 @@ globalThis.voxfixScreenTextRepaired=(code)=>{
   else toast('恢复失败，请到系统设置手动开启');
   render();
 };
+// 「一键恢复」现在走完整恢复：开模块、写开关、重建窗口或重绑。
+globalThis.voxfixScreenTextReset=(code)=>{
+  screenTextFix=null;
+  if(code==='OK')toast('截图入口已恢复');
+  else if(code==='BUSY')toast('正在截图或录屏，结束后再试');
+  else if(code==='WINDOW_MISSING')toast('服务已连上，窗口仍未出现：再点一次恢复');
+  else if(code==='DENIED')toast('缺少写入安全设置权限，请到系统设置手动开启');
+  else if(code==='DISABLED'){toast('服务未启用，正在打开系统设置');nativeIme?.screenTextSettings?.();}
+  else toast('恢复失败，请到系统设置手动开启');
+  render();
+};
 // 装机/系统回收会把无障碍服务标成 Crashed 且不再自动重绑，圆弧就静默消失；菜单里给出可见状态与修复入口。
 function screenTextHealthLabel(){
   if(!nativeIme?.screenTextHealth)return '截图工具 · 未连接';
@@ -1233,6 +1307,9 @@ function screenTextHealthLabel(){
     const h=JSON.parse(nativeIme.screenTextHealth()||'{}');
     if(h.code==='OK')return '截图工具正常';
     if(h.code==='ARC_OFF')return '圆弧已关闭 · 修复';
+    if(h.code==='MODULE_OFF')return '屏幕取字已关闭 · 修复';
+    if(h.code==='WINDOW_MISSING')return '圆弧未显示 · 修复';
+    if(h.code==='BUSY')return '截图或录屏中';
     if(h.code==='DISABLED')return '截图工具未启用 · 修复';
     return '截图工具异常 · 修复';
   }catch{return '截图工具 · 修复';}
@@ -1242,7 +1319,10 @@ function screenTextFixSheet(){
   // 健康态不再裸 toast：给出状态与下一步（打开设置 / 关闭），不自动跳页。
   if(h.code==='OK')return `<div class="clip-menu-backdrop" data-action="screen-text-fix-close"><div class="clip-menu-sheet" role="dialog" aria-modal="true" aria-label="截图工具自检"><div class="clip-menu-title">截图工具自检</div><div class="clip-fix-note">服务正常：无障碍服务已连接，圆弧入口就绪。</div>${button('打开截图设置','screen-text-settings','','row')}${button('关闭','screen-text-fix-close','','clip-menu-cancel')}</div></div>`;
   const detail=h.code==='DISABLED'?'无障碍服务未启用：到系统设置里打开「VoxFix 截图工具」。'
-    :h.code==='ARC_OFF'?'服务正常，但圆弧开关是关的：点「一键恢复」或直接开启截图工具。'
+    :h.code==='ARC_OFF'?'服务正常，但圆弧开关是关的：点「一键恢复」会重新开启并挂上。'
+    :h.code==='MODULE_OFF'?'「屏幕取字」模块被关掉了：一键恢复会重新开启它。'
+    :h.code==='WINDOW_MISSING'?'服务在，但圆弧窗口没有挂出来：一键恢复会重建窗口。'
+    :h.code==='BUSY'?'正在截图或录屏：结束后再恢复，避免打断当前任务。'
     :h.code==='CRASHED'?'服务被系统停掉了（装机、系统回收都会这样）：点「一键恢复」重新绑定。'
     :'状态未知：先点「一键恢复」，仍失败再去系统设置手动开启。';
   return `<div class="clip-menu-backdrop" data-action="screen-text-fix-close"><div class="clip-menu-sheet" role="dialog" aria-modal="true" aria-label="截图工具自检"><div class="clip-menu-title">截图工具自检</div><div class="clip-fix-note">${esc(detail)}</div>${button('一键恢复','screen-text-repair','','row')}${button('去系统设置','screen-text-settings','','row')}${button('取消','screen-text-fix-close','','clip-menu-cancel')}</div></div>`;
@@ -1564,7 +1644,7 @@ function render() {
 }
 function feedback(message) { $('feedback').textContent=message; }
 function toast(message) { clearTimeout(toastTimer); $('toast').textContent=message; $('toast').hidden=false; toastTimer=setTimeout(()=>$('toast').hidden=true,2600); feedback(message); }
-function persist() { updatePhraseOptions();try { localStorage.setItem('voxfix-layout-v1',JSON.stringify(settings)); } catch { feedback('当前浏览器不能保存设置，可以导出文件留存。'); } }
+function persist() { updatePhraseOptions();try { localStorage.setItem('voxfix-layout-v1',JSON.stringify(settings));mirrorPref('layout',settings); } catch { feedback('当前浏览器不能保存设置，可以导出文件留存。'); } }
 function applyText(result, end=result.cursor) { editor.value=result.text; editor.setSelectionRange(result.cursor,end); editor.scrollTop=editor.scrollHeight;paintReferenceHighlight(); $('send').innerHTML=icon(editor.value?'send':'voice'); if(nativeIme&&!localInput&&state.comp)nativeIme.compose(state.comp.raw); }
 function insert(value) { state.clipCandidate='';englishPrefix='';if(nativeIme&&state.comp){commit(currentCandidates()[0]||state.comp.raw);if(state.comp)commit(state.comp.raw);}learningChain=[];state.comp=null;rememberContext(value);if(nativeIme&&!localInput){nativeIme.commit(value);applyText({text:'',cursor:0});return;} applyText(replaceRange(editor.value,editor.selectionStart,editor.selectionEnd,value)); }
 function commit(word) {
@@ -1819,8 +1899,11 @@ function activate(action,value='',prefix=englishPrefix) {
     case 'trial-close': trialNotice=null;trialNoticeAction=null;render();return;
     case 'trial-retry': { const again=trialNoticeAction; trialNotice=null;trialNoticeAction=null; if(again)activate(again); return; }
     case 'screen-text-repair': {
-      if(!nativeIme?.screenTextRepair){toast('截图工具修复需在安卓输入法中运行。');return;}
-      toast('正在恢复截图入口…');nativeIme.screenTextRepair();return;
+      if(!nativeIme?.screenTextReset){
+        if(!nativeIme?.screenTextRepair){toast('截图工具修复需在安卓输入法中运行。');return;}
+        toast('正在恢复截图入口…');nativeIme.screenTextRepair();return;
+      }
+      toast('正在恢复截图入口…');nativeIme.screenTextReset();return;
     }
     case 'screen-text-settings': screenTextFix=null;render();if(nativeIme?.screenTextSettings)nativeIme.screenTextSettings();else toast('需在安卓输入法中运行。');return;
     case 'screenshot-settings': if(nativeIme?.openScreenTextSettings){nativeIme.openScreenTextSettings();return;} trialNotice={title:'截图工具栏设置',detail:'需在安卓输入法里打开：本页是键盘试用页，没有原生桥接。'};trialNoticeAction='screenshot-settings';render();return;

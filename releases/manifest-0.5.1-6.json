@@ -1,0 +1,11 @@
+{
+  "versionCode": 6,
+  "versionName": "0.5.1",
+  "date": "2026-11-15",
+  "changelog": "本地备份：词库、语音词典与剪贴板图片存到下载目录，卸载不丢；检查更新的失败提示改为可读文案。",
+  "apkSizeBytes": 456766562,
+  "apkSha256": "6bf96b4565570f7cafd1a0437a0442e120cac088dc3eb13ee4e4c800e8ebcfa3",
+  "apkUrls": [
+    "https://github.com/duofulang007/VoxFix/releases/download/v0.5.1/VoxFix-0.5.1.apk"
+  ]
+}

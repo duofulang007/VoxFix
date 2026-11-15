@@ -186,8 +186,18 @@ internal object ScreenRecordingGeometry {
     private fun even(value: Int): Int = (value / 2 * 2).coerceAtLeast(16)
 }
 
-internal class ScreenRecordingPreferences(context: Context) {
-    private val prefs = context.getSharedPreferences("voxfix-recording", Context.MODE_PRIVATE)
+/** 录屏设置条的结构（纯函数，供 UI 与单测共用）：主行最多 4 项，其余进「更多」。 */
+internal object ScreenRecordingChips {
+    fun primary(hasAudio: Boolean): List<String> = buildList {
+        add("格式"); add("清晰度"); if (hasAudio) add("声音"); add("更多")
+    }
+
+    fun more(animated: Boolean): List<String> = buildList {
+        if (animated) add("循环"); add("文件夹"); add("恢复默认")
+    }
+}
+
+internal class ScreenRecordingPreferences(context: Context) {    private val prefs = context.getSharedPreferences("voxfix-recording", Context.MODE_PRIVATE)
 
     fun load(): ScreenRecordingOptions {
         val defaults = ScreenRecordingOptions()
@@ -196,12 +206,14 @@ internal class ScreenRecordingPreferences(context: Context) {
                 .getOrDefault(defaults.format),
             clarity = runCatching { ScreenRecordingOptions.Clarity.valueOf(prefs.getString("clarity", null) ?: defaults.clarity.name) }
                 .getOrDefault(defaults.clarity),
-            frameRate = prefs.getInt("frameRate", defaults.frameRate).coerceIn(5, 60),
-            quality = prefs.getInt("quality", defaults.quality).coerceIn(0, 100),
+            // 帧率 / 质量 / 分轨 / 延迟已从界面下线：一律用内置默认值，
+            // 键与 save() 保留，避免以后接回 UI 时丢掉用户旧设置。
+            frameRate = defaults.frameRate,
+            quality = defaults.quality,
             microphone = prefs.getBoolean("microphone", defaults.microphone),
             systemAudio = prefs.getBoolean("systemAudio", defaults.systemAudio),
-            separateAudioTracks = prefs.getBoolean("separateAudioTracks", defaults.separateAudioTracks),
-            startDelaySeconds = prefs.getInt("startDelay", defaults.startDelaySeconds).coerceIn(0, 30),
+            separateAudioTracks = defaults.separateAudioTracks,
+            startDelaySeconds = defaults.startDelaySeconds,
             animatedClarity = runCatching {
                 ScreenRecordingOptions.Clarity.valueOf(prefs.getString("animatedClarity", null) ?: defaults.animatedClarity.name)
             }.getOrDefault(defaults.animatedClarity).takeIf { it in ScreenRecordingOptions.AnimatedClarities }

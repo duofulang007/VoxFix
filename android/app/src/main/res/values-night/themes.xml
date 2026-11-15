@@ -8,5 +8,15 @@
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:windowAnimationStyle">@style/VoxFixWindowAnimation</item>
+    </style>
+
+    <style name="VoxFixWindowAnimation">
+        <item name="android:activityOpenEnterAnimation">@anim/vx_open_enter</item>
+        <item name="android:activityOpenExitAnimation">@anim/vx_open_exit</item>
+        <item name="android:activityCloseEnterAnimation">@anim/vx_close_enter</item>
+        <item name="android:activityCloseExitAnimation">@anim/vx_close_exit</item>
+        <item name="android:windowEnterAnimation">@anim/vx_open_enter</item>
+        <item name="android:windowExitAnimation">@anim/vx_open_exit</item>
     </style>
 </resources>

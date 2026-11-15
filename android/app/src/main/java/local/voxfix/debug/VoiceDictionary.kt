@@ -49,6 +49,28 @@ internal class VoiceDictionary(entries: List<Entry> = emptyList()) {
     companion object {
         const val HOTWORD_LIMIT = 64
 
+        /**
+         * 按词语把 [incoming] 合并进 [target]：已有词只补错法，不覆盖原有错法与范围。
+         * 返回 (新增词数, 新增错法数)。编辑器的「导入词典」与本地备份恢复共用这一套规则。
+         */
+        fun mergeInto(target: VoiceDictionary, incoming: VoiceDictionary): Pair<Int, Int> {
+            var added = 0
+            var merged = 0
+            for (source in incoming.entries) {
+                val existing = target.entries.firstOrNull { it.word.equals(source.word, ignoreCase = true) }
+                if (existing == null) {
+                    target.entries.add(Entry(source.word, source.variants.toMutableList(), source.context))
+                    added++
+                } else {
+                    if (existing.context.isEmpty()) existing.context = source.context
+                    for (variant in source.variants) {
+                        if (existing.variants.none { it == variant }) { existing.variants.add(variant); merged++ }
+                    }
+                }
+            }
+            return added to merged
+        }
+
         private fun quote(value: String): String {
             val text = StringBuilder("\"")
             for (char in value) when {

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 关闭二级页：淡出 + 3% 下沉，方向与进入相反。 -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:interpolator="@android:interpolator/accelerate_cubic">
+    <alpha
+        android:duration="170"
+        android:fromAlpha="1"
+        android:toAlpha="0" />
+    <translate
+        android:duration="190"
+        android:fromYDelta="0"
+        android:toYDelta="3%p" />
+</set>

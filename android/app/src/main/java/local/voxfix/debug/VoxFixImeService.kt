@@ -102,7 +102,7 @@ open class VoxFixImeService : InputMethodService() {
 
     private fun prewarmEngine() {
         if (destroyed || busy || TranslateRuntime.occupiesMemory()) return
-        // 语音模块关闭后不再预热 229MB 模型（docs/App外壳设计-2026-11-13.md §4.3）。
+        // 语音模块关闭后不再预热 229MB 模型（docs/界面精简与菜单收敛-2026-11-14.md §2）。
         if (!Modules.isOn(this, Module.VOICE)) return
         voiceWarmup.execute { synchronized(this) {
             if (!TranslateRuntime.occupiesMemory()) runCatching { warmEngine() }.onFailure { Log.w("VoxFix", "IME_ENGINE_WARM_FAILED", it) }
@@ -223,7 +223,15 @@ open class VoxFixImeService : InputMethodService() {
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         TranslateRuntime.trim(level)
-        if (level >= TRIM_MEMORY_BACKGROUND && !busy) {
+        // TRIM_MEMORY_RUNNING_LOW(10)/CRITICAL(15) 的数值比 TRIM_MEMORY_BACKGROUND(40) 小，
+        // 只判 `>= BACKGROUND` 会漏掉「进程还在前台、但系统内存已经很紧」这两档——恰恰是
+        // 最需要 229MB 语音模型让路的时候，之前反而不会释放，只能等 LMK 杀进程。
+        // UI_HIDDEN(20) 故意不在此列：键盘刚收起就丢模型，再弹出要重读约 2.4 秒，
+        // 那一步仍交给 5 分钟空闲计时。
+        val pressured = level == TRIM_MEMORY_RUNNING_LOW ||
+            level == TRIM_MEMORY_RUNNING_CRITICAL ||
+            level >= TRIM_MEMORY_BACKGROUND
+        if (pressured && !busy) {
             main.removeCallbacks(releaseVoice)
             releaseVoice.run()
             DesktopSpeechEngine.releaseSharedRescue()
@@ -517,6 +525,16 @@ open class VoxFixImeService : InputMethodService() {
         val eventKey = "$text\u0000${clip?.description?.timestamp ?: 0L}"
         val signature = java.security.MessageDigest.getInstance("SHA-256").digest(eventKey.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
         script("globalThis.voxfixClipboard?.(${JSONObject.quote(text)},${JSONObject.quote(signature)},$explicit,$fromPc)")
+        // 备份恢复的待应用数据：WebView 顶层代码只在加载时执行，恢复发生在运行中的话
+        // 那次合并永远不会跑。updateClipboard 是每次键盘弹出的必经点，在这里查一次标记
+        // 并把待应用数据推给前端合并——恢复后打开一次键盘即可生效。
+        runCatching {
+            if (WebMirror.pending(filesDir)) {
+                WebMirror.consume(filesDir)?.let { payload ->
+                    script("globalThis.voxfixApplyPendingMirror?.(${JSONObject.quote(payload)})")
+                }
+            }
+        }
     }
 
     override fun onStartInput(info: EditorInfo, restarting: Boolean) {
@@ -1016,6 +1034,16 @@ open class VoxFixImeService : InputMethodService() {
         }
         @JavascriptInterface fun ready() { main.post { if (web === owner) { currentInputEditorInfo?.let { startKeyboard(it, false) } ?: resetKeyboard(); Log.i(selTag, "page-ready anchor=$selectionLockedAnchor drag=${selectionDrag.anchor},${selectionDrag.head}"); if (selectionLockedAnchor >= 0 && selectionDrag.anchor >= 0) { script("globalThis.voxfixSelectionOrigin?.()"); reportSelection(selectionDrag.anchor, selectionDrag.head);  }; updateClipboard(); if (pinyinFailed) script("globalThis.voxfixPinyinReady?.(true)") } } }
         @JavascriptInterface fun pinyinReady() = pinyin != null
+
+        /**
+         * 前端 localStorage 的镜像。WebView 的 localStorage 是压缩过的 leveldb，原生读不出来，
+         * 因此让前端在保存时把同一份 JSON 交过来，备份才带得上文本剪贴板与常用语。
+         * 白名单与体积限制在 [WebMirror] 里。
+         */
+        @JavascriptInterface fun mirrorPref(key: String, json: String) = WebMirror.write(filesDir, key, json)
+
+        /** 备份恢复后的一次性下发：交完即删标记，同一份数据不会被应用第二遍。 */
+        @JavascriptInterface fun takePendingMirror(): String? = WebMirror.consume(filesDir)
         @JavascriptInterface fun lexiconMigrate(value: String): String = lexiconReply {
             require(value.toByteArray().size <= PersonalLexicon.MAX_BYTES)
             lexicon.migrateWeb(org.json.JSONArray(value))
@@ -1042,9 +1070,15 @@ open class VoxFixImeService : InputMethodService() {
         @JavascriptInterface fun openLexicon() { main.post {
             if (web === owner) startActivity(android.content.Intent(this@VoxFixImeService, LexiconActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
         } }
-        @JavascriptInterface fun screenTextEnabled() = ScreenTextSettingsActivity.enabled(this@VoxFixImeService)
+        @JavascriptInterface fun screenTextEnabled() = ScreenTextPrefs.arcEnabled(this@VoxFixImeService)
         @JavascriptInterface fun toggleScreenText() = editInput {
-            ScreenTextSettingsActivity.toggle(this@VoxFixImeService)
+            val next = ScreenTextPrefs.toggleArc(this@VoxFixImeService)
+            // 首次开启且无障碍从没启用过时，直接带用户去本服务的设置条目；
+            // 之后系统会自己 bind，服务里的偏好监听负责把弧线挂出来。
+            if (next && !ScreenTextHealth.listed(this@VoxFixImeService)) {
+                startActivity(android.content.Intent(this@VoxFixImeService, ScreenTextSettingsActivity::class.java)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
             script("globalThis.voxfixScreenTextChanged?.()")
         }
         @JavascriptInterface fun openScreenTextSettings() { main.post {
@@ -1106,6 +1140,12 @@ open class VoxFixImeService : InputMethodService() {
         @JavascriptInterface fun screenTextRepair() {
             ScreenTextHealth.repair(this@VoxFixImeService) { outcome ->
                 main.post { if (!destroyed && web === owner) script("globalThis.voxfixScreenTextRepaired?.(${JSONObject.quote(outcome.name)})") }
+            }
+        }
+        /** 完整恢复：模块/开关/位置 + 窗口重建或重绑。前端「一键恢复」走这里。 */
+        @JavascriptInterface fun screenTextReset() {
+            ArcRecovery.reset(this@VoxFixImeService) { result ->
+                main.post { if (!destroyed && web === owner) script("globalThis.voxfixScreenTextReset?.(${JSONObject.quote(result.name)})") }
             }
         }
         @JavascriptInterface fun screenTextSettings() = main.post {
@@ -1184,7 +1224,7 @@ open class VoxFixImeService : InputMethodService() {
         }
         @JavascriptInterface fun copy(value: String) { if (value.length <= 10000) editInput { getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("VoxFix", value)); updateClipboard() } }
         @JavascriptInterface fun voiceReady() = !destroyed
-        /** 模块开关快照，供键盘前端隐藏入口（见 docs/App外壳设计-2026-11-13.md §4.3）。 */
+        /** 模块开关快照，供键盘前端隐藏入口（见 docs/界面精简与菜单收敛-2026-11-14.md §2）。 */
         @JavascriptInterface fun modules(): String = Modules.json(this@VoxFixImeService)
         @JavascriptInterface fun isLandscape() = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         @JavascriptInterface fun maxKeyboardHeight() = if (isLandscape()) (resources.configuration.screenHeightDp - 64).coerceIn(258, 550) else 550

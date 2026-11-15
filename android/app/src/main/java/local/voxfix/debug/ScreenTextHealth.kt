@@ -22,7 +22,7 @@ import java.util.concurrent.Executors
  * 3. 把结论以 JSON 交给键盘前端，让用户点一下就能恢复。
  */
 internal object ScreenTextHealth {
-    enum class Outcome { OK, DENIED, DISABLED, REVERTED, FAILED }
+    enum class Outcome { OK, BUSY, DENIED, DISABLED, REVERTED, FAILED }
 
     private const val CACHE_MS = 2_000L
     private const val DETACH_WAIT_MS = 600L
@@ -62,9 +62,9 @@ internal object ScreenTextHealth {
     /** 无障碍与输入法同进程，桥接对象在就说明服务实例还活着。 */
     fun live(): Boolean = ScreenshotEditorHost.available()
 
-    fun arcEnabled(context: Context): Boolean = ScreenTextSettingsActivity.enabled(context)
+    fun arcEnabled(context: Context): Boolean = ScreenTextPrefs.arcEnabled(context)
 
-    /** OK / CRASHED / DISABLED / ARC_OFF，附带三个原始判据，前端据此给一句话。 */
+    /** OK / CRASHED / DISABLED / ARC_OFF / MODULE_OFF / WINDOW_MISSING / BUSY，附带原始判据。 */
     fun status(context: Context): String {
         val now = System.currentTimeMillis()
         if (now - cachedAt < CACHE_MS) return cached
@@ -72,14 +72,21 @@ internal object ScreenTextHealth {
         val bound = bound(context)
         val live = live()
         val arc = arcEnabled(context)
+        val module = Modules.isOn(context, Module.SCREENTEXT)
+        val busy = ScreenTextService.busyForRepair()
+        val attached = ScreenTextService.windowVisible()
         val code = when {
             !listed -> "DISABLED"
             !bound && !live -> "CRASHED"
+            !module -> "MODULE_OFF"
             !arc -> "ARC_OFF"
+            busy -> "BUSY"
+            !attached -> "WINDOW_MISSING"
             else -> "OK"
         }
         val json = JSONObject().put("code", code).put("listed", listed).put("bound", bound)
-            .put("live", live).put("arc", arc).toString()
+            .put("live", live).put("arc", arc).put("module", module)
+            .put("busy", busy).put("attached", attached).toString()
         cached = json
         cachedAt = now
         return json
@@ -87,12 +94,17 @@ internal object ScreenTextHealth {
 
     fun invalidate() { cachedAt = 0L; cached = "" }
 
-    /** 打开系统无障碍设置页；用户手动启用是唯一不依赖 WRITE_SECURE_SETTINGS 的路。 */
+    /** 深链到本服务的无障碍条目；失败再退回通用列表（用户少找一步）。 */
     fun openSystemSettings(context: Context) {
-        runCatching {
-            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        }.onFailure { android.util.Log.w("VoxFix", "SCREEN_TEXT_SETTINGS_FAILED", it) }
+        val detail = Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS")
+            .putExtra(Intent.EXTRA_COMPONENT_NAME, component(context))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(detail) }.onFailure {
+            runCatching {
+                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }.onFailure { error -> android.util.Log.w("VoxFix", "SCREEN_TEXT_SETTINGS_FAILED", error) }
+        }
     }
 
     /**
@@ -102,6 +114,11 @@ internal object ScreenTextHealth {
     fun repair(context: Context, done: (Outcome) -> Unit) {
         val app = context.applicationContext
         val main = Handler(Looper.getMainLooper())
+        // 重绑会走 onDestroy，正在录屏/截图时会把用户的成果中断；先拒绝，由调用方提示稍后再试。
+        if (ScreenTextService.busyForRepair()) {
+            main.post { done(Outcome.BUSY) }
+            return
+        }
         worker.execute {
             val outcome = runCatching {
                 if (!AdbWireless.granted(app)) return@runCatching Outcome.DENIED

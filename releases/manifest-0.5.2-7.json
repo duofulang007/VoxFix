@@ -1,0 +1,11 @@
+{
+  "versionCode": 7,
+  "versionName": "0.5.2",
+  "date": "2026-11-15",
+  "changelog": "本地备份补「从文件恢复」：卸载重装后系统会收回旧文件所有权，手动选中下载目录里的 zip 即可恢复。",
+  "apkSizeBytes": 454052338,
+  "apkSha256": "48dfea004f2dab4aeedac792d4cc52f9bee431a922dabd1493676f0bbb8d12a1",
+  "apkUrls": [
+    "https://github.com/duofulang007/VoxFix/releases/download/v0.5.2/VoxFix-0.5.2.apk"
+  ]
+}

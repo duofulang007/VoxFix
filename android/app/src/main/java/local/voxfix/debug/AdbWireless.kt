@@ -85,11 +85,11 @@ internal object AdbWireless {
 
     /** 电脑端每次连着就会推一次自己的 IPv4 列表（逗号分隔），可能同时有以太网和 Wi-Fi。 */
     fun rememberPc(context: Context, addresses: String) {
-        ScreenTextSettingsActivity.preferences(context).edit().putString(KEY_PC_ADDRS, addresses.trim()).apply()
+        ScreenTextPrefs.file(context).edit().putString(KEY_PC_ADDRS, addresses.trim()).apply()
     }
 
     fun pcAddresses(context: Context): List<String> =
-        ScreenTextSettingsActivity.preferences(context).getString(KEY_PC_ADDRS, "")
+        ScreenTextPrefs.file(context).getString(KEY_PC_ADDRS, "")
             .orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }
 
     /** 电脑端伴生工具是否在这条链路上；只回一行 VOXFIX。阻塞调用，必须放后台线程。 */

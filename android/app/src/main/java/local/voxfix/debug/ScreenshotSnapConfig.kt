@@ -58,6 +58,16 @@ internal class ScreenshotSnapConfig(
                 gridSize = Double.fromBits(prefs.getLong("gridSize", DEFAULT_GRID_SIZE.toRawBits()))
                     .takeIf { it in MIN_GRID_SIZE..MAX_GRID_SIZE } ?: DEFAULT_GRID_SIZE
             )
+
+        /**
+         * 手机端两种吸附互斥：开网格即关对象，反之亦然；两个都关就是"不吸附"。
+         * 纯函数，页面与单测共用，避免互斥规则散落在 View 里。
+         */
+        fun applyMode(grid: Boolean, objects: Boolean): Pair<Boolean, Boolean> = when {
+            grid -> false to true
+            objects -> true to false
+            else -> false to false
+        }
     }
 }
 

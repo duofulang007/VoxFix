@@ -5,8 +5,11 @@ import android.graphics.drawable.GradientDrawable
 import local.voxfix.debug.R
 
 /**
- * 设计令牌。取值见 docs/App外壳设计-2026-11-13.md §2：
- * Snow Shot 1.1.8 的 Ant Design Qt 令牌，深色由 values-night 提供，切换跟随系统。
+ * 设计令牌 v2（2026-11-15）：与键盘前端同源的中性墨色 + 钢蓝 accent。
+ *
+ * 旧版本直接用 Snow Shot 的 Ant Design Qt 取值（#1677FF / #F5F5F5 / 1dp 描边白卡），
+ * 那是桌面后台管理面板的语言，落在手机上像调试工具；v2 换成
+ * 「暖灰画布 + 无描边白卡 + 单一 accent + 低饱和语义色」，并补齐 soft 底供胶囊/图标砖使用。
  */
 class Palette(
     val bg: Int,
@@ -22,9 +25,13 @@ class Palette(
     val primary: Int,
     val primaryHover: Int,
     val primarySoft: Int,
+    val onPrimary: Int,
     val danger: Int,
+    val dangerSoft: Int,
     val success: Int,
-    val warning: Int
+    val successSoft: Int,
+    val warning: Int,
+    val warningSoft: Int
 )
 
 object VoxFixTheme {
@@ -42,9 +49,13 @@ object VoxFixTheme {
         primary = context.getColor(R.color.vox_primary),
         primaryHover = context.getColor(R.color.vox_primary_hover),
         primarySoft = context.getColor(R.color.vox_primary_soft),
+        onPrimary = context.getColor(R.color.vox_on_primary),
         danger = context.getColor(R.color.vox_danger),
+        dangerSoft = context.getColor(R.color.vox_danger_soft),
         success = context.getColor(R.color.vox_success),
-        warning = context.getColor(R.color.vox_warning)
+        successSoft = context.getColor(R.color.vox_success_soft),
+        warning = context.getColor(R.color.vox_warning),
+        warningSoft = context.getColor(R.color.vox_warning_soft)
     )
 
     fun dp(context: Context, value: Int): Int =
@@ -61,4 +72,12 @@ object VoxFixTheme {
             cornerRadius = radiusPx
             if (strokePx > 0) setStroke(strokePx, strokeColor)
         }
+
+    /** 渐变底：只给首页 hero 用，起止都落在同名色系里，暗色下同样成立。 */
+    fun gradient(start: Int, end: Int, radiusPx: Float) = GradientDrawable(
+        GradientDrawable.Orientation.TL_BR, intArrayOf(start, end)
+    ).apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = radiusPx
+    }
 }

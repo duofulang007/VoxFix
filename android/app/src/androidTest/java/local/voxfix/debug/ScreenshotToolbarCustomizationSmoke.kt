@@ -12,7 +12,7 @@ object ScreenshotToolbarCustomizationSmoke {
             override fun getSharedPreferences(name: String, mode: Int) =
                 super.getSharedPreferences(if (name == "screen-text") "screenshot-toolbar-smoke" else name,mode)
         }
-        val preferences = ScreenTextSettingsActivity.preferences(context)
+        val preferences = ScreenTextPrefs.file(context)
         val previous = preferences.getString(ScreenshotToolbarEditor.KEY, null)
         try {
             var failure: Throwable? = null

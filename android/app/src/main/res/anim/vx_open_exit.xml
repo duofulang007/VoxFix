@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 被盖住的首页：略暗并轻微后退，制造层级而不是硬切。 -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:interpolator="@android:interpolator/decelerate_cubic">
+    <alpha
+        android:duration="180"
+        android:fromAlpha="1"
+        android:toAlpha="0.82" />
+</set>

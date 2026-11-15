@@ -546,11 +546,11 @@ class ScreenshotCaptureOverlay(
     private var translationComplete = false
     private var pair = TranslatePair(
         TranslateLanguage.fromPreference(
-            ScreenTextSettingsActivity.preferences(context).getString("translate.source", null),
+            ScreenTextPrefs.file(context).getString("translate.source", null),
             TranslateLanguage.AUTO
         ),
         TranslateLanguage.fromPreference(
-            ScreenTextSettingsActivity.preferences(context).getString("translate.target", null),
+            ScreenTextPrefs.file(context).getString("translate.target", null),
             TranslateLanguage.ZH
         )
     ).normalized()
@@ -1285,14 +1285,11 @@ class ScreenshotCaptureOverlay(
         selector.cancelConstruction()
         selector.regionShape = value
         regionShape = value
-        context.getSharedPreferences("screenshot-region-type", Context.MODE_PRIVATE).edit()
-            .putString("screenshot_selection/region_type", value.id).apply()
+        ScreenshotRegionTypePrefs.save(context, value)
         sync()
     }
 
-    private fun loadRegionShapePreference() = ScreenshotRegionShape.fromId(
-        context.getSharedPreferences("screenshot-region-type", Context.MODE_PRIVATE)
-            .getString("screenshot_selection/region_type", null))
+    private fun loadRegionShapePreference() = ScreenshotRegionTypePrefs.shape(context)
 
     /** A finished custom shape lands here: replace the selection, or feed the armed operation. */
     private fun commitRegionShape(vertices: List<PointF>, shape: ScreenshotRegionShape) {
@@ -2078,7 +2075,7 @@ class ScreenshotCaptureOverlay(
     }
 
     private fun persistPair() {
-        ScreenTextSettingsActivity.preferences(context).edit()
+        ScreenTextPrefs.file(context).edit()
             .putString("translate.source", pair.source.preference)
             .putString("translate.target", pair.target.preference)
             .apply()

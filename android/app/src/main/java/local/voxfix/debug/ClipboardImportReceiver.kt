@@ -39,7 +39,7 @@ class ClipboardImportReceiver : BroadcastReceiver() {
         // 心跳：电脑端每 5 秒推一次"通道还活着 + 走的是 USB 还是 Wi-Fi"。
         // 手机只存时间戳，15 秒没心跳就当断开 —— 拔线/换网/电脑休眠都会让心跳自己停。
         if (intent.action == ACTION_PC_STATE) {
-            ScreenTextSettingsActivity.preferences(context).edit()
+            ScreenTextPrefs.file(context).edit()
                 .putLong("pc.beat", android.os.SystemClock.elapsedRealtime())
                 .putString("pc.transport", intent.getStringExtra("transport").orEmpty())
                 .putString("pc.clip", intent.getStringExtra("clip").orEmpty())
@@ -49,9 +49,17 @@ class ClipboardImportReceiver : BroadcastReceiver() {
         val pending = goAsync()
         worker.execute {
             try {
+                // 2026-11-15：手机侧「电脑同步」页的两个开关在这里真正生效。
+                // 总开关关闭时文本与图片都不收；图片开关只挡图片。临时文件一律删除，
+                // 不接收也不让文件堆在私有目录里。
                 when (intent.action) {
-                    ACTION_TEXT -> importText(context, intent)
-                    ACTION_IMAGE -> importImage(context, intent)
+                    ACTION_TEXT ->
+                        if (PcSyncPrefs.enabled(context)) importText(context, intent)
+                        else discard(context, intent, "总开关关闭")
+                    ACTION_IMAGE ->
+                        if (!PcSyncPrefs.enabled(context)) discard(context, intent, "总开关关闭")
+                        else if (!PcSyncPrefs.images(context)) discard(context, intent, "图片接收关闭")
+                        else importImage(context, intent)
                 }
             } catch (error: Exception) {
                 android.util.Log.w("VoxFix", "CLIPBOARD_IMPORT_FAILED", error)
@@ -59,6 +67,13 @@ class ClipboardImportReceiver : BroadcastReceiver() {
                 pending.finish()
             }
         }
+    }
+
+    /** 开关关闭：电脑已经把文件推进来了，这里负责删掉，返回日志便于区分「没收到」与「主动不收」。 */
+    private fun discard(context: Context, intent: Intent, reason: String) {
+        val file = importFile(context, intent) ?: return
+        file.delete()
+        android.util.Log.i("VoxFix", "CLIPBOARD_IMPORT_SKIPPED $reason")
     }
 
     private fun importText(context: Context, intent: Intent) {

@@ -16,12 +16,12 @@ fun ScreenshotToolbarLayout.inSection(section: ScreenshotToolbarSection) = Scree
 
 object ScreenshotToolbarPreferences {
     fun load(context: android.content.Context, section: ScreenshotToolbarSection): ScreenshotToolbarLayout {
-        val preferences = ScreenTextSettingsActivity.preferences(context)
+        val preferences = ScreenTextPrefs.file(context)
         val stored = preferences.getString(section.key,null) ?: preferences.getString(ScreenshotToolbarEditor.KEY,null)
         return ScreenshotToolbarLayout.decode(stored).inSection(section)
     }
     fun save(context: android.content.Context, section: ScreenshotToolbarSection, layout: ScreenshotToolbarLayout) {
-        val preferences = ScreenTextSettingsActivity.preferences(context)
+        val preferences = ScreenTextPrefs.file(context)
         // Populate both sections in one write before removing the legacy combined layout.
         val other = ScreenshotToolbarSection.values().first { it != section }
         val preserved = load(context,other)

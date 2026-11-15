@@ -17,7 +17,7 @@ import android.widget.TextView
 
 /** Independent Android implementation of Snow Shot 1.1.8's spatial toolbar editor. */
 class ScreenshotToolbarEditor(context: Context, private val section: ScreenshotToolbarSection? = null) : LinearLayout(context) {
-    private val preferences = ScreenTextSettingsActivity.preferences(context)
+    private val preferences = ScreenTextPrefs.file(context)
     private var config = section?.let { ScreenshotToolbarPreferences.load(context,it) }
         ?: ScreenshotToolbarLayout.decode(preferences.getString(KEY,null))
     private var preview: ScrollView? = null

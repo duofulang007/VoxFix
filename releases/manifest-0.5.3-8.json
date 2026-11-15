@@ -1,0 +1,11 @@
+{
+  "versionCode": 8,
+  "versionName": "0.5.3",
+  "date": "2026-11-15",
+  "changelog": "备份补全：文本剪贴板、常用语、键盘外观与常用设置一并备份；「从文件恢复」直接落在备份目录。",
+  "apkSizeBytes": 454136404,
+  "apkSha256": "696042f0b41732273f75c04dfa1b21f9bbdede1f96c2de88537c45e44a3d6c66",
+  "apkUrls": [
+    "https://github.com/duofulang007/VoxFix/releases/download/v0.5.3/VoxFix-0.5.3.apk"
+  ]
+}

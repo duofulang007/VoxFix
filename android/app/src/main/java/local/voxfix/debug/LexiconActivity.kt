@@ -4,62 +4,94 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.os.Bundle
-import android.view.WindowInsets
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
 import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.TextView
+import local.voxfix.debug.ui.Palette
+import local.voxfix.debug.ui.VoxFixTheme
+import local.voxfix.debug.ui.VoxFixUi
 import java.util.concurrent.Executors
 
 /** System document picker keeps personal vocabulary out of shared app folders. */
 class LexiconActivity : Activity() {
     private val worker = Executors.newSingleThreadExecutor()
+    private lateinit var palette: Palette
     private lateinit var status: TextView
     private var format = "json"
     private var running = false
-    private val buttons = mutableListOf<Button>()
+    private val actions = mutableListOf<LinearLayout>()
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
         format = state?.getString("format") ?: "json"
-        val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 32, 32, 32) }
-        layout.setOnApplyWindowInsetsListener { view, insets ->
-            val bars = insets.getInsets(WindowInsets.Type.systemBars())
-            view.setPadding(32 + bars.left, 32 + bars.top, 32 + bars.right, 32 + bars.bottom); insets
-        }
-        layout.addView(TextView(this).apply { text = "个人词库与迁移"; textSize = 24f })
-        layout.addView(TextView(this).apply {
-            text = "选词习惯默认保存在本机，长期保留。完整备份用于 VoxFix 换机恢复；通用文本包含词语、空格分隔拼音和词频，其他输入法可能需要转换格式。仅有简拼的记录保留在完整备份中。导入会合并，不清空已有词库。"; textSize = 16f
+        palette = VoxFixTheme.palette(this)
+        status = VoxFixUi.note(this, palette, "")
+
+        setContentView(VoxFixUi.screen(this, palette, "拼音词库", onBack = { finish() }) { col ->
+            val intro = VoxFixUi.card(this, palette)
+            intro.addView(VoxFixUi.head(this, palette, "词库与迁移", "只存本机"))
+            intro.addView(VoxFixUi.note(
+                this, palette,
+                "选词习惯只累积在本机；导入与现有词库合并，不会清空。"
+            ).apply { setPadding(dp(18), 0, dp(18), dp(12)) })
+            col.addView(intro)
+
+            val card = VoxFixUi.card(this, palette)
+            card.addView(actionRow("添加拼音词语", "只影响拼音候选的读音与频率", R.drawable.ic_vx_plus) { addPinyinWord() })
+            card.addView(actionRow("导出完整备份", "换机恢复用，包含简拼记录", R.drawable.ic_vx_download) { exported("json") })
+            card.addView(actionRow("导出通用词库", "词语、拼音与词频，可给其他输入法", R.drawable.ic_vx_storage) { exported("tsv") })
+            card.addView(actionRow("合并导入词库", "与现有词库合并，不清空", R.drawable.ic_vx_upload, divider = false) {
+                startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                    .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain", "text/tab-separated-values", "application/octet-stream")), 2)
+            })
+            col.addView(card)
+
+            col.addView(status)
         })
-        status = TextView(this).apply { textSize = 16f }; layout.addView(status)
-        fun button(label: String, action: () -> Unit) {
-            Button(this).apply { text = label; layout.addView(this); buttons.add(this); setOnClickListener { if (!running) action() } }
-        }
-        button("添加拼音词语") { addPinyinWord() }
-        button("导出完整备份") { export("json") }
-        button("导出通用词库") { export("tsv") }
-        button("合并导入词库") {
-            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
-                .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain", "text/tab-separated-values", "application/octet-stream")), 2)
-        }
-        button("返回") { finish() }
-        setContentView(ScrollView(this).apply { addView(layout) })
-        work { store -> "已保存 ${store.count()} 条拼音词条，选词会自动累积。语音词语与错法在键盘功能菜单的「词典」里编辑；备份不包含录音、剪贴板或正文。" }
+        work { store -> "已保存 ${store.count()} 条拼音词条，选词会自动累积。语音纠错词典在「输入 → 语音纠错词典」里编辑；备份不含录音、剪贴板或正文。" }
     }
-    private fun export(value: String) {
+
+    private fun actionRow(
+        title: String,
+        desc: String,
+        iconRes: Int,
+        divider: Boolean = true,
+        action: () -> Unit
+    ): LinearLayout {
+        val row = VoxFixUi.row(
+            this, palette, title, desc = desc, iconRes = iconRes,
+            chevron = true, divider = divider
+        ) {
+            if (!running) action()
+        }
+        actions.add(row)
+        return row
+    }
+
+    private fun dp(value: Int) = VoxFixTheme.dp(this, value)
+
+    private fun exported(value: String) {
         format = value
         startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
             .setType(if (value == "json") "application/json" else "text/tab-separated-values")
             .putExtra(Intent.EXTRA_TITLE, "voxfix-personal-lexicon-${System.currentTimeMillis()}.$value"), 1)
     }
+
     private fun work(action: (PersonalLexicon) -> String) {
-        running = true; buttons.forEach { it.isEnabled = false }
+        running = true
+        actions.forEach { it.alpha = 0.45f }
         worker.execute {
             val message = try { PersonalLexicon(this).use(action) } catch (error: Exception) { "操作未完成：${error.message ?: "读写失败"}。已有词库保留。" }
-            runOnUiThread { if (!isDestroyed) { running = false; buttons.forEach { it.isEnabled = true }; status.text = message } }
+            runOnUiThread {
+                if (!isDestroyed) {
+                    running = false
+                    actions.forEach { it.alpha = 1f }
+                    status.text = message
+                }
+            }
         }
     }
+
     @Deprecated("Uses the platform document picker")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
@@ -87,25 +119,41 @@ class LexiconActivity : Activity() {
             } else error("未知文件操作")
         }
     }
-    override fun onSaveInstanceState(state: Bundle) { state.putString("format", format); super.onSaveInstanceState(state) }
+
+    override fun onSaveInstanceState(state: Bundle) {
+        state.putString("format", format); super.onSaveInstanceState(state)
+    }
+
     override fun onDestroy() { worker.shutdown(); super.onDestroy() }
 
     private fun addPinyinWord(word: String = "", code: String = "") {
-        val fields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 8, 32, 8) }
-        val target = EditText(this).apply { hint = "中文词语，如：张玥"; setSingleLine(); setText(word); fields.addView(this) }
+        val fields = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+        val target = VoxFixUi.field(this, palette, "中文词语，如：张玥").apply {
+            setSingleLine(); setText(word); fields.addView(this)
+        }
         if (word.isNotEmpty()) target.isEnabled = false
-        val reading = EditText(this).apply { hint = "完整拼音，如：zhang yue"; setSingleLine(); setText(code); fields.addView(this) }
-        fields.addView(TextView(this).apply { text = "只影响拼音候选的读音与频率；语音词语和错法请在功能菜单「词典」里加。" })
-        val dialog = AlertDialog.Builder(this).setTitle("添加拼音词语").setView(fields).setNegativeButton("取消", null).setPositiveButton("保存", null).create()
+        val reading = VoxFixUi.field(this, palette, "完整拼音，如：zhang yue").apply {
+            setSingleLine(); setText(code); fields.addView(this)
+        }
+        fields.addView(VoxFixUi.note(this, palette, "只影响拼音候选的读音与频率；语音词语和错法在「语音纠错词典」里加。")
+            .apply { setPadding(0, dp(10), 0, 0) })
+        val dialog = AlertDialog.Builder(this).setTitle("添加拼音词语").setView(fields)
+            .setNegativeButton("取消", null).setPositiveButton("保存", null).create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val value = target.text.toString().trim(); val pinyin = reading.text.toString().trim()
+                val value = target.text.toString().trim()
+                val pinyin = reading.text.toString().trim()
                 try {
                     require(value.matches(Regex("[\\u3400-\\u9fff]{1,16}"))) { "请填 1 至 16 个汉字" }
                     require(pinyin.matches(Regex("[a-z]+( [a-z]+)*")) && pinyin.split(' ').size == value.length) { "拼音要与字数一致，用小写和空格分隔" }
                     work { store -> store.addPinyinWord(value, pinyin); "已保存，拼音候选会立即包含此词。" }
                     dialog.dismiss()
-                } catch (error: Exception) { target.error = error.message ?: "词语或拼音无效" }
+                } catch (error: Exception) {
+                    target.error = error.message ?: "词语或拼音无效"
+                }
             }
         }
         dialog.show()

@@ -1,21 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 深色：底色 #141414，卡片 8% 白（#1F1F1F），浮层 12% 白（#262626）。 -->
-    <color name="vox_bg">#FF141414</color>
-    <color name="vox_surface">#FF1F1F1F</color>
-    <color name="vox_surface_high">#FF262626</color>
-    <color name="vox_surface_sunken">#FF181818</color>
-    <color name="vox_border">#14FFFFFF</color>
-    <color name="vox_border_strong">#24FFFFFF</color>
-    <color name="vox_text_primary">#D9FFFFFF</color>
-    <color name="vox_text_secondary">#A6FFFFFF</color>
-    <color name="vox_text_tertiary">#73FFFFFF</color>
-    <color name="vox_text_disabled">#40FFFFFF</color>
-    <color name="vox_primary">#FF1677FF</color>
-    <color name="vox_primary_hover">#FF4096FF</color>
-    <color name="vox_primary_soft">#FF15325B</color>
-    <color name="vox_danger">#FFFF4D4F</color>
-    <color name="vox_success">#FF52C41A</color>
-    <color name="vox_warning">#FFFAAD14</color>
+    <!-- 深色：冷调墨底 + 3 层表面；accent 提亮到 #7CB6E0 保证暗底可读。 -->
+    <color name="vox_bg">#FF0E1216</color>
+    <color name="vox_surface">#FF161C22</color>
+    <color name="vox_surface_high">#FF1F272F</color>
+    <color name="vox_surface_sunken">#FF121820</color>
+    <color name="vox_border">#1FFFFFFF</color>
+    <color name="vox_border_strong">#2EFFFFFF</color>
+    <color name="vox_text_primary">#FFE9EFF5</color>
+    <color name="vox_text_secondary">#FFA5B0BB</color>
+    <color name="vox_text_tertiary">#FF79848F</color>
+    <color name="vox_text_disabled">#FF4A545E</color>
+    <color name="vox_primary">#FF7CB6E0</color>
+    <color name="vox_primary_hover">#FF96C8EC</color>
+    <color name="vox_primary_soft">#FF1A2B39</color>
+    <color name="vox_danger">#FFE8907F</color>
+    <color name="vox_danger_soft">#FF2E1B18</color>
+    <color name="vox_success">#FF58C795</color>
+    <color name="vox_success_soft">#FF12291F</color>
+    <color name="vox_warning">#FFE3B369</color>
+    <color name="vox_warning_soft">#FF2C2318</color>
     <color name="vox_scrim">#CC000000</color>
+    <color name="vox_on_primary">#FF0E1216</color>
 </resources>

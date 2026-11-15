@@ -4,138 +4,75 @@ import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.util.Log
-import android.view.WindowInsets
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
-import java.util.concurrent.Executors
-import android.content.Intent
-import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.LinearLayout
+import local.voxfix.debug.ui.Palette
+import local.voxfix.debug.ui.VoxFixTheme
+import local.voxfix.debug.ui.VoxFixUi
 
+/**
+ * 「试用键盘」：普通用户唯一的试打入口。
+ *
+ * 只有输入框与一句提示，不含录音、电平、识别结果等调试内容——那些在开发者工具里。
+ * 真机脚本依赖这里的输入框（contentDescription）与 `voxfix.autofocus` extra。
+ */
 class MainActivity : Activity() {
-    private val worker = Executors.newSingleThreadExecutor()
-    private var engine: DesktopSpeechEngine? = null
-    private val releaseVoice = Runnable { worker.execute { if (!active) { engine?.close(); engine = null } } }
-    @Volatile private var microphoneCapture: PcmCapture? = null
-    private var original = ""
-    private lateinit var status: TextView
-    private lateinit var result: TextView
-    private lateinit var level: TextView
-    private lateinit var start: Button
-    private lateinit var stop: Button
-    @Volatile private var active = false
-    @Volatile private var recordingRequested = false
-    @Volatile private var visible = false
+    private lateinit var palette: Palette
+    private lateinit var field: EditText
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
-        val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 32, 32, 32) }
-        layout.setOnApplyWindowInsetsListener { view, insets ->
-            val bars = insets.getInsets(WindowInsets.Type.systemBars())
-            view.setPadding(32 + bars.left, 32 + bars.top, 32 + bars.right, 32 + bars.bottom); insets
+        palette = VoxFixTheme.palette(this)
+        field = VoxFixUi.field(this, palette, "在这里试用 VoxFix 输入法", multiline = true).apply {
+            contentDescription = "VoxFix输入法试用框"
+            minLines = 4
         }
-        fun label(text: String, size: Float) = TextView(this).apply { this.text = text; textSize = size; layout.addView(this) }
-        label("VoxFix 真机验证", 26f)
-        Button(this).apply { text = "启用 VoxFix 输入法"; layout.addView(this); setOnClickListener { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) } }
-        Button(this).apply { text = "系统选择输入法"; layout.addView(this); setOnClickListener { getSystemService(InputMethodManager::class.java).showInputMethodPicker() } }
-        Button(this).apply { text = "个人词库与迁移"; layout.addView(this); setOnClickListener { startActivity(Intent(this@MainActivity, LexiconActivity::class.java)) } }
-        Button(this).apply { text = "截图工具设置"; layout.addView(this); setOnClickListener { startActivity(Intent(this@MainActivity, ScreenTextSettingsActivity::class.java)) } }
-        Button(this).apply { text = "允许麦克风"; layout.addView(this); setOnClickListener { requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1) } }
-        val trial = EditText(this).apply { hint = "在这里试用 VoxFix 输入法"; contentDescription = "VoxFix输入法试用框"; layout.addView(this) }
-        label("中文语音输入 · 本地离线\n停止后自动补全标点。", 16f)
-        status = label("正在加载离线模型…", 18f)
-        level = label("未录音", 16f)
-        start = Button(this).apply { text = "开始录音"; layout.addView(this); setOnClickListener { requestRecording() } }
-        stop = Button(this).apply { text = "停止并补全标点"; isEnabled = false; layout.addView(this); setOnClickListener { stopRecording() } }
-        result = TextView(this).apply {
-            text = state?.getString("transcript") ?: ""; textSize = 22f; setTextIsSelectable(true)
-        }
-        layout.addView(ScrollView(this).apply { addView(result) }, LinearLayout.LayoutParams(-1, 0, 1f))
-        setContentView(layout)
-        status.text = "可启用输入法 · 语音模型按需加载"
+
+        setContentView(VoxFixUi.screen(this, palette, "试用键盘", onBack = { finish() }) { col ->
+            val card = VoxFixUi.card(this, palette)
+            card.addView(VoxFixUi.head(this, palette, "试打", "键盘已就绪"))
+            card.addView(field, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(148)
+            ).apply {
+                leftMargin = dp(16); rightMargin = dp(16)
+            })
+            card.addView(VoxFixUi.note(
+                this, palette,
+                "长按空格说话，松手定稿并自动补标点。识别与语音都在本机完成。"
+            ).apply { setPadding(dp(16), dp(8), dp(16), dp(12)) })
+            col.addView(card)
+
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                val mic = VoxFixUi.card(this, palette)
+                mic.addView(VoxFixUi.row(
+                    this, palette, "允许麦克风",
+                    desc = "语音输入首次使用需要授权",
+                    value = "未授权",
+                    valueColor = palette.warning,
+                    chevron = true, divider = false
+                ) {
+                    requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
+                })
+                col.addView(mic)
+            }
+        })
+
         // 首页向导第 3 步带 voxfix.autofocus 进来时自动聚焦试用框，键盘直接就绪；
         // 真机脚本 `am start` 不带 extra，默认路径不变。
         if (intent.getBooleanExtra("voxfix.autofocus", false)) {
-            trial.requestFocus()
-            trial.post {
+            field.requestFocus()
+            field.post {
                 getSystemService(InputMethodManager::class.java)
-                    ?.showSoftInput(trial, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                    ?.showSoftInput(field, InputMethodManager.SHOW_IMPLICIT)
             }
         }
     }
 
-    private fun ui(action: () -> Unit) = runOnUiThread { if (!isDestroyed) action() }
-    private fun report(message: String, error: Throwable) {
-        Log.e("VoxFix", message, error)
-        ui { status.text = "$message：${error.message ?: error.javaClass.simpleName}"; level.text = "未录音" }
-    }
-    private fun requestRecording() {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
-        } else beginRecording()
-    }
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, grants: IntArray) {
         super.onRequestPermissionsResult(code, permissions, grants)
-        if (code == 1) status.text = if (grants.firstOrNull() == PackageManager.PERMISSION_GRANTED)
-            "麦克风权限已允许，请点击开始录音" else "麦克风权限被拒绝，请重新点击开始录音授权"
+        if (code == 1) recreate()
     }
-    private fun beginRecording() {
-        if (active) return
-        start.removeCallbacks(releaseVoice)
-        active = true; recordingRequested = true; start.isEnabled = false; stop.isEnabled = true
-        status.text = "正在开启麦克风"; result.text = ""
-        worker.execute {
-            try {
-                if (!visible) return@execute
-                Log.i("VoxFix", "CAPTURE_REQUESTED")
-                val text = DesktopSpeechEngine.record(
-                    { engine ?: DesktopSpeechEngine(assets).also { engine = it } },
-                    { value -> ui { result.text = value } },
-                    { rms ->
-                        ui { level.text = "麦克风音量：$rms / 100" }
-                    }, { recordingRequested && visible }, { !visible },
-                    { ui { if (recordingRequested && visible) status.text = "实时识别 · 点击停止结束" } },
-                    { capture -> microphoneCapture = capture; if (!recordingRequested || !visible) capture?.stop() })
-                Log.i("VoxFix", "CAPTURE_FINISHED characters=${text.length}")
-                original = text
-                if (visible) ui {
-                    result.text = text
-                    status.text = if (text.isEmpty()) "录音结束，未识别到文字" else "已保留识别原文"
-                }
-            } catch (error: Throwable) {
-                if (error is DesktopVoiceFailure) ui { result.text = error.retained }
-                report("录音或识别失败，已收到文字保留", error)
-            }
-            finally {
-                active = false; recordingRequested = false
-                ui {
-                    start.isEnabled = true; stop.isEnabled = false; level.text = "未录音"
-                    if (visible) start.postDelayed(releaseVoice, 30_000)
-                }
-            }
-        }
-    }
-    private fun stopRecording() {
-        recordingRequested = false
-        microphoneCapture?.stop()
-        if (active) { stop.isEnabled = false; status.text = "正在结束录音…" }
-    }
-    override fun onStart() { super.onStart(); visible = true }
-    override fun onStop() {
-        visible = false; stopRecording()
-        start.removeCallbacks(releaseVoice)
-        worker.execute { engine?.close(); engine = null }
-        super.onStop()
-    }
-    override fun onSaveInstanceState(state: Bundle) { state.putString("transcript", if (active && original.isNotEmpty()) original else result.text.toString()); super.onSaveInstanceState(state) }
-    override fun onDestroy() {
-        start.removeCallbacks(releaseVoice)
-        worker.execute { engine?.close(); engine = null }
-        worker.shutdown()
-        super.onDestroy()
-    }
+
+    private fun dp(value: Int) = VoxFixTheme.dp(this, value)
 }

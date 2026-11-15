@@ -1,0 +1,11 @@
+{
+  "versionCode": 9,
+  "versionName": "0.5.4",
+  "date": "",
+  "changelog": "稳定性修复：从桌面或通知反复进入不再叠出多个首页；系统内存紧张时主动释放语音模型，输入法不再被系统清掉。",
+  "apkSizeBytes": 454087154,
+  "apkSha256": "7065160c90ff4f5ac63aa744345bf7a0f749e30187fd1c3d77488032ef2d743e",
+  "apkUrls": [
+    "https://github.com/duofulang007/VoxFix/releases/download/v0.5.4/VoxFix-0.5.4.apk"
+  ]
+}

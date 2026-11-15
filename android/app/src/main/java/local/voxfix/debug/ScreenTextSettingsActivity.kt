@@ -1,167 +1,171 @@
 package local.voxfix.debug
 
 import android.app.Activity
-import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import android.provider.Settings
-import android.widget.Button
+import android.view.View
 import android.widget.LinearLayout
-import android.widget.Switch
 import android.widget.TextView
-import android.view.WindowInsets
+import local.voxfix.debug.ui.Palette
+import local.voxfix.debug.ui.VoxFixTheme
+import local.voxfix.debug.ui.VoxFixUi
 
+/**
+ * 「截图与取字」设置：只放用户需要的东西——权限、工具栏布局、离线翻译。
+ *
+ * 弧线开关在屏幕页（同一偏好的唯一入口）；对象/网格吸附与无线调试属高级能力，
+ * 已移到开发者工具。这里不再有 900 字开发说明与参数滑杆。
+ */
 class ScreenTextSettingsActivity : Activity() {
-    private lateinit var status: TextView
-    private lateinit var wirelessStatus: TextView
+    private lateinit var palette: Palette
     private lateinit var translateStatus: TextView
-    private lateinit var translateDownload: Button
-    private lateinit var translateDelete: Button
+    private lateinit var downloadRow: LinearLayout
+    private lateinit var deleteRow: LinearLayout
+
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
-        window.decorView.setBackgroundColor(0xFFFFFFFF.toInt())
+        palette = VoxFixTheme.palette(this)
         TranslateRuntime.init(this)
-        val pad = (24 * resources.displayMetrics.density).toInt()
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad, pad, pad)
-            setOnApplyWindowInsetsListener { view, insets ->
-                val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-                view.setPadding(pad + bars.left, pad + bars.top, pad + bars.right, pad + bars.bottom); insets
+        translateStatus = VoxFixUi.text(this, "", 13f, palette.textSecondary)
+        downloadRow = LinearLayout(this)
+        deleteRow = LinearLayout(this)
+
+        setContentView(VoxFixUi.screen(this, palette, "截图与取字", onBack = { finish() }) { col ->
+            val perm = VoxFixUi.card(this, palette)
+            perm.addView(VoxFixUi.head(this, palette, "权限"))
+            val state = a11yState()
+            perm.addView(VoxFixUi.row(
+                this, palette, "屏幕取字权限",
+                desc = "取字、截图与录屏依赖系统无障碍",
+                iconRes = R.drawable.ic_vx_lock,
+                trailing = VoxFixUi.pill(this, palette, state.first, toneFor(state.second)),
+                chevron = true,
+                divider = false
+            ) { ScreenTextHealth.openSystemSettings(this) })
+            col.addView(perm)
+
+            val shot = VoxFixUi.card(this, palette)
+            shot.addView(VoxFixUi.head(this, palette, "截图"))
+            shot.addView(VoxFixUi.row(
+                this, palette, "工具栏布局",
+                desc = "拖动编排工具，分绘制与截图两栏",
+                iconRes = R.drawable.ic_vx_crop,
+                chevron = true,
+                divider = false
+            ) { startActivity(Intent(this, ScreenshotToolbarSettingsActivity::class.java)) })
+            col.addView(shot)
+
+            val translate = VoxFixUi.card(this, palette)
+            translate.addView(VoxFixUi.head(this, palette, "离线翻译", "腾讯 Hy-MT2 · 本机运行"))
+            translateStatus.setPadding(dp(18), 0, dp(18), dp(6))
+            translate.addView(translateStatus)
+
+            downloadRow = VoxFixUi.row(
+                this, palette, "下载翻译模型",
+                desc = "约 462MB · 首次需要联网",
+                value = "下载",
+                valueColor = palette.primary,
+                iconRes = R.drawable.ic_vx_download,
+                chevron = true
+            ) {
+                if (!Modules.isOn(this, Module.TRANSLATE)) {
+                    android.widget.Toast.makeText(this, "先在功能管理里开启「离线翻译」", android.widget.Toast.LENGTH_SHORT).show()
+                    return@row
+                }
+                TranslateDownloader.start(this) { renderTranslate(it) }
             }
-        }
-        layout.addView(TextView(this).apply { text = "截图工具"; textSize = 24f })
-        layout.addView(Switch(this).apply {
-            text = "显示贴边截图弧线"; textSize = 18f; minHeight = pad * 2
-            isChecked = enabled(this@ScreenTextSettingsActivity)
-            setOnCheckedChangeListener { _, checked -> preferences(this@ScreenTextSettingsActivity).edit().putBoolean("enabled", checked).apply() }
-        })
-        layout.addView(Button(this).apply {
-            text = "截图工具栏布局"
-            setOnClickListener { startActivity(Intent(this@ScreenTextSettingsActivity,ScreenshotToolbarSettingsActivity::class.java)) }
-        })
-        layout.addView(ScreenshotSnapSettings(this))
-        layout.addView(TextView(this).apply {
-            text = "从屏幕边缘的小弧线向内滑，打开截图；长按弧线后可拖动换边和调整高度。\n\n截图后先画框，可拖动框内移动、拖四边或角点调整。可直接保存图片、识别文字或翻译，识别后可复制文字；不会松手就处理。\n\n保存的截图在输入法剪贴板的「图片」页管理，支持预览、插入聊天、复制、裁剪另存和批量删除。不自动写入系统相册。直接插入需要聊天应用支持接收图片。\n\n只在主动截图时获取画面，未保存的画面退出或闲置90秒后释放；闲置或旋转时保留已识别文字和完成的译文，锁屏或主动退出时清理。安全页面无法截图。\n\n首次使用需手动启用「VoxFix 截图工具」无障碍服务，它独立于键盘运行。"
-            textSize = 16f; setPadding(0, pad, 0, pad)
-        })
-        layout.addView(TextView(this).apply { text = "无线调试（弧柄）"; textSize = 20f; setPadding(0, pad, 0, 0) })
-        wirelessStatus = TextView(this).apply { textSize = 16f; setPadding(0, dp(6), 0, dp(6)) }
-        layout.addView(wirelessStatus)
-        layout.addView(Button(this).apply {
-            text = "复制一次性授权命令"
-            setOnClickListener {
-                val command = "adb shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS"
-                getSystemService(android.content.ClipboardManager::class.java)
-                    .setPrimaryClip(android.content.ClipData.newPlainText("adb", command))
-                android.widget.Toast.makeText(this@ScreenTextSettingsActivity, "已复制，电脑上执行一次即可", android.widget.Toast.LENGTH_SHORT).show()
-            }
-        })
-        layout.addView(TextView(this).apply {
-            text = "弧柄展开后第二枚按钮就是开关。面板下方常驻一行连接状态：「电脑已连 · USB/Wi-Fi」表示这条通道现在就能用，剪贴板同步也走它；15 秒没有电脑心跳会变成「电脑未连」。\n\n点开关会先体检：没连 Wi-Fi 会自动拉起网络面板；不在同一 Wi-Fi、电脑端没运行都会直接说清楚，不会闷头写入。开启后电脑首次需要配对一次，端口每次随机，电脑侧用 adb mdns services 查。"
-            textSize = 14f; setPadding(0, 0, 0, pad)
-        })
-        layout.addView(TextView(this).apply { text = "离线翻译"; textSize = 20f; setPadding(0, pad, 0, 0) })
-        translateStatus = TextView(this).apply { textSize = 16f; setPadding(0, dp(6), 0, dp(6)) }
-        layout.addView(translateStatus)
-        translateDownload = Button(this).apply {
-            text = "下载翻译模型（约 462MB）"
-            setOnClickListener { TranslateDownloader.start(this@ScreenTextSettingsActivity) { renderTranslate(it) } }
-        }
-        layout.addView(translateDownload)
-        translateDelete = Button(this).apply {
-            text = "删除翻译模型"
-            setOnClickListener {
+            translate.addView(downloadRow)
+
+            deleteRow = VoxFixUi.row(
+                this, palette, "删除翻译模型",
+                desc = "释放约 462MB，随时可重新下载",
+                value = "删除",
+                valueColor = palette.danger,
+                iconRes = R.drawable.ic_vx_trash,
+                iconTone = VoxFixUi.Tone.DANGER,
+                divider = false
+            ) {
                 if (TranslateRuntime.isBusy()) {
-                    android.widget.Toast.makeText(this@ScreenTextSettingsActivity, "翻译进行中，结束后可删除", android.widget.Toast.LENGTH_SHORT).show()
-                    return@setOnClickListener
+                    android.widget.Toast.makeText(this, "翻译进行中，结束后可删除", android.widget.Toast.LENGTH_SHORT).show()
+                    return@row
                 }
                 TranslateDownloader.cancel()
                 TranslateRuntime.releaseNow()
-                TranslateModelStore(this@ScreenTextSettingsActivity).delete()
+                TranslateModelStore(this).delete()
                 renderTranslate(TranslateDownloader.State.Idle)
             }
-        }
-        layout.addView(translateDelete)
-        layout.addView(TextView(this).apply {
-            text = "腾讯 Hy-MT2-1.8B（1.25bit 量化，Apache-2.0）。权重只保存在本机应用目录，不随安装包分发；下载需要联网，下载完成后翻译完全离线。框选后可直接点「翻译」，内部先识别再翻译。语言切换是单行的「自动检测 ⇄ 简体中文」：点任一侧原地展开语言选项，中间箭头可交换方向。保存导出当前显示的原图、识别结果或完整译文。"
-            textSize = 14f; setPadding(0, 0, 0, pad)
+            translate.addView(deleteRow)
+            translate.addView(VoxFixUi.note(
+                this, palette,
+                "下载完成后翻译完全离线；框选后点「翻译」会先识别再翻译。"
+            ).apply { setPadding(dp(18), dp(2), dp(18), dp(12)) })
+            col.addView(translate)
+
+            col.addView(VoxFixUi.hintRow(
+                this, palette, R.drawable.ic_vx_info,
+                "截图结果先进剪贴板，不写入相册；需要留档时在图片页另存。"
+            ))
         })
-        status = TextView(this).apply { textSize = 16f }; layout.addView(status)
-        layout.addView(Button(this).apply {
-            text = "打开无障碍设置"
-            setOnClickListener {
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
-        })
-        layout.addView(Button(this).apply { text = "返回"; setOnClickListener { finish() } })
-        setContentView(android.widget.ScrollView(this).apply { addView(layout) })
     }
+
+    private fun a11yState(): Pair<String, Int> = when {
+        ScreenTextHealth.bound(this) -> "已连接" to palette.success
+        ScreenTextHealth.listed(this) -> "已启用未连接" to palette.warning
+        else -> "未授权" to palette.warning
+    }
+
+    /** 状态色收敛成胶囊语义色，页面不再直接拿 success/warning 画文字。 */
+    private fun toneFor(color: Int): VoxFixUi.Tone = when (color) {
+        palette.success -> VoxFixUi.Tone.SUCCESS
+        palette.warning -> VoxFixUi.Tone.WARNING
+        palette.danger -> VoxFixUi.Tone.DANGER
+        else -> VoxFixUi.Tone.NEUTRAL
+    }
+
+    private fun dp(value: Int) = VoxFixTheme.dp(this, value)
+
     override fun onResume() {
         super.onResume()
         TranslateRuntime.init(this)
         TranslateDownloader.observe { renderTranslate(it) }
-        status.text = if (connected(this)) "无障碍服务已启用" else "尚未启用无障碍服务"
-        wirelessStatus.text = when {
-            !AdbWireless.granted(this) -> "未授权：需要在电脑上执行一次 pm grant（按钮可复制命令）"
-            !AdbWireless.wifiConnected(this) -> "已授权；当前没有连 Wi-Fi，开启会被系统直接回滚"
-            AdbWireless.enabled(contentResolver) -> "已授权 · 无线调试已开启"
-            else -> "已授权 · 无线调试未开启"
-        }
+        renderTranslate(TranslateDownloader.State.Idle)
     }
+
     override fun onPause() {
         TranslateDownloader.observe(null)
         super.onPause()
     }
+
     private fun renderTranslate(state: TranslateDownloader.State) {
         runOnUiThread {
             val ready = TranslateModelStore(this).ready()
+            downloadRow.visibility = View.VISIBLE
+            deleteRow.visibility = if (ready) View.VISIBLE else View.GONE
             when (state) {
                 is TranslateDownloader.State.Running -> {
                     val percent = if (state.total > 0) state.downloaded * 100 / state.total else 0
                     translateStatus.text = if (state.verifying) "正在校验模型文件…"
                     else "下载中 $percent%（${state.downloaded / (1024 * 1024)}/${state.total / (1024 * 1024)}MB）"
-                    translateDownload.visibility = android.view.View.GONE
-                    translateDelete.visibility = android.view.View.GONE
+                    downloadRow.visibility = View.GONE
+                    deleteRow.visibility = View.GONE
                 }
                 is TranslateDownloader.State.Failed -> {
                     translateStatus.text = state.message
-                    translateDownload.visibility = android.view.View.VISIBLE
-                    translateDownload.text = "重试下载"
-                    translateDelete.visibility = if (ready) android.view.View.VISIBLE else android.view.View.GONE
                 }
                 TranslateDownloader.State.Ready -> {
                     translateStatus.text = "已就绪（461.9MB），可离线翻译"
-                    translateDownload.visibility = android.view.View.GONE
-                    translateDelete.visibility = android.view.View.VISIBLE
+                    downloadRow.visibility = View.GONE
                 }
                 TranslateDownloader.State.Idle -> {
                     translateStatus.text = if (ready) "已就绪（461.9MB），可离线翻译" else "未下载（约 462MB）"
-                    translateDownload.visibility = if (ready) android.view.View.GONE else android.view.View.VISIBLE
-                    translateDownload.text = "下载翻译模型（约 462MB）"
-                    translateDelete.visibility = if (ready) android.view.View.VISIBLE else android.view.View.GONE
+                    downloadRow.visibility = if (ready) View.GONE else View.VISIBLE
                 }
             }
         }
     }
-    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+
     override fun onDestroy() {
         TranslateDownloader.observe(null)
         super.onDestroy()
-    }
-    companion object {
-        fun preferences(context: Context) = context.getSharedPreferences("screen-text", Context.MODE_PRIVATE)
-        fun enabled(context: Context) = preferences(context).getBoolean("enabled", false)
-        fun connected(context: Context): Boolean {
-            val component = ComponentName(context, ScreenTextService::class.java)
-            return Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
-                ?.split(':')?.any { ComponentName.unflattenFromString(it) == component } == true
-        }
-        fun toggle(context: Context) {
-            val next = !enabled(context)
-            preferences(context).edit().putBoolean("enabled", next).apply()
-            if (next && !connected(context)) context.startActivity(Intent(context, ScreenTextSettingsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        }
     }
 }

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 进入二级页：整页淡入 + 4% 上浮，快而不飘（240ms）。 -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:interpolator="@android:interpolator/decelerate_cubic">
+    <alpha
+        android:duration="200"
+        android:fromAlpha="0"
+        android:toAlpha="1" />
+    <translate
+        android:duration="240"
+        android:fromYDelta="4%p"
+        android:toYDelta="0" />
+</set>

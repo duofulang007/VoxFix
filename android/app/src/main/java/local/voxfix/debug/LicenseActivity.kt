@@ -3,9 +3,6 @@ package local.voxfix.debug
 import android.app.Activity
 import android.graphics.Typeface
 import android.os.Bundle
-import android.view.WindowInsets
-import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import local.voxfix.debug.ui.Palette
 import local.voxfix.debug.ui.VoxFixTheme
@@ -42,17 +39,7 @@ class LicenseActivity : Activity() {
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
         palette = VoxFixTheme.palette(this)
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(palette.bg)
-        }
-        root.setOnApplyWindowInsetsListener { view, insets ->
-            val bars = insets.getInsets(WindowInsets.Type.systemBars())
-            view.setPadding(0, bars.top, 0, bars.bottom)
-            insets
-        }
-        setContentView(root)
-        showList(root)
+        render()
     }
 
     @Suppress("DEPRECATION")
@@ -60,38 +47,43 @@ class LicenseActivity : Activity() {
         // 全文页返回列表，列表页才退出。
         if (showingDetail != null) {
             showingDetail = null
-            showList(findViewById(android.R.id.content) as? LinearLayout ?: return)
+            render()
         } else {
             super.onBackPressed()
         }
     }
 
-    private fun showList(root: LinearLayout) {
-        root.removeAllViews()
-        val scroll = ScrollView(this)
-        val col = VoxFixUi.page(this, palette)
+    private fun render() {
+        val detail = showingDetail
+        setContentView(VoxFixUi.screen(
+            this, palette,
+            detail?.title ?: "开源许可",
+            onBack = {
+                if (showingDetail != null) { showingDetail = null; render() } else finish()
+            }
+        ) { col ->
+            if (detail == null) listContent(col) else detailContent(col, detail)
+        })
+    }
+
+    private fun listContent(col: android.widget.LinearLayout) {
         col.addView(VoxFixUi.head(this, palette, "开源许可", "点击条目查看全文"))
         val card = VoxFixUi.card(this, palette)
         entries.forEachIndexed { index, entry ->
             card.addView(VoxFixUi.row(this, palette, entry.title,
                 desc = entry.note,
                 chevron = true,
-                divider = index != 0) { openDetail(root, entry) })
+                divider = index != 0) {
+                showingDetail = entry
+                render()
+            })
         }
         col.addView(card)
         col.addView(VoxFixUi.note(this, palette,
             "许可全文随 APK 资源分发；如条目显示缺失，请核对构建清单。"))
-        scroll.addView(col)
-        root.addView(scroll, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT
-        ))
     }
 
-    private fun openDetail(root: LinearLayout, entry: Entry) {
-        showingDetail = entry
-        root.removeAllViews()
-        val scroll = ScrollView(this)
-        val col = VoxFixUi.page(this, palette)
+    private fun detailContent(col: android.widget.LinearLayout, entry: Entry) {
         col.addView(VoxFixUi.head(this, palette, entry.title, entry.note))
         val files = listFiles(entry.dir)
         if (files.isEmpty()) {
@@ -110,10 +102,6 @@ class LicenseActivity : Activity() {
                 })
             }
         }
-        scroll.addView(col)
-        root.addView(scroll, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT
-        ))
     }
 
     private fun listFiles(path: String): List<String> = runCatching {

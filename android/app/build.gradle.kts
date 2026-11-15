@@ -1,8 +1,11 @@
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 
 // 版本单一来源：defaultConfig 与 APK 命名、发版 manifest.json 都引用它。
-val appVersionName = "0.4.0"
-val appVersionCode = 4
+// 0.5.4：稳定性补丁——外壳改 singleTask（外部反复拉起不再堆多个 HomeActivity）；
+//        内存紧张时（RUNNING_LOW/CRITICAL）主动释放 229MB 语音模型。
+// 记住：已发布的版本号不能复用，改任何代码都要递增 appVersionCode。
+val appVersionName = "0.5.4"
+val appVersionCode = 9
 android {
     namespace = "local.voxfix.debug"
     compileSdk = 35
@@ -34,26 +37,18 @@ android {
     kotlinOptions { jvmTarget = "17" }
 }
 
-// APK 命名（2026-11-14 定稿）：VoxFix-<versionName>-<versionCode>-<yyyyMMdd>-<git短sha7>.apk
-// 例 VoxFix-0.4.0-4-20261114-a1b2c3d.apk。无 git 环境回退 nosha/nodate，保证打包机也能构建；
-// manifest.json 里的 apkUrls 记录实际文件名，不依赖固定 APK 名（docs/关于与应用内更新-2026-11-14.md）。
+// APK 命名（2026-11-15 简化）：VoxFix-<versionName>.apk，例 VoxFix-0.5.0.apk。
+// 版本号、构建日期与提交号改由 manifest.json 与 Release 说明承载（用户要求：文件名后缀太多）。
+// 代价：同版本重复构建会覆盖同名产物 —— 这也正好强制「改代码必须升 appVersionCode」。
 // 实现走 Copy 任务：AGP VariantOutput.outputFileName 与 java.time/java.util 在本机
 // Kotlin DSL 脚本编译里均不可解析（AGP 8.7.3 实测），Copy 方案零 AGP API 依赖。
-val gitSha: String = runCatching {
-    providers.exec { commandLine("git", "rev-parse", "--short=7", "HEAD") }.standardOutput.asText.get().trim()
-}.getOrElse { "nosha" }
-val buildDate: String = runCatching {
-    providers.exec { commandLine("git", "log", "-1", "--format=%cd", "--date=format:%Y%m%d") }
-        .standardOutput.asText.get().trim()
-}.getOrElse { "nodate" }
-
 val renameDebugApk by tasks.registering(Copy::class) {
     dependsOn("assembleDebug")
     from(layout.buildDirectory.dir("outputs/apk/debug")) { include("app-debug.apk") }
     // 不能复制回 debug 目录本身——AGP 的 createDebugApkListingFileRedirect 也把它当输出；
     // 规范命名产物放 named/，装机与发布都从这里取。
     into(layout.buildDirectory.dir("outputs/apk/named"))
-    rename { "VoxFix-$appVersionName-$appVersionCode-$buildDate-$gitSha.apk" }
+    rename { "VoxFix-$appVersionName.apk" }
 }
 // AGP 的 assembleDebug 是延迟注册，named() 严格查找不到——用 matching 安全挂接。
 tasks.matching { it.name == "assembleDebug" }.configureEach { finalizedBy("renameDebugApk") }

@@ -37,12 +37,18 @@ private const val DEBUG_SNAPSHOT = "local.voxfix.debug.DEBUG_SNAPSHOT"
 
 class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPreferenceChangeListener {
     private val main = Handler(Looper.getMainLooper())
-    private val preferences by lazy { ScreenTextSettingsActivity.preferences(this) }
+    private val preferences by lazy { ScreenTextPrefs.file(this) }
     private val windows by lazy { getSystemService(WindowManager::class.java) }
     private var handle: ScreenTextHandle? = null
     /** 模块开关一变就收起或恢复贴边弧线；与「enabled」偏好走同一条恢复路径。 */
     private val moduleChanged = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+            if (intent?.action == ACTION_RESET_ARC) {
+                // 「恢复贴边弧线」：不重启服务，直接把窗口拆掉重建。
+                // 这是唯一能治「窗口挂着但 alpha 从未放行」的同进程手段。
+                closeSession(); removeHandle(); showHandle()
+                return
+            }
             if (Modules.isOn(this@ScreenTextService, Module.SCREENTEXT)) showHandle() else removeHandle()
         }
     }
@@ -157,7 +163,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         TranslateRuntime.init(this)
         ScreenshotEditorHost.register(editorHost)
         preferences.registerOnSharedPreferenceChangeListener(this)
-        val moduleFilter = IntentFilter(Modules.ACTION_CHANGED)
+        val moduleFilter = IntentFilter(Modules.ACTION_CHANGED).apply { addAction(ACTION_RESET_ARC) }
         if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(moduleChanged, moduleFilter, RECEIVER_NOT_EXPORTED)
         else registerReceiver(moduleChanged, moduleFilter)
         val filter = IntentFilter().apply { addAction(Intent.ACTION_SCREEN_OFF); addAction(Intent.ACTION_USER_PRESENT) }
@@ -239,7 +245,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         removeRecordingControl()
         ScreenshotPins.closeAll()
         connected = false
-        ScreenshotEditorHost.register(null)
+        ScreenshotEditorHost.unregister(editorHost)
         editorDone = null
         TranslateRuntime.cancel(); TranslateRuntime.releaseNow()
         preferences.unregisterOnSharedPreferenceChangeListener(this)
@@ -256,12 +262,12 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
     /** 窗口被系统回收后 handle 字段仍非空，必须靠 isAttached 续命，否则圆弧永久不再出现。 */
     private val handleRetry = Runnable { if (handle == null) showHandle() }
     private fun showHandle() {
-        if (!connected || !ScreenTextSettingsActivity.enabled(this) || !Modules.isOn(this, Module.SCREENTEXT) ||
+        if (!connected || !ScreenTextPrefs.arcEnabled(this) || !Modules.isOn(this, Module.SCREENTEXT) ||
             busy || overlay != null || screenshot != null ||
             !getSystemService(android.os.PowerManager::class.java).isInteractive ||
             getSystemService(KeyguardManager::class.java).isKeyguardLocked) return
         handle?.let { current ->
-            if (current.isAttached) return
+            if (current.isAttached || current.isSettling) return
             runCatching { current.dismiss() }
             handle = null
         }
@@ -783,7 +789,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             // The overlay window was refused; leaving busy set would block every later capture.
             removeRecordingControl()
             busy = false
-            if (!ScreenTextSettingsActivity.enabled(this)) removeHandle() else showHandle()
+            if (!ScreenTextPrefs.arcEnabled(this)) removeHandle() else showHandle()
             toast("无法显示录屏设置")
             return
         }
@@ -877,7 +883,7 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         android.util.Log.i("VoxFix", "RECORDING_SETUP_CANCELLED reason=${message ?: "none"}")
         removeRecordingControl()
         busy = false
-        if (!ScreenTextSettingsActivity.enabled(this)) removeHandle() else showHandle()
+        if (!ScreenTextPrefs.arcEnabled(this)) removeHandle() else showHandle()
         message?.let { toast(it) }
     }
 
@@ -1218,17 +1224,21 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
             if (long) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
     }
     private fun closeSession() {
-        scrolling?.close(); scrolling = null
-        listenToScrollEvents(null)
-        ScreenshotPins.visible(true)
+        // 每一步独立容错：dismiss 抛异常（窗口已被系统移除）时，后面的置空仍必须执行，
+        // 否则 overlay/screenshot 永远非空，showHandle() 会在早退条件里永久 return，
+        // 表现就是「弧线不见了，怎么点都不回来」。
+        runCatching { scrolling?.close() }; scrolling = null
+        runCatching { listenToScrollEvents(null) }
+        runCatching { ScreenshotPins.visible(true) }
         ++generation; busy = false
-        TranslateRuntime.cancel(); TranslateRuntime.idle()
+        runCatching { TranslateRuntime.cancel() }
+        runCatching { TranslateRuntime.idle() }
         main.removeCallbacks(captureTimeout); main.removeCallbacks(expire)
-        overlay?.dismiss(windows); overlay = null
-        screenshot?.dismiss(windows); screenshot = null
-        session?.close(); session = null
-        editorDone?.let { done -> editorDone = null; done(false) }
-        if (!ScreenTextSettingsActivity.enabled(this)) removeHandle() else showHandle()
+        runCatching { overlay?.dismiss(windows) }; overlay = null
+        runCatching { screenshot?.dismiss(windows) }; screenshot = null
+        runCatching { session?.close() }; session = null
+        editorDone?.let { done -> editorDone = null; runCatching { done(false) } }
+        if (!ScreenTextPrefs.arcEnabled(this)) removeHandle() else showHandle()
     }
     /** Opens a saved record in the editor that normally belongs to a fresh capture. */
     private fun openSavedProject(id: String, done: (Boolean) -> Unit) {
@@ -1320,10 +1330,30 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
         } catch (error: Exception) { busy = false; screenshot?.failure(error.message ?: "截图保存失败，请重试") }
     }
 
-    private companion object {
+    companion object {
+        /** 「恢复贴边弧线」：同进程广播，服务收到后拆窗口重建。 */
+        const val ACTION_RESET_ARC = "local.voxfix.debug.SCREEN_TEXT_RESET"
+
         /** Newest bound instance; the system may replace it while a system dialog is in front. */
         @Volatile
-        var live: ScreenTextService? = null
+        private var live: ScreenTextService? = null
+
+        /** 截图/录屏/编辑中：重绑会触发 onDestroy 并中断录制，恢复前必须先问这一句。 */
+        fun busyForRepair(): Boolean {
+            val service = live ?: return false
+            return service.busy || service.overlay != null || service.screenshot != null ||
+                service.scrolling != null || service.liveRecorder != null
+        }
+
+        /**
+         * 弧线窗口是否挂上。用 isAttached 而不是严格 alpha>0：
+         * 刚 addView / 配置切换的瞬间 alpha 还没放行，严格判定会误报「窗口没挂上」，
+         * 而 alpha 本身有 400ms 兜底（见 ScreenTextHandle.show）。
+         */
+        fun windowVisible(): Boolean = live?.handle?.let { it.isAttached || it.isSettling } == true
+
+        /** 无障碍服务实例是否活着。 */
+        fun alive(): Boolean = live != null
 
         /**
          * The recording that is actually running.
@@ -1333,13 +1363,13 @@ class ScreenTextService : AccessibilityService(), SharedPreferences.OnSharedPref
          * with no bar and no rotation watch — an unstoppable capture.
          */
         @Volatile
-        var sharedRecorder: ScreenRecorder? = null
+        internal var sharedRecorder: ScreenRecorder? = null
         @Volatile
         var sharedRegion: Rect? = null
         @Volatile
         var sharedScreen: Pair<Int, Int>? = null
         @Volatile
-        var sharedOptions: ScreenRecordingOptions? = null
+        internal var sharedOptions: ScreenRecordingOptions? = null
         @Volatile
         var sharedStartedAtMs: Long = 0
 

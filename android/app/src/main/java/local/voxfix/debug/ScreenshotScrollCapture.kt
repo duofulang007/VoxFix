@@ -66,7 +66,7 @@ internal class ScreenshotScrollCapture(
     /** 最近一次自动滑动收尾时刻：区分"我们自己的手势"与用户的手动介入。 */
     private var lastSwipeDoneAt = 0L
     private var foreignScrolls = 0
-    private val preferences = ScreenTextSettingsActivity.preferences(context)
+    private val preferences = ScreenTextPrefs.file(context)
     private var autoIntervalMs = preferences.getInt("scroll.autoIntervalMs",200).coerceIn(128,1000).toLong()
     private var growth = 0
     private var stalledSteps = 0

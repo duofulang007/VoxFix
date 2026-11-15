@@ -28,15 +28,22 @@ import kotlin.math.sin
 /** Small accessibility window, independent of the keyboard and with no full-screen touch blocker. */
 internal class ScreenTextHandle(private val context: Context, private val capture: (Boolean) -> Unit) {
     private val windows = context.getSystemService(WindowManager::class.java)
-    private val prefs = ScreenTextSettingsActivity.preferences(context)
+    private val prefs = ScreenTextPrefs.file(context)
     private val main = Handler(Looper.getMainLooper())
     private fun dp(n: Int) = (n * context.resources.displayMetrics.density).toInt()
-    private var right = prefs.getBoolean("right", true)
+    private var right = ScreenTextPrefs.handleRight(context)
     var expanded = false
         private set
     private var attached = false
-    /** 窗口是否还挂在 WindowManager 上：系统回收后服务必须据此重建，不能只看引用非空。 */
-    val isAttached: Boolean get() = attached
+    /**
+     * 窗口是否还挂在 WindowManager 上：系统回收后服务必须据此重建，不能只看引用非空。
+     * 同时要求 root 真在窗口树里——只 addView 过、窗口被回收后 isAttachedToWindow 会变 false。
+     */
+    val isAttached: Boolean get() = attached && root.parent != null
+    /** 健康检查口径：挂上、不是 GONE、alpha 已放行。 */
+    val isVisible: Boolean get() = isAttached && root.visibility == View.VISIBLE && root.alpha > 0f
+    /** 刚 addView 还没挂上父级：此时重建会抖一下，服务应视为"已处理"。 */
+    val isSettling: Boolean get() = attached && root.parent == null && root.alpha == 0f
     private var progress = 0f
     private var collapsedY = 0
     /** 展开态弧心的屏幕坐标；夹取后重算，否则贴屏幕上下沿呼出时按钮会错位。 */
@@ -113,16 +120,11 @@ internal class ScreenTextHandle(private val context: Context, private val captur
         // A newly added overlay must not paint at the window's provisional origin.
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             render(progress)
+            // 布局真正完成后放行 alpha。旧实现只靠一次 onPreDraw：那一帧没发生
+            // （灭屏/锁屏/被别的窗口抢占）就会永久全透明，而 attached 已是 true，
+            // showHandle() 从此全部短路——这是「弧线不见了、只能重启」的根因。
+            if (attached && root.width > 0 && root.height > 0) root.alpha = 1f
         }
-        root.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
-            override fun onPreDraw(): Boolean {
-                if (attached && root.width == params.width && root.height == params.height) {
-                    root.alpha = 1f
-                    root.viewTreeObserver.removeOnPreDrawListener(this)
-                }
-                return true
-            }
-        })
         root.addView(full, FrameLayout.LayoutParams(dp(48), dp(48)))
         root.addView(adb, FrameLayout.LayoutParams(dp(48), dp(48)))
         root.addView(close, FrameLayout.LayoutParams(dp(48), dp(48)))
@@ -162,8 +164,10 @@ internal class ScreenTextHandle(private val context: Context, private val captur
                         val bounds = windows.currentWindowMetrics.bounds
                         right = params.x + params.width / 2 > bounds.width() / 2
                         snap(); update()
-                        prefs.edit().putBoolean("right", right)
-                            .putFloat("y", params.y.toFloat() / maxOf(1, bounds.height() - dp(64))).apply()
+                        ScreenTextPrefs.setHandlePosition(
+                            context, right,
+                            params.y.toFloat() / maxOf(1, bounds.height() - dp(64))
+                        )
                         handle.invalidate()
                     }
                     view.isPressed = false
@@ -181,13 +185,17 @@ internal class ScreenTextHandle(private val context: Context, private val captur
     fun show() {
         HandleToneResolver.refresh(context) { handle.postInvalidate() }
         val bounds = windows.currentWindowMetrics.bounds
-        params.y = (prefs.getFloat("y", .4f) * (bounds.height() - dp(64))).toInt()
+        val normalized = ScreenTextPrefs.sanitizedY(prefs.getFloat("y", ScreenTextPrefs.DEFAULT_Y))
+        params.y = (normalized * (bounds.height() - dp(64))).toInt()
         snap()
         centerY = params.y + dp(32)
         watchWireless()
         companionWasUp = companionUp()
         adb.contentDescription = if (wirelessOn) "无线调试，已开启" else "无线调试，已关闭"
+        root.alpha = 0f
         windows.addView(root, params); attached = true; root.invalidate()
+        // 兜底：某些机型在灭屏/锁屏边缘不会走 layout 回调，400ms 后仍透明就强制放行一次。
+        main.postDelayed({ if (attached && root.alpha == 0f) root.alpha = 1f }, 400)
         main.removeCallbacks(tick); main.postDelayed(tick, 600)
     }
     private fun clamp() {
@@ -267,7 +275,7 @@ internal class ScreenTextHandle(private val context: Context, private val captur
         if (wirelessBusy || !expanded) return
         val target = !wirelessOn
         if (!AdbWireless.granted(context)) {
-            showHint("缺少授权\n见设置页")
+            showHint("缺少授权\n用电脑 adb 授权")
             reject(); return
         }
         wirelessBusy = true; adb.invalidate(); startSpin()
@@ -284,7 +292,7 @@ internal class ScreenTextHandle(private val context: Context, private val captur
                 AdbWireless.Outcome.NO_PC_INFO -> { showHint("电脑端没运行"); reject() }
                 AdbWireless.Outcome.DIFFERENT_NETWORK -> { showHint("不在同一 Wi-Fi"); reject() }
                 AdbWireless.Outcome.PC_OFFLINE -> { showHint("电脑端没开"); reject() }
-                AdbWireless.Outcome.DENIED -> { showHint("缺少授权\n见设置页"); reject() }
+                AdbWireless.Outcome.DENIED -> { showHint("缺少授权\n用电脑 adb 授权"); reject() }
                 AdbWireless.Outcome.REVERTED -> { showHint("系统未接受"); reject() }
             }
             adb.contentDescription = if (wirelessOn) "无线调试，已开启" else "无线调试，已关闭"
@@ -396,6 +404,7 @@ internal class ScreenTextHandle(private val context: Context, private val captur
         wirelessAnim?.cancel(); shakeAnim?.cancel(); beatAnim?.cancel(); stopSpin(); hideHint()
         main.removeCallbacks(tick)
         wirelessObserver?.let { AdbWireless.stop(context, it) }; wirelessObserver = null
+        root.alpha = 0f
         root.visibility = View.GONE
         if (attached) { attached = false; windows.removeViewImmediate(root) }
     }
@@ -424,8 +433,14 @@ internal class ScreenTextHandle(private val context: Context, private val captur
             }
             // 无线调试开启时弧线常驻"激活"态（更实 + 更粗），不额外加图形标记：
             // 屏幕边缘只有 24dp，任何附加标记不是被裁掉就是读成"!"这类误义符号。
+            val baseWidth = (if (wirelessOn || isPressed) 2.6f else 2f) + beatPulse * 1.4f
+            // 手机侧扩展（原版无此行为）：壁纸明度与实际应用背景无关，浅壁纸 + 深色页面时
+            // 待机弧只有 42% 深灰，几乎看不见。垫一层反色低透明描边保住对比度。
+            paint.color = if (tone == HandleTone.DARK) 0x66000000 else 0x66ffffff
+            paint.strokeWidth = baseWidth + 1.6f
+            canvas.drawPath(path, paint)
             paint.color = if (wirelessOn) tone.active else tone.colorFor(isPressed)
-            paint.strokeWidth = (if (wirelessOn || isPressed) 2.6f else 2f) + beatPulse * 1.4f
+            paint.strokeWidth = baseWidth
             canvas.drawPath(path, paint)
         }
         private fun drawClose(canvas: Canvas) {

@@ -1,21 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Snow Shot 1.1.8 / Ant Design Qt 令牌的浅色值。深色在 values-night/colors.xml。 -->
-    <color name="vox_bg">#FFF5F5F5</color>
+    <!--
+      外壳令牌 v2（2026-11-15）：与键盘同源，不再沿用 Snow Shot 的 Ant Design 桌面取值。
+      accent 取键盘 accent 值 #4a86c8 压深一档（#2F6EA8），保证白底 13sp 文字对比度 ≥ 4.5:1；
+      语义色统一降饱和，避免亮绿/亮黄在浅灰底上像调试面板。
+    -->
+    <color name="vox_bg">#FFF1F4F8</color>
     <color name="vox_surface">#FFFFFFFF</color>
     <color name="vox_surface_high">#FFFFFFFF</color>
-    <color name="vox_surface_sunken">#FFFAFAFA</color>
-    <color name="vox_border">#14000000</color>
-    <color name="vox_border_strong">#24000000</color>
-    <color name="vox_text_primary">#DE000000</color>
-    <color name="vox_text_secondary">#A6000000</color>
-    <color name="vox_text_tertiary">#73000000</color>
-    <color name="vox_text_disabled">#40000000</color>
-    <color name="vox_primary">#FF1677FF</color>
-    <color name="vox_primary_hover">#FF4096FF</color>
-    <color name="vox_primary_soft">#FFE6F4FF</color>
-    <color name="vox_danger">#FFFF4D4F</color>
-    <color name="vox_success">#FF52C41A</color>
-    <color name="vox_warning">#FFFAAD14</color>
+    <color name="vox_surface_sunken">#FFEDF1F6</color>
+    <color name="vox_border">#140E243A</color>
+    <color name="vox_border_strong">#240E243A</color>
+    <color name="vox_text_primary">#FF111820</color>
+    <color name="vox_text_secondary">#FF59646F</color>
+    <color name="vox_text_tertiary">#FF8A949F</color>
+    <color name="vox_text_disabled">#FFB9C1CA</color>
+    <color name="vox_primary">#FF2F6EA8</color>
+    <color name="vox_primary_hover">#FF3F84C2</color>
+    <color name="vox_primary_soft">#FFE6F0F9</color>
+    <color name="vox_danger">#FFB5483C</color>
+    <color name="vox_danger_soft">#FFFBEAE7</color>
+    <color name="vox_success">#FF177A50</color>
+    <color name="vox_success_soft">#FFE4F3EC</color>
+    <color name="vox_warning">#FF9A6413</color>
+    <color name="vox_warning_soft">#FFFBF0DC</color>
     <color name="vox_scrim">#B3000000</color>
+    <!-- 主色块上的文字：浅色模式白字，深色模式主色变亮后必须改用深字，否则白字在浅蓝上糊成一团。 -->
+    <color name="vox_on_primary">#FFFFFFFF</color>
 </resources>
